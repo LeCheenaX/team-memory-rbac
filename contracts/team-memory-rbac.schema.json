@@ -1,0 +1,720 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://team-memory-rbac.dev/contracts/v1/schema.json",
+  "title": "Team Memory RBAC Contracts",
+  "type": "object",
+  "$defs": {
+    "MemoryRelationType": {
+      "type": "string",
+      "enum": [
+        "has",
+        "depends_on",
+        "relates_to",
+        "refers_to",
+        "contradicts",
+        "supersedes",
+        "next_is"
+      ]
+    },
+    "MemoryObjectKind": {
+      "type": "string",
+      "enum": [
+        "memory_entity",
+        "memory_entity_branch",
+        "memory_relation",
+        "resource",
+        "resource_chunk"
+      ]
+    },
+    "MemoryAction": {
+      "type": "string",
+      "enum": [
+        "read",
+        "search",
+        "traverse_relation",
+        "import_resource",
+        "write_resource_chunk",
+        "index_resource",
+        "write_entity",
+        "write_entity_branch",
+        "write_relation",
+        "tombstone_resource",
+        "tombstone_entity",
+        "tombstone_entity_branch",
+        "tombstone_relation",
+        "commit",
+        "merge",
+        "revert",
+        "review",
+        "approve",
+        "assign_user_role",
+        "revoke_user_role",
+        "create_root_entity",
+        "delete_root_entity"
+      ]
+    },
+    "AdminMemoryAction": {
+      "type": "string",
+      "enum": [
+        "assign_user_role",
+        "revoke_user_role",
+        "create_root_entity",
+        "delete_root_entity"
+      ]
+    },
+    "PermissionConstraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowedTags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "deniedTags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "allowedRelationTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemoryRelationType"
+          },
+          "uniqueItems": true
+        },
+        "deniedRelationTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemoryRelationType"
+          },
+          "uniqueItems": true
+        },
+        "allowRootEntityMutation": {
+          "type": "boolean"
+        },
+        "maxRelationExpansionDepth": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requireHumanApproval": {
+          "type": "boolean"
+        }
+      }
+    },
+    "TaskScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rootEntityId"
+      ],
+      "properties": {
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "allowedEntityIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "deniedEntityIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "allowedTags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "deniedTags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "allowedResourceIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "deniedResourceIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "relationExpansionPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowedRelationTypes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MemoryRelationType"
+              },
+              "uniqueItems": true
+            },
+            "maxDepth": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "allowRequiredDependencies": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "PermissionSubject": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "userId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "user"
+            },
+            "userId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "agentId",
+            "ownerUserId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "agent"
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ownerUserId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "PermissionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject",
+        "rootEntityId",
+        "action",
+        "resourceKind"
+      ],
+      "properties": {
+        "subject": {
+          "$ref": "#/$defs/PermissionSubject"
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "$ref": "#/$defs/MemoryAction"
+        },
+        "resourceKind": {
+          "$ref": "#/$defs/MemoryObjectKind"
+        },
+        "branchRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "relationType": {
+          "$ref": "#/$defs/MemoryRelationType"
+        },
+        "relationDepth": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "taskScope": {
+          "$ref": "#/$defs/TaskScope"
+        }
+      }
+    },
+    "PermissionDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowed",
+        "reason",
+        "subjectId",
+        "subjectKind",
+        "rootEntityId",
+        "action",
+        "resourceKind",
+        "matchedRoles",
+        "missingActions",
+        "constraints"
+      ],
+      "properties": {
+        "allowed": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subjectId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subjectKind": {
+          "enum": [
+            "user",
+            "agent"
+          ]
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "action": {
+          "$ref": "#/$defs/MemoryAction"
+        },
+        "resourceKind": {
+          "$ref": "#/$defs/MemoryObjectKind"
+        },
+        "matchedRoles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "missingActions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MemoryAction"
+          },
+          "uniqueItems": true
+        },
+        "constraints": {
+          "$ref": "#/$defs/PermissionConstraint"
+        }
+      }
+    },
+    "MemoryEntity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "rootEntityId",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootEntityId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "active",
+            "archived",
+            "tombstoned",
+            "conflicted"
+          ]
+        },
+        "currentBranchId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "MemoryEntityBranch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "entityId",
+        "rootEntityId",
+        "branchRef",
+        "commitId",
+        "title",
+        "description",
+        "tags",
+        "importance",
+        "confidence",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "branchRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commitId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parentBranchId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "extraInfo": {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "enum": [
+                "contradicts",
+                "dependsOn",
+                "depends_on",
+                "nextIs",
+                "next_is",
+                "references",
+                "relations",
+                "steps",
+                "supersedes"
+              ]
+            }
+          }
+        },
+        "embedding": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "importance": {
+          "type": "number"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "MemoryRelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "rootEntityId",
+        "sourceId",
+        "sourceKind",
+        "targetId",
+        "targetKind",
+        "relationType",
+        "weight",
+        "confidence",
+        "branchRef",
+        "commitId",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceKind": {
+          "enum": [
+            "memory_entity",
+            "resource",
+            "resource_chunk"
+          ]
+        },
+        "targetId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetKind": {
+          "enum": [
+            "memory_entity",
+            "resource",
+            "resource_chunk"
+          ]
+        },
+        "relationType": {
+          "$ref": "#/$defs/MemoryRelationType"
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "condition": {
+          "type": "object"
+        },
+        "weight": {
+          "type": "number"
+        },
+        "confidence": {
+          "type": "number"
+        },
+        "branchRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commitId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "active",
+            "tombstoned",
+            "conflicted"
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "Resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "rootEntityId",
+        "sourceType",
+        "title",
+        "contentHash",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceType": {
+          "enum": [
+            "document",
+            "conversation",
+            "code_repo",
+            "code_file",
+            "tool_output",
+            "webpage",
+            "ticket",
+            "database_record"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "contentHash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "ResourceChunk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "rootEntityId",
+        "resourceId",
+        "chunkIndex",
+        "text",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chunkIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "text": {
+          "type": "string"
+        },
+        "embedding": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "bm25DocumentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "headingPath": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "filePath": {
+              "type": "string"
+            },
+            "startLine": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "endLine": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "tokenCount": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

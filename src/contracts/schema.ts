@@ -1,0 +1,361 @@
+import {
+  MEMORY_OBJECT_KINDS,
+  MEMORY_RELATION_TYPES,
+  RELATIONSHIP_EXTRA_INFO_KEYS,
+} from "./memory.ts";
+import {
+  ADMIN_MEMORY_ACTIONS,
+  MEMORY_ACTIONS,
+} from "./rbac.ts";
+
+const nonEmptyString = {
+  type: "string",
+  minLength: 1,
+} as const;
+
+const timestamp = {
+  type: "string",
+  format: "date-time",
+} as const;
+
+const stringArray = {
+  type: "array",
+  items: { type: "string" },
+  uniqueItems: true,
+} as const;
+
+export const CONTRACT_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  $id: "https://team-memory-rbac.dev/contracts/v1/schema.json",
+  title: "Team Memory RBAC Contracts",
+  type: "object",
+  $defs: {
+    MemoryRelationType: {
+      type: "string",
+      enum: MEMORY_RELATION_TYPES,
+    },
+    MemoryObjectKind: {
+      type: "string",
+      enum: MEMORY_OBJECT_KINDS,
+    },
+    MemoryAction: {
+      type: "string",
+      enum: MEMORY_ACTIONS,
+    },
+    AdminMemoryAction: {
+      type: "string",
+      enum: ADMIN_MEMORY_ACTIONS,
+    },
+    PermissionConstraint: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        allowedTags: stringArray,
+        deniedTags: stringArray,
+        allowedRelationTypes: {
+          type: "array",
+          items: { $ref: "#/$defs/MemoryRelationType" },
+          uniqueItems: true,
+        },
+        deniedRelationTypes: {
+          type: "array",
+          items: { $ref: "#/$defs/MemoryRelationType" },
+          uniqueItems: true,
+        },
+        allowRootEntityMutation: { type: "boolean" },
+        maxRelationExpansionDepth: {
+          type: "integer",
+          minimum: 0,
+        },
+        requireHumanApproval: { type: "boolean" },
+      },
+    },
+    TaskScope: {
+      type: "object",
+      additionalProperties: false,
+      required: ["rootEntityId"],
+      properties: {
+        rootEntityId: nonEmptyString,
+        allowedEntityIds: stringArray,
+        deniedEntityIds: stringArray,
+        allowedTags: stringArray,
+        deniedTags: stringArray,
+        allowedResourceIds: stringArray,
+        deniedResourceIds: stringArray,
+        relationExpansionPolicy: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            allowedRelationTypes: {
+              type: "array",
+              items: { $ref: "#/$defs/MemoryRelationType" },
+              uniqueItems: true,
+            },
+            maxDepth: {
+              type: "integer",
+              minimum: 0,
+            },
+            allowRequiredDependencies: { type: "boolean" },
+          },
+        },
+      },
+    },
+    PermissionSubject: {
+      oneOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["kind", "userId"],
+          properties: {
+            kind: { const: "user" },
+            userId: nonEmptyString,
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["kind", "agentId", "ownerUserId"],
+          properties: {
+            kind: { const: "agent" },
+            agentId: nonEmptyString,
+            ownerUserId: nonEmptyString,
+          },
+        },
+      ],
+    },
+    PermissionRequest: {
+      type: "object",
+      additionalProperties: false,
+      required: ["subject", "rootEntityId", "action", "resourceKind"],
+      properties: {
+        subject: { $ref: "#/$defs/PermissionSubject" },
+        rootEntityId: nonEmptyString,
+        action: { $ref: "#/$defs/MemoryAction" },
+        resourceKind: { $ref: "#/$defs/MemoryObjectKind" },
+        branchRef: nonEmptyString,
+        entityId: nonEmptyString,
+        resourceId: nonEmptyString,
+        tags: stringArray,
+        relationType: { $ref: "#/$defs/MemoryRelationType" },
+        relationDepth: { type: "integer", minimum: 0 },
+        taskScope: { $ref: "#/$defs/TaskScope" },
+      },
+    },
+    PermissionDecision: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "allowed",
+        "reason",
+        "subjectId",
+        "subjectKind",
+        "rootEntityId",
+        "action",
+        "resourceKind",
+        "matchedRoles",
+        "missingActions",
+        "constraints",
+      ],
+      properties: {
+        allowed: { type: "boolean" },
+        reason: nonEmptyString,
+        subjectId: nonEmptyString,
+        subjectKind: { enum: ["user", "agent"] },
+        rootEntityId: nonEmptyString,
+        action: { $ref: "#/$defs/MemoryAction" },
+        resourceKind: { $ref: "#/$defs/MemoryObjectKind" },
+        matchedRoles: stringArray,
+        missingActions: {
+          type: "array",
+          items: { $ref: "#/$defs/MemoryAction" },
+          uniqueItems: true,
+        },
+        constraints: { $ref: "#/$defs/PermissionConstraint" },
+      },
+    },
+    MemoryEntity: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "rootEntityId", "status", "createdAt", "updatedAt"],
+      properties: {
+        id: nonEmptyString,
+        rootEntityId: {
+          anyOf: [nonEmptyString, { type: "null" }],
+        },
+        status: {
+          enum: ["active", "archived", "tombstoned", "conflicted"],
+        },
+        currentBranchId: nonEmptyString,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    },
+    MemoryEntityBranch: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "entityId",
+        "rootEntityId",
+        "branchRef",
+        "commitId",
+        "title",
+        "description",
+        "tags",
+        "importance",
+        "confidence",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        id: nonEmptyString,
+        entityId: nonEmptyString,
+        rootEntityId: nonEmptyString,
+        branchRef: nonEmptyString,
+        commitId: nonEmptyString,
+        parentBranchId: nonEmptyString,
+        title: { type: "string" },
+        description: { type: "string" },
+        tags: stringArray,
+        extraInfo: {
+          type: "object",
+          propertyNames: {
+            not: {
+              enum: RELATIONSHIP_EXTRA_INFO_KEYS,
+            },
+          },
+        },
+        embedding: {
+          type: "array",
+          items: { type: "number" },
+        },
+        importance: { type: "number" },
+        confidence: { type: "number" },
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    },
+    MemoryRelation: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "rootEntityId",
+        "sourceId",
+        "sourceKind",
+        "targetId",
+        "targetKind",
+        "relationType",
+        "weight",
+        "confidence",
+        "branchRef",
+        "commitId",
+        "status",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        id: nonEmptyString,
+        rootEntityId: nonEmptyString,
+        sourceId: nonEmptyString,
+        sourceKind: {
+          enum: ["memory_entity", "resource", "resource_chunk"],
+        },
+        targetId: nonEmptyString,
+        targetKind: {
+          enum: ["memory_entity", "resource", "resource_chunk"],
+        },
+        relationType: { $ref: "#/$defs/MemoryRelationType" },
+        role: nonEmptyString,
+        ordinal: { type: "integer", minimum: 0 },
+        required: { type: "boolean" },
+        condition: { type: "object" },
+        weight: { type: "number" },
+        confidence: { type: "number" },
+        branchRef: nonEmptyString,
+        commitId: nonEmptyString,
+        status: {
+          enum: ["active", "tombstoned", "conflicted"],
+        },
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    },
+    Resource: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "rootEntityId",
+        "sourceType",
+        "title",
+        "contentHash",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        id: nonEmptyString,
+        rootEntityId: nonEmptyString,
+        sourceType: {
+          enum: [
+            "document",
+            "conversation",
+            "code_repo",
+            "code_file",
+            "tool_output",
+            "webpage",
+            "ticket",
+            "database_record",
+          ],
+        },
+        title: { type: "string" },
+        uri: { type: "string" },
+        contentHash: nonEmptyString,
+        metadata: { type: "object" },
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    },
+    ResourceChunk: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "rootEntityId",
+        "resourceId",
+        "chunkIndex",
+        "text",
+        "createdAt",
+        "updatedAt",
+      ],
+      properties: {
+        id: nonEmptyString,
+        rootEntityId: nonEmptyString,
+        resourceId: nonEmptyString,
+        chunkIndex: { type: "integer", minimum: 0 },
+        text: { type: "string" },
+        embedding: {
+          type: "array",
+          items: { type: "number" },
+        },
+        bm25DocumentId: nonEmptyString,
+        metadata: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            headingPath: {
+              type: "array",
+              items: { type: "string" },
+            },
+            filePath: { type: "string" },
+            startLine: { type: "integer", minimum: 1 },
+            endLine: { type: "integer", minimum: 1 },
+            tokenCount: { type: "integer", minimum: 0 },
+          },
+        },
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    },
+  },
+} as const;

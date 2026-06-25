@@ -1,0 +1,19 @@
+{
+  "name": "team-memory-rbac",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "contracts:generate": "node --experimental-strip-types scripts/generate-contracts.mjs",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test:hermes-contract": "python -m unittest discover -s adapters/hermes -p \"test_*.py\"",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test && npm run test:hermes-contract"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3"
+  }
+}

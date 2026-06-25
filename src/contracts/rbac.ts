@@ -1,0 +1,178 @@
+import type {
+  MemoryObjectKind,
+  MemoryRelationType,
+} from "./memory.ts";
+
+export const MEMORY_ACTIONS = [
+  "read",
+  "search",
+  "traverse_relation",
+  "import_resource",
+  "write_resource_chunk",
+  "index_resource",
+  "write_entity",
+  "write_entity_branch",
+  "write_relation",
+  "tombstone_resource",
+  "tombstone_entity",
+  "tombstone_entity_branch",
+  "tombstone_relation",
+  "commit",
+  "merge",
+  "revert",
+  "review",
+  "approve",
+  "assign_user_role",
+  "revoke_user_role",
+  "create_root_entity",
+  "delete_root_entity",
+] as const;
+
+export type MemoryAction = (typeof MEMORY_ACTIONS)[number];
+
+export const ADMIN_MEMORY_ACTIONS = [
+  "assign_user_role",
+  "revoke_user_role",
+  "create_root_entity",
+  "delete_root_entity",
+] as const satisfies readonly MemoryAction[];
+
+export type AdminMemoryAction = (typeof ADMIN_MEMORY_ACTIONS)[number];
+
+export function isAdminMemoryAction(
+  action: MemoryAction,
+): action is AdminMemoryAction {
+  return (ADMIN_MEMORY_ACTIONS as readonly MemoryAction[]).includes(action);
+}
+
+export interface User {
+  id: string;
+  displayName: string;
+  email?: string;
+  status: "active" | "disabled";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentIdentity {
+  id: string;
+  ownerUserId: string;
+  agentType:
+    | "main_agent"
+    | "sub_agent"
+    | "tool_agent"
+    | "import_agent"
+    | "curator_agent"
+    | "review_agent";
+  displayName: string;
+  status: "active" | "disabled";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PermissionConstraint {
+  allowedTags?: string[];
+  deniedTags?: string[];
+  allowedRelationTypes?: MemoryRelationType[];
+  deniedRelationTypes?: MemoryRelationType[];
+  allowRootEntityMutation?: boolean;
+  maxRelationExpansionDepth?: number;
+  requireHumanApproval?: boolean;
+}
+
+export interface Permission {
+  action: MemoryAction;
+  resourceKind: MemoryObjectKind;
+  constraints?: PermissionConstraint;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  kind: "built_in" | "custom";
+  permissions: Permission[];
+  status: "active" | "disabled";
+}
+
+export interface UserRootRoleAssignment {
+  id: string;
+  userId: string;
+  rootEntityId: string;
+  roleId: string;
+  assignedBy: string;
+  assignedAt: string;
+  status: "active" | "revoked";
+  revokedAt?: string;
+  expiresAt?: string;
+}
+
+export interface TaskScope {
+  rootEntityId: string;
+  allowedEntityIds?: string[];
+  deniedEntityIds?: string[];
+  allowedTags?: string[];
+  deniedTags?: string[];
+  allowedResourceIds?: string[];
+  deniedResourceIds?: string[];
+  relationExpansionPolicy?: {
+    allowedRelationTypes?: MemoryRelationType[];
+    maxDepth?: number;
+    allowRequiredDependencies?: boolean;
+  };
+}
+
+export interface AgentDelegation {
+  id: string;
+  agentId: string;
+  ownerUserId: string;
+  rootEntityId: string;
+  permissions: Permission[];
+  constraints?: PermissionConstraint;
+  delegatedBy: string;
+  delegatedAt: string;
+  status: "active" | "revoked";
+  revokedAt?: string;
+  expiresAt?: string;
+}
+
+export type PermissionSubject =
+  | {
+      kind: "user";
+      userId: string;
+    }
+  | {
+      kind: "agent";
+      agentId: string;
+      ownerUserId: string;
+    };
+
+export interface PermissionRequest {
+  subject: PermissionSubject;
+  rootEntityId: string;
+  action: MemoryAction;
+  resourceKind: MemoryObjectKind;
+  branchRef?: string;
+  entityId?: string;
+  resourceId?: string;
+  tags?: string[];
+  relationType?: MemoryRelationType;
+  relationDepth?: number;
+  taskScope?: TaskScope;
+}
+
+export interface PermissionDecision {
+  allowed: boolean;
+  reason: string;
+  subjectId: string;
+  subjectKind: PermissionSubject["kind"];
+  rootEntityId: string;
+  action: MemoryAction;
+  resourceKind: MemoryObjectKind;
+  matchedRoles: string[];
+  missingActions: MemoryAction[];
+  constraints: PermissionConstraint;
+}
+
+export interface PolicyEngine {
+  decide(request: PermissionRequest): Promise<PermissionDecision>;
+}
