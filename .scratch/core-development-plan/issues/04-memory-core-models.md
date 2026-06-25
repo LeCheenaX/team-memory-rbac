@@ -1,6 +1,6 @@
 # 记忆核心模型
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## 目标
 
@@ -35,3 +35,17 @@ Status: ready-for-agent
 ## 优先级
 
 核心。紧跟 RBAC 模型之后实现。
+
+## Comments
+
+### 2026-06-25 Implementation
+
+- 实现 L1 Resource / ResourceChunk / ResourceRevision。
+- 实现 L2 MemoryEntityBranch / MemoryRelation。
+- 实现 L3 MemoryEntity、`effectiveRootEntityId()` 和 RootEntity 约束。
+- 实现 MemoryBranch、MemoryCommit、MemorySnapshot 契约。
+- MemoryEntityBranch、MemoryRelation、Resource、ResourceChunk、ResourceRevision、Branch、Commit、Snapshot 均校验非空 rootEntityId。
+- MemoryRelation 保持 7 种白名单关系；`refers_to` 已通过实体到 L1 chunk 的证据回溯测试。
+- `extraInfo` 继续拒绝 steps、dependsOn、references 等关系信息。
+- 未引入 MemoryEntityType、MemoryCategory、CategoryMembership 或 CategorySummary。
+- Branch、Commit、ResourceRevision、MemoryOperation 已同步到生成的 JSON Schema。

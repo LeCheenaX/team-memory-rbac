@@ -23,6 +23,8 @@ class ContractSchemaTest(unittest.TestCase):
         self.assertIn("PermissionDecision", schema["$defs"])
         self.assertIn("Role", schema["$defs"])
         self.assertIn("AgentDelegation", schema["$defs"])
+        self.assertIn("MemoryCommit", schema["$defs"])
+        self.assertIn("MemoryOperation", schema["$defs"])
 
 
 if __name__ == "__main__":

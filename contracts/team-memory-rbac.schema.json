@@ -738,6 +738,13 @@
         "confidence": {
           "type": "number"
         },
+        "status": {
+          "enum": [
+            "active",
+            "tombstoned",
+            "conflicted"
+          ]
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -889,6 +896,16 @@
           "type": "string",
           "minLength": 1
         },
+        "currentRevisionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "active",
+            "tombstoned"
+          ]
+        },
         "metadata": {
           "type": "object"
         },
@@ -944,6 +961,12 @@
           "type": "string",
           "minLength": 1
         },
+        "status": {
+          "enum": [
+            "active",
+            "tombstoned"
+          ]
+        },
         "metadata": {
           "type": "object",
           "additionalProperties": false,
@@ -976,6 +999,239 @@
           "format": "date-time"
         },
         "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "ResourceRevision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "resourceId",
+        "rootEntityId",
+        "commitId",
+        "contentHash",
+        "createdAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resourceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commitId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parentRevisionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "contentHash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "MemoryActor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "user",
+            "agent"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "MemoryBranch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "rootEntityId",
+        "branchRef",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "branchRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "headCommitId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "active",
+            "archived"
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "MemoryCommit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "rootEntityId",
+        "branchRef",
+        "operationIds",
+        "actor",
+        "createdAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "branchRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parentCommitId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operationIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "actor": {
+          "$ref": "#/$defs/MemoryActor"
+        },
+        "message": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "MemoryOperationKind": {
+      "type": "string",
+      "enum": [
+        "create_entity",
+        "create_entity_branch",
+        "create_relation",
+        "create_resource",
+        "create_resource_chunk",
+        "revise_resource",
+        "replace_relation",
+        "tombstone_resource",
+        "tombstone_entity",
+        "tombstone_entity_branch",
+        "tombstone_relation",
+        "revert_commit"
+      ]
+    },
+    "MemoryOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "rootEntityId",
+        "branchRef",
+        "commitId",
+        "kind",
+        "actor",
+        "input",
+        "createdAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "branchRef": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commitId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "$ref": "#/$defs/MemoryOperationKind"
+        },
+        "actor": {
+          "$ref": "#/$defs/MemoryActor"
+        },
+        "input": {
+          "type": "object",
+          "required": [
+            "kind",
+            "id"
+          ],
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/MemoryOperationKind"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "createdAt": {
           "type": "string",
           "format": "date-time"
         }

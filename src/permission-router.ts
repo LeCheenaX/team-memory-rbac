@@ -4,12 +4,17 @@ import type {
   PolicyEngine,
 } from "./contracts/rbac.ts";
 
-export type AuthorizedMemoryRequest = PermissionRequest & {
+export type AuthorizedMemoryRequest<
+  TRequest extends PermissionRequest = PermissionRequest,
+> = TRequest & {
   authorization: PermissionDecision & { allowed: true };
 };
 
-export interface MemoryAdapter<TResult> {
-  execute(request: AuthorizedMemoryRequest): Promise<TResult>;
+export interface MemoryAdapter<
+  TResult,
+  TRequest extends PermissionRequest = PermissionRequest,
+> {
+  execute(request: AuthorizedMemoryRequest<TRequest>): Promise<TResult>;
 }
 
 export type PermissionRouteResult<TResult> =
@@ -21,20 +26,23 @@ export type PermissionRouteResult<TResult> =
       decision: PermissionDecision & { allowed: false };
     };
 
-export class PermissionRouter<TResult> {
+export class PermissionRouter<
+  TResult,
+  TRequest extends PermissionRequest = PermissionRequest,
+> {
   private readonly policyEngine: PolicyEngine;
-  private readonly memoryAdapter: MemoryAdapter<TResult>;
+  private readonly memoryAdapter: MemoryAdapter<TResult, TRequest>;
 
   constructor(
     policyEngine: PolicyEngine,
-    memoryAdapter: MemoryAdapter<TResult>,
+    memoryAdapter: MemoryAdapter<TResult, TRequest>,
   ) {
     this.policyEngine = policyEngine;
     this.memoryAdapter = memoryAdapter;
   }
 
   async execute(
-    request: PermissionRequest,
+    request: TRequest,
   ): Promise<PermissionRouteResult<TResult>> {
     const decision = await this.policyEngine.decide(request);
 

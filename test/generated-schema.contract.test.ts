@@ -59,6 +59,10 @@ test("checked-in JSON Schema matches the TypeScript runtime contract", async () 
     "TaskScope",
     "PermissionRequest",
     "PermissionDecision",
+    "MemoryBranch",
+    "MemoryCommit",
+    "MemoryOperation",
+    "ResourceRevision",
   ]) {
     assert.ok(generated.$defs[definition], `missing ${definition} schema`);
   }
