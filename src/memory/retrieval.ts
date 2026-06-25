@@ -316,6 +316,12 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
     branchRef: string,
   ) => MemoryActiveView | Promise<MemoryActiveView>;
   private readonly origin: RetrievalOrigin;
+  private readonly originFor:
+    | ((
+        kind: "entity" | "relation" | "resource_chunk",
+        id: string,
+      ) => RetrievalOrigin)
+    | undefined;
 
   constructor(
     readView: (
@@ -323,9 +329,14 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
       branchRef: string,
     ) => MemoryActiveView | Promise<MemoryActiveView>,
     origin: RetrievalOrigin = "cloud_active",
+    originFor?: (
+      kind: "entity" | "relation" | "resource_chunk",
+      id: string,
+    ) => RetrievalOrigin,
   ) {
     this.readView = readView;
     this.origin = origin;
+    this.originFor = originFor;
   }
 
   async keywordSearch(
@@ -354,7 +365,9 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
           chunk,
           ...(resource === undefined ? {} : { resource }),
           score: 1,
-          origin: this.origin,
+          origin:
+            this.originFor?.("resource_chunk", chunk.id) ??
+            this.origin,
         };
       });
     return [...entityItems, ...chunkItems].slice(0, limit);
@@ -386,7 +399,9 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
           chunk,
           ...(resource === undefined ? {} : { resource }),
           score: dotProduct(chunk.embedding ?? [], embedding),
-          origin: this.origin,
+          origin:
+            this.originFor?.("resource_chunk", chunk.id) ??
+            this.origin,
         };
       });
     return [...entities, ...chunks]
@@ -452,7 +467,9 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
           relation,
           depth,
           score: relation.weight,
-          origin: this.origin,
+          origin:
+            this.originFor?.("relation", relation.id) ??
+            this.origin,
         });
         if (
           relation.targetKind === "memory_entity" &&
@@ -512,7 +529,9 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
         ...(branch === undefined ? {} : { branch }),
         evidence: [],
         score: 1,
-        origin: this.origin,
+        origin:
+          this.originFor?.("entity", entity.id) ??
+          this.origin,
       };
     });
   }

@@ -514,6 +514,7 @@ export class InMemoryMemoryAuthority
         "memory_relation",
       ],
       revert_commit: ["revert", "memory_entity"],
+      resolve_conflict: ["merge", "memory_entity"],
     } as const;
     const [action, resourceKind] = expected[request.operation.kind];
     if (
@@ -609,6 +610,9 @@ export class InMemoryMemoryAuthority
       commitId: request.commit.id,
       kind: input.kind,
       actor: actorFrom(request),
+      ...(request.provenance === undefined
+        ? {}
+        : { provenance: clone(request.provenance) }),
       input: clone(input),
       createdAt,
     };
@@ -812,6 +816,7 @@ export class InMemoryMemoryAuthority
       }
       case "replace_relation":
       case "revert_commit":
+      case "resolve_conflict":
         return;
     }
   }

@@ -446,6 +446,46 @@
         }
       }
     },
+    "PrincipalContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "userId",
+        "agentId",
+        "rootEntityId",
+        "taskScope"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "agentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "taskScope": {
+          "$ref": "#/$defs/TaskScope"
+        },
+        "delegationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parentAgentId": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "PermissionSubject": {
       "oneOf": [
         {
@@ -1176,7 +1216,8 @@
         "tombstone_entity",
         "tombstone_entity_branch",
         "tombstone_relation",
-        "revert_commit"
+        "revert_commit",
+        "resolve_conflict"
       ]
     },
     "MemoryOperation": {
@@ -1214,6 +1255,28 @@
         },
         "actor": {
           "$ref": "#/$defs/MemoryActor"
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ownerUserId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "delegationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "parentAgentId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
         },
         "input": {
           "type": "object",

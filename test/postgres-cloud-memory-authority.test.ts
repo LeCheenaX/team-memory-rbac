@@ -142,3 +142,110 @@ test("PostgreSQL cloud authority survives restart and preserves idempotency", as
   );
   assert.ok(pool.transactionCount >= 4);
 });
+
+test("PostgreSQL authority persists conflict resolution history across restart", async () => {
+  const pool = new FakePostgresPool();
+  const seed = {
+    entities: [
+      {
+        id: rootEntityId,
+        rootEntityId: null,
+        status: "active" as const,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+    resources: [
+      {
+        id: "resource-runbook",
+        rootEntityId,
+        sourceType: "document" as const,
+        title: "Runbook",
+        contentHash: "sha256:runbook",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+  };
+  const authority = await PostgresCloudMemoryAuthority.open(
+    pool,
+    "team-memory-resolution",
+    seed,
+  );
+  const router = new PermissionRouter(policy, authority);
+  const remote = {
+    subject: { kind: "user" as const, userId: "user-alice" },
+    rootEntityId,
+    branchRef: "main",
+    clientMutationId: "remote-chunk",
+    action: "write_resource_chunk" as const,
+    resourceKind: "resource_chunk" as const,
+    commit: { id: "commit-remote-chunk" },
+    operation: {
+      kind: "create_resource_chunk" as const,
+      id: "operation-remote-chunk",
+      chunk: {
+        id: "chunk-shared",
+        rootEntityId,
+        resourceId: "resource-runbook",
+        chunkIndex: 0,
+        text: "Remote",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    },
+  };
+  await router.execute(remote);
+  const incoming = await router.execute({
+    ...remote,
+    clientMutationId: "incoming-chunk",
+    commit: { id: "commit-incoming-chunk" },
+    operation: {
+      ...remote.operation,
+      id: "operation-incoming-chunk",
+      chunk: { ...remote.operation.chunk, text: "Incoming" },
+    },
+  });
+  if (
+    !("value" in incoming) ||
+    incoming.value.status !== "conflict"
+  ) {
+    assert.fail("expected persisted conflict");
+  }
+  await authority.resolveConflict({
+    subject: remote.subject,
+    rootEntityId,
+    branchRef: "main",
+    action: "merge",
+    resourceKind: "memory_entity",
+    clientMutationId: "resolve-conflict",
+    commit: { id: "commit-resolution" },
+    conflictIds: [incoming.value.conflict.id],
+    resolutionKind: "keep_target",
+    authorization: {
+      ...allow({
+        subject: remote.subject,
+        rootEntityId,
+        action: "merge",
+        resourceKind: "memory_entity",
+      }),
+      allowed: true,
+    },
+  });
+
+  const restarted = await PostgresCloudMemoryAuthority.open(
+    pool,
+    "team-memory-resolution",
+    seed,
+  );
+  assert.equal(
+    restarted.listConflicts(rootEntityId, "main")[0]?.status,
+    "resolved",
+  );
+  assert.equal(
+    restarted
+      .listCommitRecords(rootEntityId, "main")
+      .at(-1)?.resolution?.resolutionKind,
+    "keep_target",
+  );
+});

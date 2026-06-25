@@ -140,6 +140,16 @@ export interface AgentDelegation {
   expiresAt?: string;
 }
 
+export interface PrincipalContext {
+  sessionId: string;
+  userId: string;
+  agentId: string;
+  rootEntityId: string;
+  taskScope: TaskScope;
+  delegationId?: string;
+  parentAgentId?: string;
+}
+
 export type PermissionSubject =
   | {
       kind: "user";

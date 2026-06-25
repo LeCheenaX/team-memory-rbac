@@ -1,6 +1,6 @@
 # 本地 Pending Overlay 与人工冲突裁决闭环
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## What to build
 
@@ -31,3 +31,19 @@ Status: ready-for-agent
 
 - Issue 07 - 云端权威提交与并发冲突捕获
 - Issue 08 - 本地授权快照与增量同步
+
+## Comments
+
+### 2026-06-25 Implementation
+
+- 实现 `InMemoryPendingOverlay`，本地 stage 在提交状态前先完整 materialize 校验，保证 pending queue 与 overlay 原子更新。
+- pending record 保存 baseCommitId、clientMutationId、conflict keys、本地顺序、session/owner/delegation provenance 和最小 base fragment。
+- pending overlay 支持 keyword、semantic、entity 和 relation 查询，并使用 `local_pending` 来源标记。
+- pending create/update 遮蔽 snapshot；pending tombstone 隐藏 snapshot；远程删除时保留必要 base fragment 以维持未裁决本地视图。
+- push 接受幂等重试；云端冲突会保留 pending 并关联 MemoryConflict、incoming commit 和 conflict branch。
+- 新增 `resolve_conflict` 审计 operation，以及 keep_target、take_incoming、manual_merge 三种管理员 resolution。
+- take_incoming 会先 revert 发生冲突的远程 commit effect，再应用 incoming operation；目标 branch 历史不被改写。
+- resolution commit 明确记录 resolvedConflictIds、resolvedIncomingCommitIds 和 resolution kind。
+- pull resolution 后 pending 进入 resolved、rejected 或 superseded，记录不会静默删除。
+- PostgreSQL adapter 可以在重启后恢复 conflict 与 resolution 历史。
+- 测试覆盖即时文本/向量/entity/relation 召回、本地重启、重复 push、普通远程冲突、删除与修改冲突和三种裁决。

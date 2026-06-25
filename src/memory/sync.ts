@@ -330,6 +330,8 @@ function deltaFromRecords(
         case "revert_commit":
           rebuildRequired = true;
           break;
+        case "resolve_conflict":
+          break;
       }
     }
   }
@@ -581,6 +583,17 @@ export class InMemoryLocalAuthorizedViewStore
     };
   }
 
+  advance(identity: AuthorizedViewIdentity): void {
+    if (this.state.snapshot === undefined) {
+      throw new Error("cannot advance a missing local snapshot");
+    }
+    this.state = {
+      ...this.state,
+      identity: clone(identity),
+      valid: true,
+    };
+  }
+
   invalidate(): void {
     this.state = {
       pendingOperations: clone(this.state.pendingOperations),
@@ -646,6 +659,7 @@ export interface LocalAuthorizedViewStore {
     identity: AuthorizedViewIdentity,
     delta: AuthorizedViewDelta,
   ): void;
+  advance(identity: AuthorizedViewIdentity): void;
   invalidate(): void;
   clear(): void;
   readView(rootEntityId: string, branchRef: string): MemoryActiveView;
@@ -697,6 +711,8 @@ export class AuthorizedViewSynchronizer {
       this.store.replace(batch.identity, batch.snapshot);
     } else if (batch.kind === "delta") {
       this.store.applyDelta(batch.identity, batch.delta);
+    } else {
+      this.store.advance(batch.identity);
     }
     return routed;
   }

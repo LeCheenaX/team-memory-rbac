@@ -7,6 +7,8 @@ import {
   type CloudMemoryAuthority,
   type CloudMemoryWriteCommand,
   type CloudMemoryWriteResult,
+  type ConflictResolutionCommand,
+  type ConflictResolutionResult,
 } from "../../src/memory/cloud-authority.ts";
 import type {
   MemoryActiveView,
@@ -32,7 +34,16 @@ export interface PostgresPool {
 
 interface PersistedAuthorityState {
   seed: MemoryAuthoritySeed;
-  requests: AuthorizedMemoryRequest<CloudMemoryWriteCommand>[];
+  events: Array<
+    | {
+        kind: "write";
+        request: AuthorizedMemoryRequest<CloudMemoryWriteCommand>;
+      }
+    | {
+        kind: "resolution";
+        request: AuthorizedMemoryRequest<ConflictResolutionCommand>;
+      }
+  >;
 }
 
 interface StateRow {
@@ -47,8 +58,12 @@ async function restore(
   state: PersistedAuthorityState,
 ): Promise<InMemoryCloudMemoryAuthority> {
   const authority = new InMemoryCloudMemoryAuthority(clone(state.seed));
-  for (const request of state.requests) {
-    await authority.execute(clone(request));
+  for (const event of state.events) {
+    if (event.kind === "write") {
+      await authority.execute(clone(event.request));
+    } else {
+      await authority.resolveConflict(clone(event.request));
+    }
   }
   return authority;
 }
@@ -111,15 +126,19 @@ export class PostgresCloudMemoryAuthority
       );
       const authority = await restore(state);
       const before = authority.commitWatermark();
-      const alreadyRecorded = state.requests.some(
-        (candidate) =>
-          candidate.rootEntityId === request.rootEntityId &&
-          candidate.branchRef === request.branchRef &&
-          candidate.clientMutationId === request.clientMutationId,
+      const alreadyRecorded = state.events.some(
+        (event) =>
+          event.kind === "write" &&
+          event.request.rootEntityId === request.rootEntityId &&
+          event.request.branchRef === request.branchRef &&
+          event.request.clientMutationId === request.clientMutationId,
       );
       const result = await authority.execute(clone(request));
       if (!alreadyRecorded) {
-        state.requests.push(clone(request));
+        state.events.push({
+          kind: "write",
+          request: clone(request),
+        });
       }
 
       await transaction.query(
@@ -160,6 +179,67 @@ export class PostgresCloudMemoryAuthority
     branchRef: string,
   ): MemoryActiveView {
     return this.delegate.readActiveView(rootEntityId, branchRef);
+  }
+
+  async resolveConflict(
+    request: AuthorizedMemoryRequest<ConflictResolutionCommand>,
+  ): Promise<ConflictResolutionResult> {
+    const committed = await this.pool.transaction(async (transaction) => {
+      const state = await PostgresCloudMemoryAuthority.loadState(
+        transaction,
+        this.authorityKey,
+        this.initialSeed,
+        true,
+      );
+      const authority = await restore(state);
+      const before = authority.commitWatermark();
+      const alreadyRecorded = state.events.some(
+        (event) =>
+          event.kind === "resolution" &&
+          event.request.rootEntityId === request.rootEntityId &&
+          event.request.branchRef === request.branchRef &&
+          event.request.clientMutationId === request.clientMutationId,
+      );
+      const result = await authority.resolveConflict(clone(request));
+      if (!alreadyRecorded) {
+        state.events.push({
+          kind: "resolution",
+          request: clone(request),
+        });
+      }
+      await transaction.query(
+        `INSERT INTO team_memory_authority_state
+           (authority_key, payload, updated_at)
+         VALUES ($1, $2::jsonb, now())
+         ON CONFLICT (authority_key) DO UPDATE
+           SET payload = EXCLUDED.payload, updated_at = now()`,
+        [this.authorityKey, JSON.stringify(state)],
+      );
+      await this.persistRecords(
+        transaction,
+        authority.listCommitRecords(
+          request.rootEntityId,
+          request.branchRef,
+          before,
+        ),
+      );
+      await this.persistConflicts(
+        transaction,
+        authority,
+        request.rootEntityId,
+        request.branchRef,
+      );
+      await this.persistOutbox(transaction, authority, before);
+      await this.persistProjection(
+        transaction,
+        authority,
+        request.rootEntityId,
+        request.branchRef,
+      );
+      return { authority, result };
+    });
+    this.delegate = committed.authority;
+    return committed.result;
   }
 
   listCommitRecords(
@@ -207,7 +287,7 @@ export class PostgresCloudMemoryAuthority
     );
     return result.rows[0]?.payload ?? {
       seed: clone(seed),
-      requests: [],
+      events: [],
     };
   }
 
@@ -218,7 +298,7 @@ export class PostgresCloudMemoryAuthority
   ): Promise<void> {
     const initial: PersistedAuthorityState = {
       seed: clone(seed),
-      requests: [],
+      events: [],
     };
     await transaction.query(
       `INSERT INTO team_memory_authority_state

@@ -69,4 +69,34 @@ export class InMemoryRbacAuthority implements RbacAuthority {
         delegation.rootEntityId === rootEntityId,
     );
   }
+
+  setUserStatus(
+    userId: string,
+    status: User["status"],
+  ): void {
+    const user = this.users.get(userId);
+    if (user !== undefined) {
+      user.status = status;
+    }
+  }
+
+  setAgentStatus(
+    agentId: string,
+    status: AgentIdentity["status"],
+  ): void {
+    const agent = this.agents.get(agentId);
+    if (agent !== undefined) {
+      agent.status = status;
+    }
+  }
+
+  revokeDelegation(delegationId: string, revokedAt: string): void {
+    const delegation = this.delegations.find(
+      (candidate) => candidate.id === delegationId,
+    );
+    if (delegation !== undefined) {
+      delegation.status = "revoked";
+      delegation.revokedAt = revokedAt;
+    }
+  }
 }

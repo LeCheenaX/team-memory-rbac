@@ -75,6 +75,19 @@ export type RevertCommitOperation = {
   targetCommitId: string;
 };
 
+export type ConflictResolutionKind =
+  | "keep_target"
+  | "take_incoming"
+  | "manual_merge";
+
+export type ResolveConflictOperation = {
+  kind: "resolve_conflict";
+  id: string;
+  resolvedConflictIds: string[];
+  resolvedIncomingCommitIds: string[];
+  resolutionKind: ConflictResolutionKind;
+};
+
 export type MemoryOperationInput =
   | CreateEntityOperation
   | CreateEntityBranchOperation
@@ -84,7 +97,8 @@ export type MemoryOperationInput =
   | ReviseResourceOperation
   | ReplaceRelationOperation
   | TombstoneOperation
-  | RevertCommitOperation;
+  | RevertCommitOperation
+  | ResolveConflictOperation;
 
 export interface MemoryOperation {
   id: string;
@@ -95,6 +109,12 @@ export interface MemoryOperation {
   actor: {
     kind: "user" | "agent";
     id: string;
+  };
+  provenance?: {
+    sessionId?: string;
+    ownerUserId?: string;
+    delegationId?: string;
+    parentAgentId?: string;
   };
   input: MemoryOperationInput;
   createdAt: string;
@@ -107,6 +127,7 @@ export interface MemoryWriteCommand extends PermissionRequest {
     message?: string;
   };
   operation: MemoryOperationInput;
+  provenance?: MemoryOperation["provenance"];
 }
 
 export interface MemoryWriteResult {

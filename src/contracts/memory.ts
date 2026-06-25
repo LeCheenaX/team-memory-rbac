@@ -33,6 +33,7 @@ export const MEMORY_OPERATION_KINDS = [
   "tombstone_entity_branch",
   "tombstone_relation",
   "revert_commit",
+  "resolve_conflict",
 ] as const;
 
 export type MemoryOperationKind =

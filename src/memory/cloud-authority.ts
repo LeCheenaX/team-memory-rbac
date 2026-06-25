@@ -1,7 +1,12 @@
 import type {
   MemoryActor,
   MemoryCommit,
+  MemoryObjectKind,
 } from "../contracts/memory.ts";
+import type {
+  MemoryAction,
+  PermissionRequest,
+} from "../contracts/rbac.ts";
 import type {
   AuthorizedMemoryRequest,
   MemoryAdapter,
@@ -14,6 +19,7 @@ import type {
   MemoryOperationInput,
   MemoryWriteCommand,
   MemoryWriteResult,
+  ConflictResolutionKind,
 } from "./contracts.ts";
 
 export interface CloudMemoryWriteCommand extends MemoryWriteCommand {
@@ -30,6 +36,11 @@ export interface CloudCommitRecord {
   commit: MemoryCommit;
   operations: MemoryOperation[];
   status: "accepted" | "conflicted";
+  resolution?: {
+    resolvedConflictIds: string[];
+    resolvedIncomingCommitIds: string[];
+    resolutionKind: ConflictResolutionKind;
+  };
 }
 
 export interface MemoryConflict {
@@ -39,6 +50,7 @@ export interface MemoryConflict {
   conflictBranchRef: string;
   baseCommitId?: string;
   remoteHeadCommitId: string;
+  remoteConflictingCommitIds: string[];
   incomingCommitId: string;
   conflictKeys: string[];
   remoteActor: MemoryActor;
@@ -70,6 +82,27 @@ export type CloudMemoryWriteResult =
       incoming: MemoryWriteResult;
     };
 
+export interface ConflictResolutionCommand extends PermissionRequest {
+  branchRef: string;
+  clientMutationId: string;
+  commit: {
+    id: string;
+    message?: string;
+  };
+  conflictIds: string[];
+  resolutionKind: ConflictResolutionKind;
+  manualOperation?: MemoryOperationInput;
+  manualAction?: MemoryAction;
+  manualResourceKind?: MemoryObjectKind;
+  provenance?: MemoryOperation["provenance"];
+}
+
+export interface ConflictResolutionResult {
+  sequence: number;
+  resolution: CloudCommitRecord;
+  applied: CloudCommitRecord[];
+}
+
 interface AcceptedRequestRecord {
   sequence: number;
   request: AuthorizedMemoryRequest<CloudMemoryWriteCommand>;
@@ -78,6 +111,11 @@ interface AcceptedRequestRecord {
 interface IdempotencyRecord {
   fingerprint: string;
   result: CloudMemoryWriteResult;
+}
+
+interface ResolutionIdempotencyRecord {
+  fingerprint: string;
+  result: ConflictResolutionResult;
 }
 
 function clone<T>(value: T): T {
@@ -98,8 +136,8 @@ function stableValue(value: unknown): unknown {
   return value;
 }
 
-function requestFingerprint(
-  request: AuthorizedMemoryRequest<CloudMemoryWriteCommand>,
+function requestFingerprint<T extends { authorization: unknown }>(
+  request: T,
 ): string {
   const { authorization: _authorization, ...command } = request;
   return JSON.stringify(stableValue(command));
@@ -180,6 +218,9 @@ function operationEffect(operation: MemoryOperationInput): string {
         targetCommitId: operation.targetCommitId,
       };
       break;
+    case "resolve_conflict":
+      effect = operation;
+      break;
   }
   return JSON.stringify(stableValue(effect));
 }
@@ -243,7 +284,26 @@ export function conflictKeysForOperation(
       return [`relation:${operation.targetId}`];
     case "revert_commit":
       return [`commit-effect:${operation.targetCommitId}`];
+    case "resolve_conflict":
+      return operation.resolvedConflictIds.map(
+        (conflictId) => `conflict-resolution:${conflictId}`,
+      );
   }
+}
+
+function operationWithResolutionIds(
+  operation: MemoryOperationInput,
+  suffix: string,
+): MemoryOperationInput {
+  const id = `${operation.id}:${suffix}`;
+  if (operation.kind === "replace_relation") {
+    return {
+      ...clone(operation),
+      id,
+      replacementOperationId: `${operation.replacementOperationId}:${suffix}`,
+    };
+  }
+  return { ...clone(operation), id };
 }
 
 function operationForBranch(
@@ -290,6 +350,54 @@ function seedForBranch(
   };
 }
 
+function conflictSeedForOperation(
+  view: MemoryActiveView,
+  branchRef: string,
+  operation: MemoryOperationInput,
+): MemoryAuthoritySeed {
+  const seed = seedForBranch(view, branchRef);
+  if (operation.kind === "create_resource_chunk") {
+    seed.resourceChunks = (seed.resourceChunks ?? []).filter(
+      (chunk) => chunk.id !== operation.chunk.id,
+    );
+  } else if (operation.kind === "create_resource") {
+    seed.resources = (seed.resources ?? []).filter(
+      (resource) => resource.id !== operation.resource.id,
+    );
+    seed.resourceChunks = (seed.resourceChunks ?? []).filter(
+      (chunk) => chunk.resourceId !== operation.resource.id,
+    );
+  } else if (operation.kind === "create_entity") {
+    seed.entities = (seed.entities ?? []).filter(
+      (entity) => entity.id !== operation.entity.id,
+    );
+    seed.entityBranches = (seed.entityBranches ?? []).filter(
+      (entityBranch) =>
+        entityBranch.entityId !== operation.entity.id,
+    );
+    seed.relations = (seed.relations ?? []).filter(
+      (relation) =>
+        relation.sourceId !== operation.entity.id &&
+        relation.targetId !== operation.entity.id,
+    );
+  } else if (operation.kind === "create_entity_branch") {
+    seed.entityBranches = (seed.entityBranches ?? []).filter(
+      (entityBranch) => entityBranch.id !== operation.branch.id,
+    );
+  } else if (operation.kind === "create_relation") {
+    const incomingKeys = new Set(conflictKeysForOperation(operation));
+    seed.relations = (seed.relations ?? []).filter((relation) => {
+      const keys = conflictKeysForOperation({
+        kind: "create_relation",
+        id: `key:${relation.id}`,
+        relation,
+      });
+      return !keys.some((key) => incomingKeys.has(key));
+    });
+  }
+  return seed;
+}
+
 export interface CloudMemoryAuthority
   extends MemoryAdapter<CloudMemoryWriteResult, CloudMemoryWriteCommand> {
   readActiveView(
@@ -311,6 +419,26 @@ export interface CloudMemoryAuthority
     rootEntityId: string,
     branchRef: string,
   ): string | undefined;
+  resolveConflict(
+    request: AuthorizedMemoryRequest<ConflictResolutionCommand>,
+  ): Promise<ConflictResolutionResult>;
+}
+
+export class ConflictResolutionAdapter
+  implements
+    MemoryAdapter<ConflictResolutionResult, ConflictResolutionCommand>
+{
+  private readonly cloud: CloudMemoryAuthority;
+
+  constructor(cloud: CloudMemoryAuthority) {
+    this.cloud = cloud;
+  }
+
+  execute(
+    request: AuthorizedMemoryRequest<ConflictResolutionCommand>,
+  ): Promise<ConflictResolutionResult> {
+    return this.cloud.resolveConflict(request);
+  }
 }
 
 export class InMemoryCloudMemoryAuthority
@@ -326,6 +454,14 @@ export class InMemoryCloudMemoryAuthority
   private readonly conflictAuthorities = new Map<
     string,
     InMemoryMemoryAuthority
+  >();
+  private readonly conflictedRequests = new Map<
+    string,
+    AuthorizedMemoryRequest<CloudMemoryWriteCommand>
+  >();
+  private readonly resolutionIdempotency = new Map<
+    string,
+    ResolutionIdempotencyRecord
   >();
   private sequence = 0;
 
@@ -479,6 +615,271 @@ export class InMemoryCloudMemoryAuthority
     this.core = rebuilt;
   }
 
+  async resolveConflict(
+    request: AuthorizedMemoryRequest<ConflictResolutionCommand>,
+  ): Promise<ConflictResolutionResult> {
+    if (
+      request.authorization.allowed !== true ||
+      request.action !== "merge" ||
+      request.resourceKind !== "memory_entity" ||
+      request.authorization.action !== request.action ||
+      request.authorization.resourceKind !== request.resourceKind
+    ) {
+      throw new Error("conflict resolution requires merge authorization");
+    }
+    const idempotencyKey = [
+      request.rootEntityId,
+      request.branchRef,
+      request.clientMutationId,
+    ].join(":");
+    const prior = this.resolutionIdempotency.get(idempotencyKey);
+    if (prior !== undefined) {
+      if (prior.fingerprint !== requestFingerprint(request)) {
+        throw new Error(
+          "resolution clientMutationId was already used for a different command",
+        );
+      }
+      return clone(prior.result);
+    }
+    const conflicts = request.conflictIds.map((conflictId) => {
+      const conflict = this.conflicts.find(
+        (candidate) =>
+          candidate.id === conflictId &&
+          candidate.rootEntityId === request.rootEntityId &&
+          candidate.targetBranchRef === request.branchRef,
+      );
+      if (conflict === undefined) {
+        throw new Error(`conflict not found: ${conflictId}`);
+      }
+      if (conflict.status !== "unresolved") {
+        throw new Error(`conflict already resolved: ${conflictId}`);
+      }
+      return conflict;
+    });
+    if (conflicts.length === 0) {
+      throw new Error("at least one conflict is required");
+    }
+    if (
+      request.resolutionKind === "manual_merge" &&
+      (request.manualOperation === undefined ||
+        request.manualAction === undefined ||
+        request.manualResourceKind === undefined)
+    ) {
+      throw new Error("manual merge requires an explicit operation");
+    }
+
+    const applied: CloudCommitRecord[] = [];
+    if (request.resolutionKind === "take_incoming") {
+      const remoteCommitIds = [
+        ...new Set(
+          conflicts.flatMap(
+            (conflict) => conflict.remoteConflictingCommitIds,
+          ),
+        ),
+      ];
+      for (const [index, targetCommitId] of remoteCommitIds.entries()) {
+        const revertRequest: AuthorizedMemoryRequest<CloudMemoryWriteCommand> =
+          {
+            subject: clone(request.subject),
+            rootEntityId: request.rootEntityId,
+            branchRef: request.branchRef,
+            action: "revert",
+            resourceKind: "memory_entity",
+            clientMutationId: `${request.clientMutationId}:revert:${index}`,
+            ...(this.headCommitId(
+              request.rootEntityId,
+              request.branchRef,
+            ) === undefined
+              ? {}
+              : {
+                  expectedHeadCommitId: this.headCommitId(
+                    request.rootEntityId,
+                    request.branchRef,
+                  ) as string,
+                }),
+            commit: {
+              id: `${request.commit.id}:revert:${index}`,
+              message: "Remove the remote conflicting effect",
+            },
+            operation: {
+              kind: "revert_commit",
+              id: `operation:${request.commit.id}:revert:${index}`,
+              targetCommitId,
+            },
+            ...(request.provenance === undefined
+              ? {}
+              : { provenance: clone(request.provenance) }),
+            authorization: {
+              ...clone(request.authorization),
+              action: "revert",
+              resourceKind: "memory_entity",
+            },
+          };
+        const reverted = await this.accept(
+          revertRequest,
+          conflictKeysForOperation(revertRequest.operation),
+        );
+        if (reverted.status !== "accepted") {
+          throw new Error("remote conflict revert was not accepted");
+        }
+        const record = this.records.find(
+          (candidate) => candidate.sequence === reverted.sequence,
+        );
+        if (record !== undefined) {
+          applied.push(clone(record));
+        }
+      }
+    }
+    const mutations: Array<{
+      operation: MemoryOperationInput;
+      action: MemoryAction;
+      resourceKind: MemoryObjectKind;
+    }> =
+      request.resolutionKind === "take_incoming"
+        ? conflicts.map((conflict) => {
+            const incoming = this.conflictedRequests.get(
+              conflict.incomingCommitId,
+            );
+            if (incoming === undefined) {
+              throw new Error("conflicted request not found");
+            }
+            return {
+              operation: incoming.operation,
+              action: incoming.action,
+              resourceKind: incoming.resourceKind,
+            };
+          })
+        : request.resolutionKind === "manual_merge"
+          ? [
+              {
+                operation: request.manualOperation as MemoryOperationInput,
+                action: request.manualAction as MemoryAction,
+                resourceKind:
+                  request.manualResourceKind as MemoryObjectKind,
+              },
+            ]
+          : [];
+
+    for (const [index, mutation] of mutations.entries()) {
+      const suffix = `resolution-${request.commit.id}-${index}`;
+      const applyRequest: AuthorizedMemoryRequest<CloudMemoryWriteCommand> = {
+        subject: clone(request.subject),
+        rootEntityId: request.rootEntityId,
+        branchRef: request.branchRef,
+        action: mutation.action,
+        resourceKind: mutation.resourceKind,
+        clientMutationId: `${request.clientMutationId}:apply:${index}`,
+        ...(this.headCommitId(
+          request.rootEntityId,
+          request.branchRef,
+        ) === undefined
+          ? {}
+          : {
+              expectedHeadCommitId: this.headCommitId(
+                request.rootEntityId,
+                request.branchRef,
+              ) as string,
+            }),
+        commit: {
+          id: `${request.commit.id}:apply:${index}`,
+          message: `Apply ${request.resolutionKind} conflict resolution`,
+        },
+        operation: operationWithResolutionIds(
+          mutation.operation,
+          suffix,
+        ),
+        ...(request.provenance === undefined
+          ? {}
+          : { provenance: clone(request.provenance) }),
+        authorization: {
+          ...clone(request.authorization),
+          action: mutation.action,
+          resourceKind: mutation.resourceKind,
+        },
+      };
+      const result = await this.accept(
+        applyRequest,
+        conflictKeysForOperation(applyRequest.operation),
+      );
+      if (result.status !== "accepted") {
+        throw new Error("resolution mutation was not accepted");
+      }
+      const record = this.records.find(
+        (candidate) => candidate.sequence === result.sequence,
+      );
+      if (record !== undefined) {
+        applied.push(clone(record));
+      }
+    }
+
+    const resolvedIncomingCommitIds = conflicts.map(
+      (conflict) => conflict.incomingCommitId,
+    );
+    const markerRequest: AuthorizedMemoryRequest<CloudMemoryWriteCommand> = {
+      subject: clone(request.subject),
+      rootEntityId: request.rootEntityId,
+      branchRef: request.branchRef,
+      action: "merge",
+      resourceKind: "memory_entity",
+      clientMutationId: request.clientMutationId,
+      ...(this.headCommitId(
+        request.rootEntityId,
+        request.branchRef,
+      ) === undefined
+        ? {}
+        : {
+            expectedHeadCommitId: this.headCommitId(
+              request.rootEntityId,
+              request.branchRef,
+            ) as string,
+          }),
+      commit: clone(request.commit),
+      operation: {
+        kind: "resolve_conflict",
+        id: `operation:${request.commit.id}`,
+        resolvedConflictIds: conflicts.map(({ id }) => id),
+        resolvedIncomingCommitIds,
+        resolutionKind: request.resolutionKind,
+      },
+      ...(request.provenance === undefined
+        ? {}
+        : { provenance: clone(request.provenance) }),
+      authorization: clone(request.authorization),
+    };
+    const marker = await this.accept(
+      markerRequest,
+      conflictKeysForOperation(markerRequest.operation),
+    );
+    if (marker.status !== "accepted") {
+      throw new Error("resolution marker was not accepted");
+    }
+    const resolution = this.records.find(
+      (record) => record.sequence === marker.sequence,
+    );
+    if (resolution === undefined) {
+      throw new Error("resolution record not found");
+    }
+    resolution.resolution = {
+      resolvedConflictIds: conflicts.map(({ id }) => id),
+      resolvedIncomingCommitIds,
+      resolutionKind: request.resolutionKind,
+    };
+    for (const conflict of conflicts) {
+      conflict.status = "resolved";
+      conflict.resolvedByCommitId = resolution.commit.id;
+    }
+    const result = {
+      sequence: resolution.sequence,
+      resolution: clone(resolution),
+      applied,
+    };
+    this.resolutionIdempotency.set(idempotencyKey, {
+      fingerprint: requestFingerprint(request),
+      result: clone(result),
+    });
+    return result;
+  }
+
   private conflictingKeysSince(
     rootEntityId: string,
     branchRef: string,
@@ -489,6 +890,22 @@ export class InMemoryCloudMemoryAuthority
     if (expectedHeadCommitId === currentHeadCommitId) {
       return [];
     }
+    const changed = new Set(
+      this.acceptedRecordsSince(
+        rootEntityId,
+        branchRef,
+        expectedHeadCommitId,
+      )
+        .flatMap((record) => record.conflictKeys),
+    );
+    return incomingKeys.filter((key) => changed.has(key));
+  }
+
+  private acceptedRecordsSince(
+    rootEntityId: string,
+    branchRef: string,
+    expectedHeadCommitId: string | undefined,
+  ): CloudCommitRecord[] {
     let baseSequence = 0;
     if (expectedHeadCommitId !== undefined) {
       const base = this.records.find(
@@ -503,18 +920,13 @@ export class InMemoryCloudMemoryAuthority
       }
       baseSequence = base.sequence;
     }
-    const changed = new Set(
-      this.records
-        .filter(
-          (record) =>
-            record.commit.rootEntityId === rootEntityId &&
-            record.targetBranchRef === branchRef &&
-            record.status === "accepted" &&
-            record.sequence > baseSequence,
-        )
-        .flatMap((record) => record.conflictKeys),
+    return this.records.filter(
+      (record) =>
+        record.commit.rootEntityId === rootEntityId &&
+        record.targetBranchRef === branchRef &&
+        record.status === "accepted" &&
+        record.sequence > baseSequence,
     );
-    return incomingKeys.filter((key) => changed.has(key));
   }
 
   private equivalentAcceptedRecordSince(
@@ -604,7 +1016,11 @@ export class InMemoryCloudMemoryAuthority
       request.branchRef,
     );
     const conflictAuthority = new InMemoryMemoryAuthority(
-      seedForBranch(targetView, conflictBranchRef),
+      conflictSeedForOperation(
+        targetView,
+        conflictBranchRef,
+        request.operation,
+      ),
     );
     const conflictRequest = {
       ...clone(request),
@@ -632,6 +1048,17 @@ export class InMemoryCloudMemoryAuthority
         ? {}
         : { baseCommitId: request.expectedHeadCommitId }),
       remoteHeadCommitId,
+      remoteConflictingCommitIds: this.acceptedRecordsSince(
+        request.rootEntityId,
+        request.branchRef,
+        request.expectedHeadCommitId,
+      )
+        .filter((record) =>
+          record.conflictKeys.some((key) =>
+            conflictingKeys.includes(key),
+          ),
+        )
+        .map((record) => record.commit.id),
       incomingCommitId: incoming.commit.id,
       conflictKeys: [...conflictingKeys],
       remoteActor: clone(remote.commit.actor),
@@ -640,6 +1067,7 @@ export class InMemoryCloudMemoryAuthority
       createdAt: incoming.commit.createdAt,
     };
     this.conflicts.push(conflict);
+    this.conflictedRequests.set(incoming.commit.id, clone(request));
     this.records.push({
       sequence,
       clientMutationId: request.clientMutationId,

@@ -224,6 +224,26 @@ export const CONTRACT_SCHEMA = {
         expiresAt: timestamp,
       },
     },
+    PrincipalContext: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "sessionId",
+        "userId",
+        "agentId",
+        "rootEntityId",
+        "taskScope",
+      ],
+      properties: {
+        sessionId: nonEmptyString,
+        userId: nonEmptyString,
+        agentId: nonEmptyString,
+        rootEntityId: nonEmptyString,
+        taskScope: { $ref: "#/$defs/TaskScope" },
+        delegationId: nonEmptyString,
+        parentAgentId: nonEmptyString,
+      },
+    },
     PermissionSubject: {
       oneOf: [
         {
@@ -590,6 +610,16 @@ export const CONTRACT_SCHEMA = {
         commitId: nonEmptyString,
         kind: { $ref: "#/$defs/MemoryOperationKind" },
         actor: { $ref: "#/$defs/MemoryActor" },
+        provenance: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            sessionId: nonEmptyString,
+            ownerUserId: nonEmptyString,
+            delegationId: nonEmptyString,
+            parentAgentId: nonEmptyString,
+          },
+        },
         input: {
           type: "object",
           required: ["kind", "id"],
