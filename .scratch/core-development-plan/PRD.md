@@ -254,33 +254,37 @@ L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、R
 - 只读 ResearchAgent 只能读，不能写
 - 返回的实体摘要能回溯到原始 Resource / Chunk
 
-### Milestone 4: Cloud Authority And Local View
+### Milestone 4: Cloud Authority And Local Sync
 
-目标：实现云端权威记忆和本地授权视图的分工。
+目标：实现云端唯一权威历史、本地授权快照、低延迟 pending overlay 和最终一致同步。
 
 交付物：
 
-- Cloud Memory Authority abstraction
-- AuthorizedViewBuilder
-- local materialized view schema
-- commitWatermark
-- permissionWatermark
-- 权限变化后的本地视图失效策略
-- local query adapter
+- Cloud Memory Authority 持久化实现
+- expectedHeadCommitId / clientMutationId 并发提交协议
+- conflict key、MemoryConflict 和 conflict branch
+- Authorized Snapshot builder
+- commitWatermark / permissionWatermark
+- 本地 pending operation queue 和即时检索 overlay
+- 管理员 resolution commit
+- 权限变化后的本地视图失效与重建
 
 完成标准：
 
-- 本地记忆永远不是权威源
-- 本地 View 带 rootEntityId、branchRef、commitWatermark、permissionWatermark、taskScope
-- 权限变化会使旧本地 View 失效
-- 本地 View 能从云端权威源重建
+- 云端 append-only commit/operation log 是共享记忆的唯一权威源
+- 本地只保存 Authorized Snapshot、必要索引、pending operations、同步游标和少量 conflict metadata
+- pending 写入无需等待云端即可在本地检索
+- 云端并发冲突不会自动裁决，冲突来稿保存在 conflict branch
+- 冲突未裁决时 pending overlay 在本机遮蔽 snapshot；明确的 resolution commit 到达后云端裁决覆盖本地 pending
+- 权限变化会使旧本地 view 失效，且 view 可以从云端重建
 
-### Milestone 5: Agent And Tool Integration
+### Milestone 5: Agent Session And Tool Integration
 
-目标：等核心 RBAC 和 Memory 稳定后，再接入 Agent 运行时和工具可见性。
+目标：通过受信任 session 为 Agent 注入用户身份，再接入工具可见性和各 Agent runtime。
 
 交付物：
 
+- PrincipalContext / Agent session
 - Memory SDK
 - ToolPermissionAdapter
 - MainAgent / SubAgent delegation helpers
@@ -293,6 +297,8 @@ L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、R
 
 完成标准：
 
+- Agent 不依赖 prompt 或工具参数携带 userId
+- 服务端从 session、AgentIdentity 和 delegation 构造并验证 PrincipalContext
 - Agent 可见工具与 effective permissions 一致
 - 只读 subagent 看不到也调不到写工具
 - 用户可以查询任务需要哪些权限、当前缺哪些权限、哪些角色能满足
@@ -324,9 +330,12 @@ L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、R
 4. `issues/04-memory-core-models.md`
 5. `issues/05-memory-versioned-write-path.md`
 6. `issues/06-authorized-retrieval.md`
-7. `issues/07-cloud-local-authorized-view.md`
-8. `issues/08-agent-tool-adapters.md`
-9. `issues/09-non-core-feature-backlog.md`
+7. `issues/07-cloud-authority-concurrency.md`
+8. `issues/08-local-authorized-snapshot-sync.md`
+9. `issues/09-local-pending-conflict-resolution.md`
+10. `issues/10-agent-session-identity.md`
+11. `issues/11-agent-tool-permission-adapters.md`
+12. `issues/12-non-core-feature-backlog.md`
 
 ## 关键风险
 
@@ -334,6 +343,9 @@ L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、R
 - 如果 Memory 引入 RBAC assignment 内部结构，两个模块会在早期耦合。
 - 如果检索路径漏掉 rootEntityId 或 TaskScope，读权限隔离会失效。
 - 如果本地记忆被当成权威源，权限变化后可能泄露旧记忆。
+- 如果未区分 Authorized Snapshot 和 Pending Overlay，“未裁决时本地优先”会被误实现成两个权威源。
+- 如果 resolution commit 不引用被裁决的 conflict 和 incoming commit，本地无法安全判断何时应让云端覆盖 pending。
+- 如果 Agent 身份来自 prompt 或工具参数，模型可以伪造 userId 或 ownerUserId。
 - 如果 Agent 能自动执行管理员动作，委派自动化会变得不安全。
 
 ## 第一阶段建议
