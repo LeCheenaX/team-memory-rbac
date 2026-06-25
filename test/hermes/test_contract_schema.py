@@ -1,6 +1,6 @@
 import unittest
 
-from contract_schema import load_contract_schema
+from adapters.hermes.contract_schema import load_contract_schema
 
 
 class ContractSchemaTest(unittest.TestCase):

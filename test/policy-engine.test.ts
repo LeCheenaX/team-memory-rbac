@@ -15,7 +15,7 @@ import {
   InMemoryRbacAuthority,
   ScopedPolicyEngine,
 } from "../src/rbac/index.ts";
-import { contractFixtures } from "../src/testing/fixtures.ts";
+import { contractFixtures } from "./support/contract-fixtures.ts";
 
 const now = new Date("2026-06-25T12:00:00.000Z");
 

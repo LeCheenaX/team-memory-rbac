@@ -4,14 +4,14 @@ import type {
   MemoryObjectIdentity,
   Resource,
   ResourceChunk,
-} from "../contracts/memory.ts";
+} from "../../src/contracts/memory.ts";
 import type {
   AgentIdentity,
   Role,
   TaskScope,
   User,
   UserRootRoleAssignment,
-} from "../contracts/rbac.ts";
+} from "../../src/contracts/rbac.ts";
 
 const timestamp = "2026-06-25T00:00:00.000Z";
 

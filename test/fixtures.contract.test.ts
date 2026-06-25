@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { assertMemoryObjectInvariants } from "../src/contracts/memory.ts";
-import { contractFixtures } from "../src/testing/fixtures.ts";
+import { contractFixtures } from "./support/contract-fixtures.ts";
 
 test("contract fixtures describe one scoped user and agent memory workflow", () => {
   assert.equal(contractFixtures.user.id, "user-alice");

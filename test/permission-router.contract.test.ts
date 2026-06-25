@@ -12,7 +12,7 @@ import {
   InMemoryRbacAuthority,
   ScopedPolicyEngine,
 } from "../src/rbac/index.ts";
-import { contractFixtures } from "../src/testing/fixtures.ts";
+import { contractFixtures } from "./support/contract-fixtures.ts";
 
 const request: PermissionRequest = {
   subject: {
