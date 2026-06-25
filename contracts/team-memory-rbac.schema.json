@@ -62,6 +62,95 @@
         "delete_root_entity"
       ]
     },
+    "User": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "displayName",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "email": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "disabled"
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "AgentIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "ownerUserId",
+        "agentType",
+        "displayName",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ownerUserId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "agentType": {
+          "enum": [
+            "main_agent",
+            "sub_agent",
+            "tool_agent",
+            "import_agent",
+            "curator_agent",
+            "review_agent"
+          ]
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "active",
+            "disabled"
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
     "PermissionConstraint": {
       "type": "object",
       "additionalProperties": false,
@@ -103,6 +192,118 @@
         },
         "requireHumanApproval": {
           "type": "boolean"
+        }
+      }
+    },
+    "Permission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "resourceKind"
+      ],
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/MemoryAction"
+        },
+        "resourceKind": {
+          "$ref": "#/$defs/MemoryObjectKind"
+        },
+        "constraints": {
+          "$ref": "#/$defs/PermissionConstraint"
+        }
+      }
+    },
+    "Role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "permissions",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "built_in",
+            "custom"
+          ]
+        },
+        "permissions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Permission"
+          }
+        },
+        "status": {
+          "enum": [
+            "active",
+            "disabled"
+          ]
+        }
+      }
+    },
+    "UserRootRoleAssignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "userId",
+        "rootEntityId",
+        "roleId",
+        "assignedBy",
+        "assignedAt",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "userId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "roleId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "assignedBy": {
+          "type": "string",
+          "minLength": 1
+        },
+        "assignedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "revoked"
+          ]
+        },
+        "revokedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
         }
       }
     },
@@ -178,6 +379,70 @@
               "type": "boolean"
             }
           }
+        }
+      }
+    },
+    "AgentDelegation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "agentId",
+        "ownerUserId",
+        "rootEntityId",
+        "permissions",
+        "delegatedBy",
+        "delegatedAt",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "agentId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ownerUserId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rootEntityId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "permissions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Permission"
+          }
+        },
+        "constraints": {
+          "$ref": "#/$defs/PermissionConstraint"
+        },
+        "delegatedBy": {
+          "type": "string",
+          "minLength": 1
+        },
+        "delegatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "revoked"
+          ]
+        },
+        "revokedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
         }
       }
     },

@@ -54,16 +54,21 @@ export interface User {
   updatedAt: string;
 }
 
+export const AGENT_TYPES = [
+  "main_agent",
+  "sub_agent",
+  "tool_agent",
+  "import_agent",
+  "curator_agent",
+  "review_agent",
+] as const;
+
+export type AgentType = (typeof AGENT_TYPES)[number];
+
 export interface AgentIdentity {
   id: string;
   ownerUserId: string;
-  agentType:
-    | "main_agent"
-    | "sub_agent"
-    | "tool_agent"
-    | "import_agent"
-    | "curator_agent"
-    | "review_agent";
+  agentType: AgentType;
   displayName: string;
   status: "active" | "disabled";
   createdAt: string;
@@ -175,4 +180,37 @@ export interface PermissionDecision {
 
 export interface PolicyEngine {
   decide(request: PermissionRequest): Promise<PermissionDecision>;
+}
+
+export interface RbacAuthority {
+  getUser(userId: string): Promise<User | undefined>;
+  getAgent(agentId: string): Promise<AgentIdentity | undefined>;
+  getRole(roleId: string): Promise<Role | undefined>;
+  listUserRootRoleAssignments(
+    userId: string,
+    rootEntityId: string,
+  ): Promise<UserRootRoleAssignment[]>;
+  listAgentDelegations(
+    agentId: string,
+    rootEntityId: string,
+  ): Promise<AgentDelegation[]>;
+}
+
+export interface PermissionDecisionCache {
+  get(request: PermissionRequest): Promise<PermissionDecision | undefined>;
+  set(
+    request: PermissionRequest,
+    decision: PermissionDecision,
+  ): Promise<void>;
+  invalidateSubjectAtRoot(
+    subjectId: string,
+    rootEntityId: string,
+  ): Promise<void>;
+}
+
+export interface PermissionAuditLog {
+  record(
+    request: PermissionRequest,
+    decision: PermissionDecision,
+  ): Promise<void>;
 }

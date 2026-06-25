@@ -49,4 +49,17 @@ test("checked-in JSON Schema matches the TypeScript runtime contract", async () 
       "supersedes",
     ],
   );
+  for (const definition of [
+    "User",
+    "AgentIdentity",
+    "Permission",
+    "Role",
+    "UserRootRoleAssignment",
+    "AgentDelegation",
+    "TaskScope",
+    "PermissionRequest",
+    "PermissionDecision",
+  ]) {
+    assert.ok(generated.$defs[definition], `missing ${definition} schema`);
+  }
 });

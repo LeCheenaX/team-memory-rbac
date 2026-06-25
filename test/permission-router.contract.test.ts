@@ -8,6 +8,11 @@ import {
   type PermissionRequest,
 } from "../src/contracts/rbac.ts";
 import { PermissionRouter } from "../src/permission-router.ts";
+import {
+  InMemoryRbacAuthority,
+  ScopedPolicyEngine,
+} from "../src/rbac/index.ts";
+import { contractFixtures } from "../src/testing/fixtures.ts";
 
 const request: PermissionRequest = {
   subject: {
@@ -94,4 +99,44 @@ test("administrator actions are explicitly classified", () => {
   ]);
   assert.equal(isAdminMemoryAction("create_root_entity"), true);
   assert.equal(isAdminMemoryAction("write_entity"), false);
+});
+
+test("permission router integrates with scoped RBAC before memory access", async () => {
+  let memoryCalls = 0;
+  const engine = new ScopedPolicyEngine(
+    new InMemoryRbacAuthority({
+      users: [contractFixtures.user],
+      roles: [contractFixtures.researcherRole],
+      assignments: [contractFixtures.assignment],
+    }),
+  );
+  const router = new PermissionRouter(engine, {
+    execute: async () => {
+      memoryCalls += 1;
+      return { ok: true };
+    },
+  });
+
+  const allowed = await router.execute({
+    subject: {
+      kind: "user",
+      userId: contractFixtures.user.id,
+    },
+    rootEntityId: contractFixtures.rootEntity.id,
+    action: "search",
+    resourceKind: "memory_entity",
+  });
+  const denied = await router.execute({
+    subject: {
+      kind: "user",
+      userId: contractFixtures.user.id,
+    },
+    rootEntityId: contractFixtures.rootEntity.id,
+    action: "write_entity",
+    resourceKind: "memory_entity",
+  });
+
+  assert.equal(allowed.decision.allowed, true);
+  assert.equal(denied.decision.allowed, false);
+  assert.equal(memoryCalls, 1);
 });
