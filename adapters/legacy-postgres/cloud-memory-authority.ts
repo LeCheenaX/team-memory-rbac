@@ -15,6 +15,11 @@ import type {
   MemoryAuthoritySeed,
 } from "../../src/memory/contracts.ts";
 
+/**
+ * @deprecated Legacy compatibility prototype. Production Memory uses CAS,
+ * Qdrant payloads and libSQL relations; production History uses libSQL.
+ */
+
 export interface PostgresQueryResult<Row> {
   rows: Row[];
 }
@@ -68,7 +73,7 @@ async function restore(
   return authority;
 }
 
-export class PostgresCloudMemoryAuthority
+export class LegacyPostgresCloudMemoryAuthority
   implements CloudMemoryAuthority
 {
   private delegate: InMemoryCloudMemoryAuthority;
@@ -92,21 +97,21 @@ export class PostgresCloudMemoryAuthority
     pool: PostgresPool,
     authorityKey: string,
     seed: MemoryAuthoritySeed = {},
-  ): Promise<PostgresCloudMemoryAuthority> {
+  ): Promise<LegacyPostgresCloudMemoryAuthority> {
     const state = await pool.transaction(async (transaction) => {
-      await PostgresCloudMemoryAuthority.ensureState(
+      await LegacyPostgresCloudMemoryAuthority.ensureState(
         transaction,
         authorityKey,
         seed,
       );
-      return PostgresCloudMemoryAuthority.loadState(
+      return LegacyPostgresCloudMemoryAuthority.loadState(
         transaction,
         authorityKey,
         seed,
         false,
       );
     });
-    return new PostgresCloudMemoryAuthority(
+    return new LegacyPostgresCloudMemoryAuthority(
       pool,
       authorityKey,
       clone(seed),
@@ -118,7 +123,7 @@ export class PostgresCloudMemoryAuthority
     request: AuthorizedMemoryRequest<CloudMemoryWriteCommand>,
   ): Promise<CloudMemoryWriteResult> {
     const committed = await this.pool.transaction(async (transaction) => {
-      const state = await PostgresCloudMemoryAuthority.loadState(
+      const state = await LegacyPostgresCloudMemoryAuthority.loadState(
         transaction,
         this.authorityKey,
         this.initialSeed,
@@ -185,7 +190,7 @@ export class PostgresCloudMemoryAuthority
     request: AuthorizedMemoryRequest<ConflictResolutionCommand>,
   ): Promise<ConflictResolutionResult> {
     const committed = await this.pool.transaction(async (transaction) => {
-      const state = await PostgresCloudMemoryAuthority.loadState(
+      const state = await LegacyPostgresCloudMemoryAuthority.loadState(
         transaction,
         this.authorityKey,
         this.initialSeed,

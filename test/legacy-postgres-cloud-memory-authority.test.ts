@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  PostgresCloudMemoryAuthority,
+  LegacyPostgresCloudMemoryAuthority,
   type PostgresPool,
   type PostgresQueryResult,
   type PostgresTransaction,
-} from "../adapters/postgres/cloud-memory-authority.ts";
+} from "../adapters/legacy-postgres/cloud-memory-authority.ts";
 import type {
   PermissionDecision,
   PermissionRequest,
@@ -74,7 +74,7 @@ function allow(request: PermissionRequest): PermissionDecision {
 
 const policy: PolicyEngine = { decide: async (request) => allow(request) };
 
-test("PostgreSQL cloud authority survives restart and preserves idempotency", async () => {
+test("legacy PostgreSQL prototype preserves its reference behavior", async () => {
   const pool = new FakePostgresPool();
   const seed = {
     entities: [
@@ -87,7 +87,7 @@ test("PostgreSQL cloud authority survives restart and preserves idempotency", as
       },
     ],
   };
-  const first = await PostgresCloudMemoryAuthority.open(
+  const first = await LegacyPostgresCloudMemoryAuthority.open(
     pool,
     "team-memory",
     seed,
@@ -115,7 +115,7 @@ test("PostgreSQL cloud authority survives restart and preserves idempotency", as
   };
   await router.execute(request);
 
-  const restarted = await PostgresCloudMemoryAuthority.open(
+  const restarted = await LegacyPostgresCloudMemoryAuthority.open(
     pool,
     "team-memory",
     seed,
@@ -143,7 +143,7 @@ test("PostgreSQL cloud authority survives restart and preserves idempotency", as
   assert.ok(pool.transactionCount >= 4);
 });
 
-test("PostgreSQL authority persists conflict resolution history across restart", async () => {
+test("legacy PostgreSQL prototype preserves conflict history across restart", async () => {
   const pool = new FakePostgresPool();
   const seed = {
     entities: [
@@ -167,7 +167,7 @@ test("PostgreSQL authority persists conflict resolution history across restart",
       },
     ],
   };
-  const authority = await PostgresCloudMemoryAuthority.open(
+  const authority = await LegacyPostgresCloudMemoryAuthority.open(
     pool,
     "team-memory-resolution",
     seed,
@@ -233,7 +233,7 @@ test("PostgreSQL authority persists conflict resolution history across restart",
     },
   });
 
-  const restarted = await PostgresCloudMemoryAuthority.open(
+  const restarted = await LegacyPostgresCloudMemoryAuthority.open(
     pool,
     "team-memory-resolution",
     seed,

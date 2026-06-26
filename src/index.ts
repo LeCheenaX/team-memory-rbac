@@ -7,3 +7,4 @@ export * from "./agent/index.ts";
 export * from "./history/index.ts";
 export * from "./memory/index.ts";
 export * from "./rbac/index.ts";
+export * from "./sync/index.ts";

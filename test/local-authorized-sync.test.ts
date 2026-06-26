@@ -176,7 +176,7 @@ function syncRequest(scope: TaskScope = taskScope) {
   };
 }
 
-test("bootstrap stores only the authorized active snapshot and no cloud history", async () => {
+test("bootstrap builds an authorized local working replica", async () => {
   const authority = cloud();
   const watermarks = new InMemoryPermissionWatermarkAuthority();
   const store = new InMemoryLocalAuthorizedViewStore();
@@ -201,8 +201,10 @@ test("bootstrap stores only the authorized active snapshot and no cloud history"
     ["resource-allowed"],
   );
   assert.deepEqual(store.storageManifest(), {
-    activeSnapshot: true,
-    indexes: true,
+    resourceCas: true,
+    vectorPayloads: true,
+    memoryRelations: true,
+    historyOperationTree: true,
     pendingOperations: true,
     syncCursor: true,
     conflicts: true,
