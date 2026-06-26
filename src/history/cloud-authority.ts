@@ -1,6 +1,13 @@
 import type {
   MemoryActor,
   MemoryCommit,
+  MemoryOperation,
+  MemoryOperationInput,
+  HistoryWriteCommand,
+  HistoryWriteResult,
+  ConflictResolutionKind,
+} from "../contracts/history.ts";
+import type {
   MemoryObjectKind,
 } from "../contracts/memory.ts";
 import type {
@@ -11,16 +18,14 @@ import type {
   AuthorizedMemoryRequest,
   MemoryAdapter,
 } from "../permission-router.ts";
-import { InMemoryMemoryAuthority } from "./authority.ts";
+import { InMemoryMemoryAuthority } from "../memory/authority.ts";
 import type {
   MemoryActiveView,
   MemoryAuthoritySeed,
-  MemoryOperation,
-  MemoryOperationInput,
-  MemoryWriteCommand,
-  MemoryWriteResult,
-  ConflictResolutionKind,
-} from "./contracts.ts";
+} from "../memory/contracts.ts";
+
+type MemoryWriteCommand = HistoryWriteCommand;
+type MemoryWriteResult = HistoryWriteResult;
 
 export interface CloudMemoryWriteCommand extends MemoryWriteCommand {
   expectedHeadCommitId?: string;

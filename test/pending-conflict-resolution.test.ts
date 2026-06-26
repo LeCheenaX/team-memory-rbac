@@ -9,14 +9,16 @@ import type {
 import {
   AuthorizedViewSynchronizer,
   CloudAuthorizedViewAdapter,
-  InMemoryCloudMemoryAuthority,
   InMemoryLocalAuthorizedViewStore,
   InMemoryPendingOverlay,
   InMemoryPermissionWatermarkAuthority,
   MemoryRetrievalAdapter,
-  type CloudMemoryWriteCommand,
-  type ConflictResolutionCommand,
 } from "../src/memory/index.ts";
+import type {
+  CloudMemoryWriteCommand,
+  ConflictResolutionCommand,
+} from "../src/history/index.ts";
+import { InMemoryCloudMemoryAuthority } from "../src/history/index.ts";
 import { PermissionRouter } from "../src/permission-router.ts";
 
 const timestamp = "2026-06-25T00:00:00.000Z";

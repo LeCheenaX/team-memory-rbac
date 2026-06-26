@@ -1,9 +1,9 @@
 import {
   MEMORY_OBJECT_KINDS,
-  MEMORY_OPERATION_KINDS,
   MEMORY_RELATION_TYPES,
   RELATIONSHIP_EXTRA_INFO_KEYS,
 } from "./memory.ts";
+import { MEMORY_OPERATION_KINDS } from "./history.ts";
 import {
   AGENT_TYPES,
   ADMIN_MEMORY_ACTIONS,
@@ -342,7 +342,6 @@ export const CONTRACT_SCHEMA = {
         "entityId",
         "rootEntityId",
         "branchRef",
-        "commitId",
         "title",
         "description",
         "tags",
@@ -356,7 +355,6 @@ export const CONTRACT_SCHEMA = {
         entityId: nonEmptyString,
         rootEntityId: nonEmptyString,
         branchRef: nonEmptyString,
-        commitId: nonEmptyString,
         parentBranchId: nonEmptyString,
         title: { type: "string" },
         description: { type: "string" },
@@ -369,15 +367,23 @@ export const CONTRACT_SCHEMA = {
             },
           },
         },
-        embedding: {
-          type: "array",
-          items: { type: "number" },
-        },
         importance: { type: "number" },
         confidence: { type: "number" },
         status: {
-          enum: ["active", "tombstoned", "conflicted"],
+          enum: [
+            "active",
+            "pending",
+            "conflicted",
+            "deprecated",
+            "verified",
+            "superseded",
+            "tombstoned",
+          ],
         },
+        origin: {
+          enum: ["cloud_snapshot", "local_pending", "resolution", "import"],
+        },
+        pendingId: { anyOf: [nonEmptyString, { type: "null" }] },
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -396,7 +402,6 @@ export const CONTRACT_SCHEMA = {
         "weight",
         "confidence",
         "branchRef",
-        "commitId",
         "status",
         "createdAt",
         "updatedAt",
@@ -420,7 +425,6 @@ export const CONTRACT_SCHEMA = {
         weight: { type: "number" },
         confidence: { type: "number" },
         branchRef: nonEmptyString,
-        commitId: nonEmptyString,
         status: {
           enum: ["active", "tombstoned", "conflicted"],
         },
@@ -483,11 +487,20 @@ export const CONTRACT_SCHEMA = {
         resourceId: nonEmptyString,
         chunkIndex: { type: "integer", minimum: 0 },
         text: { type: "string" },
-        embedding: {
-          type: "array",
-          items: { type: "number" },
-        },
         bm25DocumentId: nonEmptyString,
+        contentHash: nonEmptyString,
+        headingPath: {
+          type: "array",
+          items: { type: "string" },
+        },
+        filePath: { type: "string" },
+        startLine: { type: "integer", minimum: 1 },
+        endLine: { type: "integer", minimum: 1 },
+        tokenCount: { type: "integer", minimum: 0 },
+        origin: {
+          enum: ["cloud_snapshot", "local_pending", "resolution", "import"],
+        },
+        pendingId: { anyOf: [nonEmptyString, { type: "null" }] },
         status: { enum: ["active", "tombstoned"] },
         metadata: {
           type: "object",

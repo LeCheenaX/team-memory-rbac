@@ -20,7 +20,7 @@ import type {
 import type {
   CloudMemoryAuthority,
   CloudCommitRecord,
-} from "./cloud-authority.ts";
+} from "../history/cloud-authority.ts";
 import type { MemoryActiveView } from "./contracts.ts";
 import type {
   EntityRetrievalItem,

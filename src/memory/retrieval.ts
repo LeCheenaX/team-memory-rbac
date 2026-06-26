@@ -383,13 +383,23 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
       context.branchRef,
     );
     const entities = this.entityItems(view)
-      .filter((item) => item.branch?.embedding !== undefined)
+      .filter(
+        (item) =>
+          (item.branch as { embedding?: number[] } | undefined)?.embedding !==
+          undefined,
+      )
       .map((item) => ({
         ...item,
-        score: dotProduct(item.branch?.embedding ?? [], embedding),
+        score: dotProduct(
+          (item.branch as { embedding?: number[] } | undefined)?.embedding ?? [],
+          embedding,
+        ),
       }));
     const chunks: ResourceChunkRetrievalItem[] = view.resourceChunks
-      .filter((chunk) => chunk.embedding !== undefined)
+      .filter(
+        (chunk) =>
+          (chunk as { embedding?: number[] }).embedding !== undefined,
+      )
       .map((chunk) => {
         const resource = view.resources.find(
           (candidate) => candidate.id === chunk.resourceId,
@@ -398,7 +408,10 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
           kind: "resource_chunk",
           chunk,
           ...(resource === undefined ? {} : { resource }),
-          score: dotProduct(chunk.embedding ?? [], embedding),
+          score: dotProduct(
+            (chunk as { embedding?: number[] }).embedding ?? [],
+            embedding,
+          ),
           origin:
             this.originFor?.("resource_chunk", chunk.id) ??
             this.origin,

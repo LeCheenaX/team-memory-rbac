@@ -4,11 +4,14 @@ import test from "node:test";
 import {
   assertMemoryModelInvariants,
   effectiveRootEntityId,
-  type MemoryBranch,
-  type MemoryCommit,
   type MemoryEntity,
   type MemoryRelation,
 } from "../src/contracts/memory.ts";
+import {
+  assertHistoryModelInvariants,
+  type MemoryBranch,
+  type MemoryCommit,
+} from "../src/contracts/history.ts";
 
 const timestamp = "2026-06-25T00:00:00.000Z";
 
@@ -58,7 +61,6 @@ test("memory core models preserve root ownership and evidence tracing", () => {
     weight: 1,
     confidence: 1,
     branchRef: branch.branchRef,
-    commitId: commit.id,
     status: "active",
     createdAt: timestamp,
     updatedAt: timestamp,
@@ -69,17 +71,18 @@ test("memory core models preserve root ownership and evidence tracing", () => {
   assert.doesNotThrow(() =>
     assertMemoryModelInvariants({
       entities: [root, entity],
-      branches: [branch],
-      commits: [commit],
       relations: [evidenceRelation],
     }),
+  );
+  assert.doesNotThrow(() =>
+    assertHistoryModelInvariants({ branches: [branch], commits: [commit] }),
   );
 });
 
 test("branch and commit reject missing root ownership", () => {
   assert.throws(
     () =>
-      assertMemoryModelInvariants({
+      assertHistoryModelInvariants({
         branches: [
           {
             id: "branch-main",

@@ -1,12 +1,18 @@
 import type {
   MemoryBranch,
   MemoryCommit,
+  MemoryOperation,
+  MemoryOperationInput,
+  HistoryWriteCommand,
+  HistoryWriteResult,
+  ResourceRevision,
+} from "../contracts/history.ts";
+import type {
   MemoryEntity,
   MemoryEntityBranch,
   MemoryRelation,
   Resource,
   ResourceChunk,
-  ResourceRevision,
 } from "../contracts/memory.ts";
 import {
   assertEntityExtraInfo,
@@ -16,11 +22,10 @@ import type { MemoryAdapter, AuthorizedMemoryRequest } from "../permission-route
 import type {
   MemoryActiveView,
   MemoryAuthoritySeed,
-  MemoryOperation,
-  MemoryOperationInput,
-  MemoryWriteCommand,
-  MemoryWriteResult,
 } from "./contracts.ts";
+
+type MemoryWriteCommand = HistoryWriteCommand;
+type MemoryWriteResult = HistoryWriteResult;
 
 export interface InMemoryMemoryAuthorityOptions {
   now?: () => Date;
@@ -38,6 +43,7 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+/** @deprecated Combined History + Memory reference implementation. */
 export class InMemoryMemoryAuthority
   implements MemoryAdapter<MemoryWriteResult, MemoryWriteCommand>
 {
@@ -665,7 +671,6 @@ export class InMemoryMemoryAuthority
         }
         entityBranches.set(input.branch.id, {
           ...clone(input.branch),
-          commitId: operation.commitId,
           status: input.branch.status ?? "active",
         });
         const entity = entities.get(input.branch.entityId);
@@ -697,7 +702,6 @@ export class InMemoryMemoryAuthority
         );
         relations.set(input.relation.id, {
           ...clone(input.relation),
-          commitId: operation.commitId,
         });
         return;
       }

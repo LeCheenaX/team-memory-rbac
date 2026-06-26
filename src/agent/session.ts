@@ -9,7 +9,7 @@ import type {
   MemoryObjectKind,
   MemoryRelationType,
 } from "../contracts/memory.ts";
-import type { MemoryOperation } from "../memory/contracts.ts";
+import type { MemoryOperation } from "../contracts/history.ts";
 
 export interface AgentSessionRecord extends PrincipalContext {
   token: string;

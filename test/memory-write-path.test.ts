@@ -275,7 +275,9 @@ test("structured memory is created explicitly and traces back to L1 evidence", a
     "entity-branch-architecture-v1",
   );
   assert.equal(
-    view.entityBranches[0]?.commitId,
+    authority
+      .listOperations(rootEntityId, "main")
+      .find(({ id }) => id === "operation-create-entity-branch")?.commitId,
     "commit-create-entity-branch",
   );
   assert.equal(view.relations[0]?.relationType, "refers_to");

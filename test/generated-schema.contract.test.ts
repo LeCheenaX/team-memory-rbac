@@ -25,6 +25,14 @@ test("checked-in JSON Schema matches the TypeScript runtime contract", async () 
       "next_is",
     ],
   );
+  assert.equal(
+    generated.$defs.MemoryEntityBranch.required.includes("commitId"),
+    false,
+  );
+  assert.equal(
+    generated.$defs.MemoryRelation.required.includes("commitId"),
+    false,
+  );
   assert.deepEqual(
     generated.$defs.AdminMemoryAction.enum,
     [

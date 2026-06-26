@@ -701,7 +701,6 @@
         "entityId",
         "rootEntityId",
         "branchRef",
-        "commitId",
         "title",
         "description",
         "tags",
@@ -724,10 +723,6 @@
           "minLength": 1
         },
         "branchRef": {
-          "type": "string",
-          "minLength": 1
-        },
-        "commitId": {
           "type": "string",
           "minLength": 1
         },
@@ -766,12 +761,6 @@
             }
           }
         },
-        "embedding": {
-          "type": "array",
-          "items": {
-            "type": "number"
-          }
-        },
         "importance": {
           "type": "number"
         },
@@ -781,8 +770,31 @@
         "status": {
           "enum": [
             "active",
-            "tombstoned",
-            "conflicted"
+            "pending",
+            "conflicted",
+            "deprecated",
+            "verified",
+            "superseded",
+            "tombstoned"
+          ]
+        },
+        "origin": {
+          "enum": [
+            "cloud_snapshot",
+            "local_pending",
+            "resolution",
+            "import"
+          ]
+        },
+        "pendingId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "createdAt": {
@@ -809,7 +821,6 @@
         "weight",
         "confidence",
         "branchRef",
-        "commitId",
         "status",
         "createdAt",
         "updatedAt"
@@ -869,10 +880,6 @@
           "type": "number"
         },
         "branchRef": {
-          "type": "string",
-          "minLength": 1
-        },
-        "commitId": {
           "type": "string",
           "minLength": 1
         },
@@ -991,15 +998,53 @@
         "text": {
           "type": "string"
         },
-        "embedding": {
-          "type": "array",
-          "items": {
-            "type": "number"
-          }
-        },
         "bm25DocumentId": {
           "type": "string",
           "minLength": 1
+        },
+        "contentHash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "headingPath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "filePath": {
+          "type": "string"
+        },
+        "startLine": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "endLine": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tokenCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "origin": {
+          "enum": [
+            "cloud_snapshot",
+            "local_pending",
+            "resolution",
+            "import"
+          ]
+        },
+        "pendingId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "status": {
           "enum": [

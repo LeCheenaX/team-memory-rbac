@@ -1,140 +1,16 @@
 import type {
-  MemoryBranch,
-  MemoryCommit,
   MemoryEntity,
   MemoryEntityBranch,
   MemoryRelation,
   Resource,
   ResourceChunk,
-  ResourceRevision,
-  MemoryOperationKind,
 } from "../contracts/memory.ts";
-import type { PermissionRequest } from "../contracts/rbac.ts";
+import type {
+  MemoryBranch,
+  ResourceRevision,
+} from "../contracts/history.ts";
 
-export type CreateEntityOperation = {
-  kind: "create_entity";
-  id: string;
-  entity: MemoryEntity;
-};
-
-export type CreateEntityBranchOperation = {
-  kind: "create_entity_branch";
-  id: string;
-  branch: Omit<MemoryEntityBranch, "commitId">;
-};
-
-export type CreateRelationOperation = {
-  kind: "create_relation";
-  id: string;
-  relation: Omit<MemoryRelation, "commitId">;
-};
-
-export type CreateResourceOperation = {
-  kind: "create_resource";
-  id: string;
-  resource: Resource;
-  revisionId: string;
-};
-
-export type CreateResourceChunkOperation = {
-  kind: "create_resource_chunk";
-  id: string;
-  chunk: ResourceChunk;
-};
-
-export type ReviseResourceOperation = {
-  kind: "revise_resource";
-  id: string;
-  resourceId: string;
-  revisionId: string;
-  contentHash: string;
-  metadata?: Record<string, unknown>;
-};
-
-export type ReplaceRelationOperation = {
-  kind: "replace_relation";
-  id: string;
-  previousRelationId: string;
-  replacementOperationId: string;
-  replacement: Omit<MemoryRelation, "commitId">;
-};
-
-export type TombstoneOperation = {
-  kind:
-    | "tombstone_resource"
-    | "tombstone_entity"
-    | "tombstone_entity_branch"
-    | "tombstone_relation";
-  id: string;
-  targetId: string;
-};
-
-export type RevertCommitOperation = {
-  kind: "revert_commit";
-  id: string;
-  targetCommitId: string;
-};
-
-export type ConflictResolutionKind =
-  | "keep_target"
-  | "take_incoming"
-  | "manual_merge";
-
-export type ResolveConflictOperation = {
-  kind: "resolve_conflict";
-  id: string;
-  resolvedConflictIds: string[];
-  resolvedIncomingCommitIds: string[];
-  resolutionKind: ConflictResolutionKind;
-};
-
-export type MemoryOperationInput =
-  | CreateEntityOperation
-  | CreateEntityBranchOperation
-  | CreateRelationOperation
-  | CreateResourceOperation
-  | CreateResourceChunkOperation
-  | ReviseResourceOperation
-  | ReplaceRelationOperation
-  | TombstoneOperation
-  | RevertCommitOperation
-  | ResolveConflictOperation;
-
-export interface MemoryOperation {
-  id: string;
-  rootEntityId: string;
-  branchRef: string;
-  commitId: string;
-  kind: MemoryOperationKind;
-  actor: {
-    kind: "user" | "agent";
-    id: string;
-  };
-  provenance?: {
-    sessionId?: string;
-    ownerUserId?: string;
-    delegationId?: string;
-    parentAgentId?: string;
-  };
-  input: MemoryOperationInput;
-  createdAt: string;
-}
-
-export interface MemoryWriteCommand extends PermissionRequest {
-  branchRef: string;
-  commit: {
-    id: string;
-    message?: string;
-  };
-  operation: MemoryOperationInput;
-  provenance?: MemoryOperation["provenance"];
-}
-
-export interface MemoryWriteResult {
-  commit: MemoryCommit;
-  operations: MemoryOperation[];
-}
-
+/** Current Memory state only; commits and operations are projected by History. */
 export interface MemoryActiveView {
   rootEntityId: string;
   branchRef: string;
@@ -145,6 +21,7 @@ export interface MemoryActiveView {
   resourceChunks: ResourceChunk[];
 }
 
+/** @deprecated Combined reference seed retained until the legacy authority is removed. */
 export interface MemoryAuthoritySeed {
   entities?: MemoryEntity[];
   entityBranches?: MemoryEntityBranch[];

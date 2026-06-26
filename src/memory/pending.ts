@@ -8,12 +8,12 @@ import {
   type CloudCommitRecord,
   type CloudMemoryWriteCommand,
   type CloudMemoryWriteResult,
-} from "./cloud-authority.ts";
+} from "../history/cloud-authority.ts";
 import type {
   MemoryActiveView,
   MemoryAuthoritySeed,
-  MemoryOperationInput,
 } from "./contracts.ts";
+import type { MemoryOperationInput } from "../contracts/history.ts";
 import {
   InMemoryAuthorizedQuerySource,
   type MemoryQuerySource,

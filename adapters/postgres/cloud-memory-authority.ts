@@ -9,7 +9,7 @@ import {
   type CloudMemoryWriteResult,
   type ConflictResolutionCommand,
   type ConflictResolutionResult,
-} from "../../src/memory/cloud-authority.ts";
+} from "../../src/history/cloud-authority.ts";
 import type {
   MemoryActiveView,
   MemoryAuthoritySeed,
