@@ -1,6 +1,6 @@
 # HTTP 与 MCP 服务端授权记忆闭环
 
-Status: ready-for-agent
+Status: complete
 
 ## What to build
 
@@ -13,6 +13,14 @@ Status: ready-for-agent
 - [ ] 请求 payload 不允许覆盖 userId、ownerUserId、agentId、rootEntityId 或 TaskScope。
 - [ ] 标准化错误区分认证失败、权限拒绝、冲突、校验失败和依赖不可用。
 - [ ] 可用真实服务端集成测试验证一个用户、只读 Agent 与写入 Agent 的完整路径。
+
+## Implementation notes
+
+- Added `TeamMemoryGateway` as the shared authenticated service boundary for HTTP and MCP-style tools.
+- Extended the HTTP server with memory write, search, history, conflict, resolution, and sync pull routes while preserving existing resource routes.
+- Added `McpTeamMemoryAdapter` so MCP tools call the same gateway methods as HTTP instead of duplicating authorization logic.
+- Standardized gateway errors into authentication, permission, conflict, validation, dependency, and not-found categories.
+- Covered user, read-only agent, and write agent flows in `test/http-mcp-gateway.test.ts`, including payload identity override rejection.
 
 ## Blocked by
 

@@ -1,6 +1,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { TeamMemoryRuntime } from "../runtime/development-stack.ts";
-import { ResourceNotFoundError } from "../../src/resources/service.ts";
+import {
+  gatewayErrorFromUnknown,
+  TeamMemoryGateway,
+  type TeamMemoryGatewayError,
+} from "../runtime/gateway.ts";
 
 async function body(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -14,6 +18,10 @@ function send(response: ServerResponse, status: number, payload: unknown): void 
   response.end(JSON.stringify(payload));
 }
 
+function sendValue(response: ServerResponse, status: number, value: unknown): void {
+  send(response, status, { value });
+}
+
 function token(request: IncomingMessage): string | undefined {
   const value = request.headers.authorization;
   return value?.startsWith("Bearer ") ? value.slice("Bearer ".length) : undefined;
@@ -25,45 +33,91 @@ function stringValue(payload: Record<string, unknown>, key: string): string {
   return value;
 }
 
-export function createTeamMemoryServer(runtime: TeamMemoryRuntime): Server {
+function statusFor(error: TeamMemoryGatewayError): number {
+  if (error.code === "auth_failed") return 401;
+  if (error.code === "permission_denied") return 403;
+  if (error.code === "conflict") return 409;
+  if (error.code === "not_found") return 404;
+  if (error.code === "dependency_unavailable") return 503;
+  return 400;
+}
+
+function queryPayload(url: URL): Record<string, unknown> {
+  return Object.fromEntries(
+    [...url.searchParams.entries()].map(([key, value]) => [
+      key,
+      key === "afterSequence" || key === "knownCommitWatermark"
+        ? Number(value)
+        : value,
+    ]),
+  );
+}
+
+export function createTeamMemoryServer(runtimeOrGateway: TeamMemoryRuntime | TeamMemoryGateway): Server {
+  const gateway = runtimeOrGateway instanceof TeamMemoryGateway
+    ? runtimeOrGateway
+    : new TeamMemoryGateway(runtimeOrGateway);
   return createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
       if (request.method === "GET" && url.pathname === "/live") return send(response, 200, { status: "ok" });
       if (request.method === "GET" && url.pathname === "/ready") {
-        await runtime.ready(); return send(response, 200, { status: "ready" });
+        if (runtimeOrGateway instanceof TeamMemoryRuntime) await runtimeOrGateway.ready();
+        return send(response, 200, { status: "ready" });
       }
       const bearer = token(request);
-      const session = bearer === undefined ? undefined : await runtime.rbac.authenticate(bearer);
-      if (session === undefined) return send(response, 401, { error: "unauthenticated" });
       if (request.method === "POST" && url.pathname === "/admin/roots") {
         const payload = await body(request);
-        await runtime.createRootEntity(session, { rootEntityId: stringValue(payload, "rootEntityId"), clientMutationId: stringValue(payload, "clientMutationId") });
-        return send(response, 201, { status: "created" });
+        const normalized: Record<string, unknown> = {
+          ...payload,
+          newRootEntityId: typeof payload.newRootEntityId === "string"
+            ? payload.newRootEntityId
+            : stringValue(payload, "rootEntityId"),
+        };
+        delete normalized.rootEntityId;
+        return sendValue(response, 201, await gateway.createRoot(bearer, normalized));
       }
       if (request.method === "POST" && url.pathname === "/resources/import") {
-        const payload = await body(request);
-        const content = typeof payload.content === "string" ? payload.content : Buffer.from(stringValue(payload, "contentBase64"), "base64");
-        const result = await runtime.resources.import(session, { clientMutationId: stringValue(payload, "clientMutationId"), ...(typeof payload.resourceId === "string" ? { resourceId: payload.resourceId } : {}), title: stringValue(payload, "title"), sourceType: stringValue(payload, "sourceType") as never, content, ...(typeof payload.uri === "string" ? { uri: payload.uri } : {}), ...(typeof payload.metadata === "object" && payload.metadata !== null ? { metadata: payload.metadata as Record<string, unknown> } : {}) });
-        return send(response, 201, result);
+        return sendValue(response, 201, await gateway.importResource(bearer, await body(request)));
       }
       const revisionMatch = /^\/resources\/([^/]+)\/revisions$/.exec(url.pathname);
       if (request.method === "POST" && revisionMatch?.[1] !== undefined) {
-        const payload = await body(request);
-        const content = typeof payload.content === "string" ? payload.content : Buffer.from(stringValue(payload, "contentBase64"), "base64");
-        const result = await runtime.resources.revise(session, { clientMutationId: stringValue(payload, "clientMutationId"), resourceId: decodeURIComponent(revisionMatch[1]), content });
-        return send(response, 201, result);
+        return sendValue(response, 201, await gateway.reviseResource(bearer, decodeURIComponent(revisionMatch[1]), await body(request)));
       }
       const resourceMatch = /^\/resources\/([^/]+)$/.exec(url.pathname);
       if (request.method === "GET" && resourceMatch?.[1] !== undefined) {
-        const result = await runtime.resources.read(session, { resourceId: decodeURIComponent(resourceMatch[1]), ...(url.searchParams.has("revisionId") ? { revisionId: url.searchParams.get("revisionId") as string } : {}) });
-        const content = typeof result.content === "string" ? Buffer.from(result.content).toString("base64") : Buffer.from(result.content).toString("base64");
-        return send(response, 200, { resource: result.resource, revisionId: result.revisionId, contentBase64: content });
+        return send(response, 200, await gateway.readResource(bearer, decodeURIComponent(resourceMatch[1]), url.searchParams.get("revisionId") ?? undefined));
+      }
+      if (request.method === "POST" && url.pathname === "/memory/write") {
+        return sendValue(response, 200, await gateway.writeMemory(bearer, await body(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/memory/search") {
+        return send(response, 200, await gateway.searchMemory(bearer, await body(request)));
+      }
+      if (request.method === "GET" && url.pathname === "/history") {
+        return sendValue(response, 200, await gateway.listHistory(bearer, queryPayload(url)));
+      }
+      if (request.method === "GET" && url.pathname === "/conflicts") {
+        return sendValue(response, 200, await gateway.listConflicts(bearer, queryPayload(url)));
+      }
+      if (request.method === "POST" && url.pathname === "/conflicts/resolve") {
+        return sendValue(response, 200, await gateway.resolveConflict(bearer, await body(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/sync/pull") {
+        return send(response, 200, await gateway.pullSync(bearer, await body(request)));
       }
       return send(response, 404, { error: "not_found" });
     } catch (error) {
-      if (error instanceof ResourceNotFoundError) return send(response, 404, { error: "not_found" });
-      return send(response, 400, { error: error instanceof Error ? error.message : "invalid_request" });
+      const gatewayError = gatewayErrorFromUnknown(error);
+      return send(response, statusFor(gatewayError), {
+        error: {
+          code: gatewayError.code,
+          message: gatewayError.message.replace(`${gatewayError.code}: `, ""),
+          ...(gatewayError.decision === undefined
+            ? {}
+            : { decision: gatewayError.decision }),
+        },
+      });
     }
   });
 }

@@ -108,6 +108,11 @@ export interface ConflictResolutionResult {
   applied: CloudCommitRecord[];
 }
 
+export type ConflictResolvingMemoryAuthority = Pick<
+  CloudMemoryAuthority,
+  "resolveConflict"
+>;
+
 interface AcceptedRequestRecord {
   sequence: number;
   request: AuthorizedMemoryRequest<CloudMemoryWriteCommand>;
@@ -433,9 +438,9 @@ export class ConflictResolutionAdapter
   implements
     MemoryAdapter<ConflictResolutionResult, ConflictResolutionCommand>
 {
-  private readonly cloud: CloudMemoryAuthority;
+  private readonly cloud: ConflictResolvingMemoryAuthority;
 
-  constructor(cloud: CloudMemoryAuthority) {
+  constructor(cloud: ConflictResolvingMemoryAuthority) {
     this.cloud = cloud;
   }
 

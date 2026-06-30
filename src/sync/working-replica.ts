@@ -18,7 +18,6 @@ import type {
   PermissionRouter,
 } from "../permission-router.ts";
 import type {
-  CloudMemoryAuthority,
   CloudCommitRecord,
 } from "../history/cloud-authority.ts";
 import type { MemoryActiveView } from "../memory/contracts.ts";
@@ -33,6 +32,16 @@ import { InMemoryAuthorizedQuerySource } from "../memory/retrieval.ts";
 
 export interface PermissionWatermarkProvider {
   get(subjectId: string, rootEntityId: string): Promise<string>;
+}
+
+export interface AuthorizedViewCloudSource {
+  commitWatermark(): number;
+  readActiveView(rootEntityId: string, branchRef: string): MemoryActiveView;
+  listCommitRecords(
+    rootEntityId: string,
+    branchRef: string,
+    afterSequence?: number,
+  ): CloudCommitRecord[];
 }
 
 export class InMemoryPermissionWatermarkAuthority
@@ -502,11 +511,11 @@ function deltaFromRecords(
 export class CloudAuthorizedViewAdapter
   implements MemoryAdapter<AuthorizedSyncBatch, AuthorizedSyncRequest>
 {
-  private readonly cloud: CloudMemoryAuthority;
+  private readonly cloud: AuthorizedViewCloudSource;
   private readonly permissionWatermarks: PermissionWatermarkProvider;
 
   constructor(
-    cloud: CloudMemoryAuthority,
+    cloud: AuthorizedViewCloudSource,
     permissionWatermarks: PermissionWatermarkProvider,
   ) {
     this.cloud = cloud;
@@ -620,12 +629,19 @@ function upsert<T extends { id: string }>(
 export class InMemoryLocalAuthorizedWorkingReplica
   implements LocalAuthorizedWorkingReplica
 {
-  private state: LocalAuthorizedWorkingReplicaState = {
-    historyRecords: [],
-    pendingOperations: [],
-    conflicts: [],
-    valid: false,
-  };
+  private state: LocalAuthorizedWorkingReplicaState;
+
+  constructor(initialState?: LocalAuthorizedWorkingReplicaState) {
+    this.state =
+      initialState === undefined
+        ? {
+            historyRecords: [],
+            pendingOperations: [],
+            conflicts: [],
+            valid: false,
+          }
+        : clone(initialState);
+  }
 
   inspect(): LocalAuthorizedWorkingReplicaState {
     return clone(this.state);

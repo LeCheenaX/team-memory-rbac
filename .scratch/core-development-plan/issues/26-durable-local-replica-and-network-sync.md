@@ -1,6 +1,6 @@
 # 持久化 Local Working Replica 与网络 Sync
 
-Status: ready-for-agent
+Status: complete
 
 ## What to build
 
@@ -13,6 +13,14 @@ Status: ready-for-agent
 - [ ] pending push 被接受后标记 resolved；冲突在 resolution event 前仍保持本地可见。
 - [ ] permissionWatermark 变化原子清理越权本地对象并重建授权子集。
 - [ ] 删除本地副本后可重建到相同授权状态；离线检索不调用 Cloud。
+
+## Implementation notes
+
+- Added `FileSystemLocalAuthorizedWorkingReplica`, a durable local replica directory that stores authorized snapshot, history subset, pending operations, conflicts, and sync cursor state in `state.json`.
+- Reused `AuthorizedWorkingReplicaSynchronizer` so resumed sync requests carry the last durable `commitWatermark`, `permissionWatermark`, and TaskScope hash.
+- Preserved pending/conflict state across restart and kept local query reads on the local replica through `SynchronizedLocalQuerySource`.
+- Persisted invalidation when permission watermarks change, so revoked local views stay invalid across process restart.
+- Covered restart, resumed sync, offline local search, and persistent invalidation in `test/durable-local-replica.test.ts`.
 
 ## Blocked by
 
