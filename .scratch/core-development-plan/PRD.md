@@ -9,14 +9,16 @@ Status: ready-for-agent
 开发优先级固定为：
 
 1. RBAC 模块
-2. 记忆模块
-3. Agent / Tool 适配、本地同步、UI 和其他非核心能力
+2. Memory 模块
+3. History 模块
+4. Sync 模块
+5. Agent / Tool 适配、UI 和其他非核心能力
 
-在 RBAC 和记忆模块稳定前，不优先开发 UI、图可视化、高级摘要、外部 Agent 深度集成等外围能力。
+在 RBAC、Memory、History 和 Sync 的核心边界稳定前，不优先开发 UI、图可视化、高级摘要、外部 Agent 深度集成等外围能力。
 
 ## 架构基线
 
-RBAC 和 Memory 是两个独立模块，通过接口通信。
+RBAC、Memory、History 和 Sync 是独立模块，通过接口通信。
 
 ### 开发语言与运行时
 
@@ -39,10 +41,23 @@ Memory 只回答：
 
 ```txt
 在请求已经被授权的前提下，
-如何读、写、检索、版本化或同步记忆？
+如何读、写和检索当前可用的记忆状态？
 ```
 
-二者之间通过 `PermissionRouter` 和 `MemoryAdapter` 连接。Memory 不直接处理角色分配；RBAC 不理解记忆内容，只识别 `subject`、`rootEntityId`、`action`、`resourceKind`、`tags`、`taskScope` 等权限元数据。
+History 只回答：
+
+```txt
+在请求已经被授权的前提下，
+这些记忆状态是如何产生、撤回、回放、冲突、裁决和合并的？
+```
+
+Sync 只回答：
+
+```txt
+如何在 Cloud 全量权威和 Local 授权工作副本之间交换 History 事件与 Memory 状态变更？
+```
+
+四者之间通过 `PermissionRouter`、`MemoryAdapter` 和专用模块接口连接。Memory 不直接处理角色分配、审计历史或同步协议；RBAC 不理解记忆内容，只识别 `subject`、`rootEntityId`、`action`、`resourceKind`、`tags`、`taskScope` 等权限元数据。
 
 ## 核心需求
 
@@ -118,22 +133,57 @@ RootEntity:
   rootEntityId 必须非空
 ```
 
-L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、Redis、本地数据库都只是索引、缓存、投影或授权视图，不是唯一事实源。
+Memory 模块只保存当前可检索、可读写状态，不保存操作历史本身。当前状态存储定案为：
 
-云端记忆是权威源。本地记忆只是授权 View，只包含当前用户、当前 Agent、当前任务有权限读取的子集。
+```txt
+Resource:
+  CAS / Git-like 原始资源存储
 
-### 3. 版本化写入
+ResourceChunk:
+  Qdrant vector + Qdrant payload metadata
 
-记忆写入必须通过 operation 和 commit 表达。破坏性修改不直接物理删除，默认使用 tombstone 或 revision。
+MemoryEntityBranch:
+  Qdrant vector + Qdrant payload metadata
+
+MemoryEntity / RootEntity:
+  Qdrant vector + Qdrant payload metadata
+
+MemoryRelation:
+  libSQL relation table
+```
+
+Qdrant payload 是 ResourceChunk、MemoryEntityBranch 和 MemoryEntity 的元数据存储位置。除非某字段必须参与非向量事务，或 Qdrant payload 无法承载，否则不再为这些对象单独建立 metadata 表。
+
+Cloud Memory 保存所有 rootMemoryEntity 的当前状态。Local Memory 保存当前 subject / task scope 有读权限的 rootMemoryEntity 子集，是本地授权工作副本的当前状态层。
+
+### 3. History / 审计写入
+
+记忆写入必须通过 History operation 和 commit 表达。破坏性修改不直接物理删除，默认使用 tombstone 或 revision。
+
+History 模块不属于 Memory 模块。它负责操作审计、撤回、回放、冲突键、分支头、resolution 和合并。
 
 第一版必须支持：
 
-- append-only memory operation
+- append-only history operation
 - rootEntityId 级 commit
 - branchRef
 - tombstone
 - rollback / revert
+- replay
+- conflict key
+- conflict branch
+- resolution commit
 - 写入主体审计，包括 user / agent
+
+权威关系：
+
+```txt
+Cloud History 是 shared authority。
+Local History 是 local working authority。
+Local Memory 是 current authorized working state。
+```
+
+Cloud History 保存全量 rootMemoryEntity 的操作树。Local History 只保存当前 subject 有读权限的 rootMemoryEntity 子集、local pending operations、同步游标和少量 conflict metadata。
 
 ### 4. 授权检索
 
@@ -210,9 +260,9 @@ L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、R
 - TaskScope 可以按 entity、tag、relation type、relation depth 收窄
 - 权限拒绝能返回可行动的 missing permissions
 
-### Milestone 2: Memory Core Write Model
+### Milestone 2: Memory Core State Model
 
-目标：实现权威记忆结构和版本化写路径。
+目标：实现当前记忆状态模型和存储接口，不把 History / Sync 职责混入 Memory。
 
 交付物：
 
@@ -221,9 +271,9 @@ L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、R
 - MemoryRelation
 - Resource
 - ResourceChunk
-- Commit / Branch / Snapshot
-- operation-based write API
-- tombstone / revision 行为
+- Resource CAS / Git-like 接口
+- Qdrant-backed ResourceChunk / MemoryEntityBranch / MemoryEntity 接口
+- libSQL-backed MemoryRelation 接口
 - rootEntityId invariant
 - L2 / L3 到 L1 的 source tracing
 
@@ -231,8 +281,11 @@ L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、R
 
 - RootEntity 使用 `rootEntityId = null`
 - 非 RootEntity 和其他记忆对象都正确保存 rootEntityId
-- 写入必须经过授权请求
-- 错误写入可以从 active view 中 revert，但保留审计历史
+- Memory 模块接口只暴露当前状态读写和检索能力
+- MemoryEntityBranch 支持多个候选分支同时被索引，并通过 status / confidence / branchRef / ranking policy 排序或过滤
+- ResourceChunk、MemoryEntityBranch 和 MemoryEntity 元数据存 Qdrant payload
+- MemoryRelation 存 libSQL relation table
+- Memory 模块不拥有 commit、operation、rollback、replay 或 sync cursor
 
 ### Milestone 3: Authorized Retrieval
 
@@ -254,31 +307,57 @@ L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、R
 - 只读 ResearchAgent 只能读，不能写
 - 返回的实体摘要能回溯到原始 Resource / Chunk
 
-### Milestone 4: Cloud Authority And Local Sync
+### Milestone 4: History Authority
 
-目标：实现云端唯一权威历史、本地授权快照、低延迟 pending overlay 和最终一致同步。
+目标：实现 Cloud History shared authority 和 Local History working authority，支持审计、撤回、回放、冲突和合并。
 
 交付物：
 
-- Cloud Memory Authority 持久化实现
+- Cloud History Authority 持久化实现
+- Local History working authority
 - expectedHeadCommitId / clientMutationId 并发提交协议
 - conflict key、MemoryConflict 和 conflict branch
-- Authorized Snapshot builder
-- commitWatermark / permissionWatermark
-- 本地 pending operation queue 和即时检索 overlay
+- commitWatermark
+- 本地 pending operation queue
+- operation tree subset
 - 管理员 resolution commit
-- 权限变化后的本地视图失效与重建
+- replay / rollback / revert / merge
 
 完成标准：
 
-- 云端 append-only commit/operation log 是共享记忆的唯一权威源
-- 本地只保存 Authorized Snapshot、必要索引、pending operations、同步游标和少量 conflict metadata
-- pending 写入无需等待云端即可在本地检索
+- Cloud History 是共享记忆的唯一历史权威源
+- Local History 是本地写入和查询的 working authority，但只对本地授权子集负责
+- 本地只保存当前 subject 有读权限的 rootMemoryEntity 子集的 operation tree、pending operations、同步游标和少量 conflict metadata
 - 云端并发冲突不会自动裁决，冲突来稿保存在 conflict branch
-- 冲突未裁决时 pending overlay 在本机遮蔽 snapshot；明确的 resolution commit 到达后云端裁决覆盖本地 pending
-- 权限变化会使旧本地 view 失效，且 view 可以从云端重建
+- 明确的 resolution commit 到达后，云端裁决覆盖本地 pending
+- History 可重放到 Memory 当前状态
 
-### Milestone 5: Agent Session And Tool Integration
+### Milestone 5: Local Authorized Working Replica And Sync
+
+目标：实现 Cloud 全量权威和 Local 授权工作副本之间的同步。Local 不是完整 mirror，也不是薄 snapshot，而是按权限裁剪的本地工作副本。
+
+交付物：
+
+- Local Authorized Working Replica
+- push / pull / conflict event / resolution event
+- Authorized rootMemoryEntity subset downloader
+- Resource CAS 子集同步
+- Qdrant vector + payload 子集同步
+- libSQL MemoryRelation 子集同步
+- libSQL History operation tree 子集同步
+- permissionWatermark
+- 权限变化后的本地副本失效、清理与重建
+
+完成标准：
+
+- 用户有哪些 rootMemoryEntity 的读权限，本地就只下载并维护这些 rootMemoryEntity 的资源、Qdrant 数据、Qdrant payload、MemoryRelation 和 History operation tree
+- 本地所有读取只走 Local Memory
+- pending 写入无需等待云端即可进入 Local History，并投影到 Local Memory 后可检索
+- 同步中断后可以从最后确认的 watermark 幂等继续
+- 权限收窄后，本地资源、Qdrant payload、relation 和 history 子集中不再保留越权数据
+- 本地副本可删除，并从 Cloud 重新构建到同一授权状态
+
+### Milestone 6: Agent Session And Tool Integration
 
 目标：通过受信任 session 为 Agent 注入用户身份，再接入工具可见性和各 Agent runtime。
 
@@ -303,9 +382,9 @@ L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、R
 - 只读 subagent 看不到也调不到写工具
 - 用户可以查询任务需要哪些权限、当前缺哪些权限、哪些角色能满足
 
-### Milestone 6: 非核心产品能力
+### Milestone 7: 非核心产品能力
 
-目标：在 RBAC 和记忆核心可靠后，再补产品体验和高级能力。
+目标：在 RBAC、Memory、History 和 Sync 核心可靠后，再补产品体验和高级能力。
 
 候选项：
 
@@ -319,7 +398,7 @@ L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、R
 - analytics / observability dashboard
 - 更丰富的导入流水线
 
-这些能力不阻塞 Milestone 1-5。
+这些能力不阻塞 Milestone 1-6。
 
 ## Issue 顺序
 
@@ -336,14 +415,22 @@ L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、R
 10. `issues/10-agent-session-identity.md`
 11. `issues/11-agent-tool-permission-adapters.md`
 12. `issues/12-non-core-feature-backlog.md`
+13. `issues/13-split-memory-history-contracts.md`
+14. `issues/14-memory-store-target-adapters.md`
+15. `issues/15-history-libsql-authority.md`
+16. `issues/16-local-authorized-working-replica.md`
+17. `issues/17-sync-authorized-subset-events.md`
+18. `issues/18-retire-postgres-prototype-adapter.md`
 
 ## 关键风险
 
 - 如果第一版做任意实体级长期 ACL，权限、召回、缓存失效和审计复杂度会过早爆炸。
 - 如果 Memory 引入 RBAC assignment 内部结构，两个模块会在早期耦合。
 - 如果检索路径漏掉 rootEntityId 或 TaskScope，读权限隔离会失效。
-- 如果本地记忆被当成权威源，权限变化后可能泄露旧记忆。
-- 如果未区分 Authorized Snapshot 和 Pending Overlay，“未裁决时本地优先”会被误实现成两个权威源。
+- 如果本地记忆被当成共享权威源，权限变化后可能泄露旧记忆。正确说法是 Local History 是 local working authority，Cloud History 是 shared authority。
+- 如果把 Local Authorized Working Replica 误实现成完整 mirror，会下载越权 rootMemoryEntity。它必须只是授权子集。
+- 如果把 Local Authorized Working Replica 误实现成薄 snapshot，本地写入、回放、冲突和离线查询会缺少必要 operation tree。
+- 如果未区分 Local Memory 当前状态和 Local History pending operations，“未裁决时本地优先”会被误实现成两个共享权威源。
 - 如果 resolution commit 不引用被裁决的 conflict 和 incoming commit，本地无法安全判断何时应让云端覆盖 pending。
 - 如果 Agent 身份来自 prompt 或工具参数，模型可以伪造 userId 或 ownerUserId。
 - 如果 Agent 能自动执行管理员动作，委派自动化会变得不安全。
@@ -353,5 +440,5 @@ L2 / L3 的权威数据优先存 SQL。向量数据库、BM25、图数据库、R
 先完成 Milestone 0，然后连续推进 Milestone 1 和 Milestone 2。不要先做 UI、高级摘要、图投影或外部 Agent 适配。这个项目的地基是：
 
 ```txt
-Scoped RBAC + Versioned Memory
+Scoped RBAC + Current Memory + Auditable History + Authorized Sync
 ```

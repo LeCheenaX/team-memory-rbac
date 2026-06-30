@@ -10,16 +10,39 @@ Source: `D:/Obsidian/01-Projects/Agent RBAC Memory.md`
 
 ```txt
 L3: MemoryEntity
-    记忆实体身份层。只表达“这个东西存在”。
+    记忆实体身份层。表达“这个东西存在”，并作为可检索身份对象进入 Qdrant。
 
 L2: MemoryEntityBranch
-    记忆实体内容版本层。表达某个实体在某个 branch / commit 下如何描述。
+    记忆实体内容候选 / 分支表达层。表达某个实体在某个 branch 下如何描述。
 
 L1: Resource + ResourceChunk + Index
-    原始资源层。保存原始文档、代码仓库、对话历史、工具输出、切片、embedding、BM25 索引等。
+    原始资源层。Resource 保存原始文档、代码仓库、对话历史、工具输出等；ResourceChunk 保存可检索切片。
 ```
 
 `MemoryEntity` 不是严格树节点。树、链、DAG、工作流、分类、引用、冲突关系都由 `MemoryRelation` 构造。
+
+Memory 模块只关心当前可读写、可检索状态。它不拥有 commit、operation、rollback、replay、conflict key、resolution 或 sync cursor。
+
+模块职责定案：
+
+```txt
+Memory:
+  当前可检索、可读写的记忆状态
+
+History:
+  操作历史、审计、撤回、回放、冲突、合并、分支头
+
+Sync:
+  Cloud 全量权威和 Local 授权工作副本之间的事件与状态交换
+```
+
+权威关系：
+
+```txt
+Cloud History 是 shared authority。
+Local History 是 local working authority。
+Local Memory 是 current authorized working state。
+```
 
 ## 2. 核心建模原则
 
@@ -115,7 +138,20 @@ interface MemoryEntity {
 
 ## 4. L2: MemoryEntityBranch
 
-`MemoryEntityBranch` 表示某个实体在某个 branch / commit 下的具体内容版本。
+`MemoryEntityBranch` 表示某个实体在某个 branch 下的具体内容候选。它属于 Memory 当前状态，不属于 History。
+
+同一个 `MemoryEntity` 可以同时存在多个 `MemoryEntityBranch`，例如：
+
+```txt
+accepted
+pending
+conflicted
+deprecated
+verified
+superseded
+```
+
+冲突处理由 History 记录，Memory 只索引多个候选分支，并由检索策略通过 `status`、`confidence`、`branchRef`、`importance` 和 ranking policy 排序或过滤。
 
 ```ts
 interface MemoryEntityBranch {
@@ -123,18 +159,30 @@ interface MemoryEntityBranch {
   entityId: string
   rootEntityId: string
   branchRef: string
-  commitId: string
   parentBranchId?: string
   title: string
   description: string
   tags: string[]
   extraInfo?: Record<string, unknown>
-  embedding?: number[]
   importance: number
   confidence: number
+  status: "active" | "pending" | "conflicted" | "deprecated" | "verified" | "superseded" | "tombstoned"
+  origin?: "cloud_snapshot" | "local_pending" | "resolution" | "import"
+  pendingId?: string | null
   createdAt: string
   updatedAt: string
 }
+```
+
+`commitId` 属于 History，不是 MemoryEntityBranch 当前状态字段。实现可以在 History event 或同步 envelope 中携带来源 commit，但不应要求 Memory caller 通过 MemoryEntityBranch 反查操作历史。
+
+MemoryEntityBranch 存储定案：
+
+```txt
+本地: Qdrant collection memory_entity_branches
+云端: Qdrant collection memory_entity_branches
+vector: branch semantic embedding
+payload: 上述元数据字段
 ```
 
 注意：Obsidian 原文中部分示例把 `rootEntityId` 写成 `root_entiry_id` 或允许 `null`，实现时以最终约定为准：`MemoryEntityBranch.rootEntityId` 必须非空。
@@ -159,7 +207,6 @@ interface MemoryRelation {
   weight: number
   confidence: number
   branchRef: string
-  commitId: string
   status: "active" | "tombstoned" | "conflicted"
   createdAt: string
   updatedAt: string
@@ -167,6 +214,37 @@ interface MemoryRelation {
 ```
 
 实现时 `rootEntityId` 必须非空，用于权限过滤和快速查询。
+
+`commitId` 属于 History，不属于 MemoryRelation 当前状态字段。关系集合存储定案：
+
+```txt
+本地: libSQL
+云端: libSQL
+```
+
+目标表：
+
+```sql
+memory_relations (
+  relation_id text primary key,
+  root_entity_id text not null,
+  branch_ref text not null,
+  source_kind text not null,
+  source_id text not null,
+  target_kind text not null,
+  target_id text not null,
+  relation_type text not null,
+  role text,
+  ordinal integer,
+  required integer,
+  condition_json text,
+  weight real not null,
+  confidence real not null,
+  status text not null,
+  created_at text not null,
+  updated_at text not null
+);
+```
 
 ## 6. 关系语义
 
@@ -278,7 +356,7 @@ interface Resource {
   title: string
   uri?: string
   contentHash: string
-  metadata?: Record<string, unknown>
+  status: "active" | "tombstoned"
   createdAt: string
   updatedAt: string
 }
@@ -291,18 +369,36 @@ interface ResourceChunk {
   resourceId: string
   chunkIndex: number
   text: string
-  embedding?: number[]
   bm25DocumentId?: string
-  metadata?: {
-    headingPath?: string[]
-    filePath?: string
-    startLine?: number
-    endLine?: number
-    tokenCount?: number
-  }
+  sourceType: Resource["sourceType"]
+  contentHash: string
+  headingPath?: string[]
+  filePath?: string
+  startLine?: number
+  endLine?: number
+  tokenCount?: number
+  origin?: "cloud_snapshot" | "local_pending" | "resolution" | "import"
+  pendingId?: string | null
+  status: "active" | "tombstoned"
   createdAt: string
   updatedAt: string
 }
+```
+
+Resource 存储定案：
+
+```txt
+本地: CAS / Git-like 文件存储
+云端: CAS / Git-like 文件存储
+```
+
+ResourceChunk 存储定案：
+
+```txt
+本地: Qdrant collection resource_chunks
+云端: Qdrant collection resource_chunks
+vector: chunk embedding
+payload: 上述元数据字段
 ```
 
 注意：Obsidian 原文早期 L1 示例没有 `rootEntityId`，实现时以最终约定为准：`Resource` 和 `ResourceChunk` 必须有非空 `rootEntityId`。
@@ -346,36 +442,42 @@ entrypoint-step --refers_to(role=source_code)--> code-chunk
 
 “代码逻辑流”“执行流”“项目:代码B”等语义通过 tags 表达。
 
-## 10. 权威存储和索引
+## 10. 存储定案
 
-云端记忆是完整权威库，包含：
+云端保存全集。本地保存授权子集。本地和云端不是实时强同步关系，也不是完全同量 mirror；本地是按权限裁剪的工作副本。
 
-- L1 原始资源
-- L1 ResourceChunk
-- L1 chunk embedding
-- L1 BM25 index
-- L2 MemoryEntityBranch
-- L2 entity embedding
-- L2 MemoryRelation
-- L3 MemoryEntity
-- Commit / Branch / Snapshot
-- RBAC assignments
-- Audit logs
+```txt
+Cloud:
+  all rootMemoryEntities
+  all resources
+  all Qdrant vectors
+  all Qdrant payloads
+  all memory_relations
+  all history operation trees
 
-推荐存储：
+Local:
+  authorized subset of rootMemoryEntities
+  authorized subset of resources
+  authorized subset of Qdrant vectors
+  authorized subset of Qdrant payloads
+  authorized subset of memory_relations
+  authorized subset of history operation trees
+  local pending operations
+```
 
-| 数据 | 权威或用途 |
-|---|---|
-| 原始文件、文档、代码快照、对话历史 | Object Storage，例如 S3 / MinIO |
-| Resource / ResourceChunk 元数据 | SQL，例如 PostgreSQL |
-| L2 / L3 实体和关系 | SQL，例如 PostgreSQL |
-| Commit / Branch / Snapshot | SQL，例如 PostgreSQL |
-| L1 chunk embedding | Vector DB，例如 Qdrant / Milvus / pgvector |
-| L2 entity embedding | Vector DB，例如 Qdrant / Milvus / pgvector |
-| BM25 | OpenSearch / Elasticsearch / Tantivy |
-| 图关系查询 | SQL edge table 为权威，Graph DB 可作为投影 |
-| 快速权限 / 热点记忆缓存 | Redis，可选 |
-| 审计日志 | SQL / append-only log |
+Memory 当前状态存储：
+
+| 数据 | 本地 | 云端 | 说明 |
+|---|---|---|---|
+| Resource 原始内容 | CAS / Git-like | CAS / Git-like | 云端 CAS 可落在 S3 / MinIO 等对象存储之上，但模块接口是 CAS |
+| ResourceChunk | Qdrant | Qdrant | vector + payload metadata |
+| MemoryEntityBranch | Qdrant | Qdrant | vector + payload metadata |
+| MemoryEntity / RootEntity | Qdrant | Qdrant | vector + payload metadata |
+| MemoryRelation | libSQL | libSQL | relation table |
+| History commits / operations / branch heads / conflicts / resolutions | libSQL | libSQL | History 模块，不属于 Memory |
+| BM25 | CAS 支持格式时优先本地文件/BM25；后续可加专用索引 | 同左 | 不是第一权威源 |
+| 图关系查询 | libSQL edge table 为权威，Graph DB 可作为后续投影 | 同左 | 第一版不引入 Graph DB 权威 |
+| 快速权限 / 热点记忆缓存 | Redis，可选 | Redis，可选 | 缓存，不是权威源 |
 
 Redis 不作为权威记忆库，只做：
 
@@ -386,26 +488,54 @@ Redis 不作为权威记忆库，只做：
 - 本地同步状态缓存
 - Agent 会话级短缓存
 
-## 11. 本地授权 View
+Qdrant collections：
 
-本地记忆不是权威库，只是云端记忆的授权 View。
+```txt
+resource_chunks
+memory_entity_branches
+memory_entities
+```
 
-本地 View 必须带：
+除非 Qdrant payload 放不下或某字段必须参与非向量事务，ResourceChunk、MemoryEntityBranch 和 MemoryEntity 元数据不单独建 metadata 表。
 
+## 11. Local Authorized Working Replica
+
+本地不是完整云端 mirror，也不是薄 Authorized Snapshot。本地是：
+
+```txt
+Local Authorized Working Replica:
+  一个按权限裁剪过的、本地可读写、可离线工作的云端子集副本。
+```
+
+用户有哪些 rootMemoryEntity 的读权限，本地就仅下载并维护这些 rootMemoryEntity 的：
+
+- Resource CAS 内容
+- Qdrant vectors
+- Qdrant payload
+- MemoryRelation
+- History operation tree 子集
+- pending operations
+- sync cursor
+- conflict metadata
+
+本地副本 identity 至少包含：
+
+- `subjectId`
 - `rootEntityId`
 - `branchRef`
 - `commitWatermark`
 - `permissionWatermark`
 - `taskScope`
 
-本地实现可以替换：
+本地所有读取只走 Local Memory。Local History 接受本地 pending 写入，并驱动 Local Memory 更新当前状态。同步前，本地 pending 不影响 Cloud；同步时 Cloud History 负责接受、冲突保存或 resolution 裁决。
 
-- SQLite / DuckDB
-- Kuzu / SQLite edge table
-- FAISS / LanceDB / Qdrant local
-- Tantivy / SQLite FTS
-- 本地文件系统
-- Redis local / in-memory cache
+权限收窄时，本地必须清理越权的：
+
+- CAS resources
+- Qdrant points and payloads
+- libSQL memory_relations
+- libSQL history subset
+- pending/conflict records 中不再授权可见的对象
 
 ## 12. 典型操作约束
 
@@ -429,6 +559,8 @@ Redis 不作为权威记忆库，只做：
 - relation 修改等价于 tombstone old relation + create new relation。
 - L3 删除 MemoryEntity 使用 tombstone，并 tombstone 相关 relation。
 - L3 内容修改主要发生在 L2；L3 本体只改 status、currentBranchId、rootEntityId 特殊迁移等元数据。
+
+上述 tombstone、revision、commit 和 operation 由 History 记录；Memory 只保存这些操作投影后的当前状态。
 
 ### 检索
 
