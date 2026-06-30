@@ -7,18 +7,18 @@ import { PersistentRbacAdminService } from "../libsql/admin-service.ts";
 import { LibsqlBm25Index } from "../libsql/bm25-index.ts";
 import { LibsqlMemoryRelationStore } from "../libsql/relation-store.ts";
 import { QdrantVectorMemoryStore } from "../qdrant/vector-memory-store.ts";
-import { ScopedPolicyEngine } from "../../src/rbac/policy-engine.ts";
-import { BUILT_IN_ROLES } from "../../src/rbac/catalog.ts";
-import { ResourceService } from "../../src/resources/service.ts";
+import { ScopedPolicyEngine } from "../../rbac/policy-engine.ts";
+import { BUILT_IN_ROLES } from "../../rbac/catalog.ts";
+import { ResourceService } from "../../resources/service.ts";
 import type { AuthenticatedSession } from "../libsql/rbac-authority.ts";
 import {
   MemoryRetrievalAdapter,
   type MemoryRetrievalRequest,
   type MemoryRetrievalResult,
   StoreBackedAuthorizedQuerySource,
-} from "../../src/memory/retrieval.ts";
-import { PermissionRouter } from "../../src/permission-router.ts";
-import { ResourceIngestionService } from "../../src/ingestion/service.ts";
+} from "../../memory/retrieval.ts";
+import { PermissionRouter } from "../../permission-router.ts";
+import { ResourceIngestionService } from "../../ingestion/service.ts";
 
 export interface RuntimeConfig {
   libsqlUrl: string;

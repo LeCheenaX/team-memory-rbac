@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { FileSystemLocalAuthorizedWorkingReplica } from "../adapters/filesystem/local-replica.ts";
+import { FileSystemLocalAuthorizedWorkingReplica } from "../src/adapters/filesystem/local-replica.ts";
 import {
   AuthorizedWorkingReplicaSynchronizer,
   InMemoryPermissionWatermarkAuthority,

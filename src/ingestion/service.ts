@@ -10,8 +10,8 @@ import type {
   ResourceSourceType,
 } from "../contracts/memory.ts";
 import type { PolicyEngine } from "../contracts/rbac.ts";
-import type { AuthenticatedSession } from "../../adapters/libsql/rbac-authority.ts";
-import { contentHash } from "../../adapters/cas/filesystem.ts";
+import type { AuthenticatedSession } from "../adapters/libsql/rbac-authority.ts";
+import { contentHash } from "../adapters/cas/filesystem.ts";
 import type { ResourceCas, VectorMemoryPoint, VectorMemoryStore } from "../memory/stores.ts";
 import type { Bm25Document, Bm25Index } from "./bm25.ts";
 

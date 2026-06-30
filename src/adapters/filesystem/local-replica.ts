@@ -15,7 +15,7 @@ import {
   type LocalAuthorizedWorkingReplica,
   type LocalAuthorizedWorkingReplicaState,
   type MemoryActiveView,
-} from "../../src/index.ts";
+} from "../../index.ts";
 
 function clone<T>(value: T): T {
   return structuredClone(value);

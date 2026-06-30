@@ -14,10 +14,7 @@ async function filesUnder(path: string): Promise<string[]> {
 }
 
 test("production directories contain no tests or test support modules", async () => {
-  const productionFiles = [
-    ...(await filesUnder("src")),
-    ...(await filesUnder("adapters")),
-  ];
+  const productionFiles = await filesUnder("src");
   const misplaced = productionFiles.filter(
     (path) =>
       /(^|\/)(test|tests|testing)(\/|$)/i.test(path) ||

@@ -3,9 +3,9 @@ import type { CloudMemoryAuthority, CloudMemoryWriteCommand } from "../history/c
 import type { MemoryOperationInput } from "../contracts/history.ts";
 import type { Resource, ResourceSourceType } from "../contracts/memory.ts";
 import type { PolicyEngine } from "../contracts/rbac.ts";
-import type { AuthenticatedSession } from "../../adapters/libsql/rbac-authority.ts";
+import type { AuthenticatedSession } from "../adapters/libsql/rbac-authority.ts";
 import type { ResourceCas } from "../memory/stores.ts";
-import { contentHash } from "../../adapters/cas/filesystem.ts";
+import { contentHash } from "../adapters/cas/filesystem.ts";
 
 export class ResourceNotFoundError extends Error {
   constructor() { super("resource not found"); }

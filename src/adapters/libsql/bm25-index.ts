@@ -3,8 +3,8 @@ import type {
   Bm25Index,
   Bm25SearchOptions,
   Bm25SearchResult,
-} from "../../src/ingestion/bm25.ts";
-import { bm25Internals } from "../../src/ingestion/bm25.ts";
+} from "../../ingestion/bm25.ts";
+import { bm25Internals } from "../../ingestion/bm25.ts";
 import type { LibsqlClient } from "./client.ts";
 
 const BM25_SCHEMA = `

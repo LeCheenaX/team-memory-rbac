@@ -1,5 +1,5 @@
-import { createTeamMemoryServer } from "../adapters/http/server.ts";
-import { loadRuntimeConfig, TeamMemoryRuntime } from "../adapters/runtime/development-stack.ts";
+import { createTeamMemoryServer } from "../src/adapters/http/server.ts";
+import { loadRuntimeConfig, TeamMemoryRuntime } from "../src/adapters/runtime/development-stack.ts";
 
 const port = Number(process.env.PORT);
 if (!Number.isInteger(port) || port <= 0) throw new Error("PORT must be a positive integer");

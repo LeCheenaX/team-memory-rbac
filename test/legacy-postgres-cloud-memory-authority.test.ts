@@ -6,7 +6,7 @@ import {
   type PostgresPool,
   type PostgresQueryResult,
   type PostgresTransaction,
-} from "../adapters/legacy-postgres/cloud-memory-authority.ts";
+} from "../src/adapters/legacy-postgres/cloud-memory-authority.ts";
 import type {
   PermissionDecision,
   PermissionRequest,

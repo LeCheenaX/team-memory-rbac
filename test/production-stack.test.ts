@@ -3,12 +3,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { FileSystemResourceCas, contentHash } from "../adapters/cas/filesystem.ts";
-import { LibsqlHistoryAuthority } from "../adapters/libsql/history-authority.ts";
-import { LibsqlRbacAuthority } from "../adapters/libsql/rbac-authority.ts";
-import { createLibsqlClient } from "../adapters/libsql/client.ts";
-import { bootstrapDevelopment, TeamMemoryRuntime } from "../adapters/runtime/development-stack.ts";
-import { createTeamMemoryServer } from "../adapters/http/server.ts";
+import { FileSystemResourceCas, contentHash } from "../src/adapters/cas/filesystem.ts";
+import { LibsqlHistoryAuthority } from "../src/adapters/libsql/history-authority.ts";
+import { LibsqlRbacAuthority } from "../src/adapters/libsql/rbac-authority.ts";
+import { createLibsqlClient } from "../src/adapters/libsql/client.ts";
+import { bootstrapDevelopment, TeamMemoryRuntime } from "../src/adapters/runtime/development-stack.ts";
+import { createTeamMemoryServer } from "../src/adapters/http/server.ts";
 import { ScopedPolicyEngine } from "../src/rbac/policy-engine.ts";
 import { ResourceNotFoundError } from "../src/resources/service.ts";
 

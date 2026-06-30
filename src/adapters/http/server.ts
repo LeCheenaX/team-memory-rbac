@@ -66,6 +66,15 @@ export function createTeamMemoryServer(runtimeOrGateway: TeamMemoryRuntime | Tea
         return send(response, 200, { status: "ready" });
       }
       const bearer = token(request);
+      if (request.method === "GET" && url.pathname === "/identity") {
+        return sendValue(response, 200, await gateway.identity(bearer));
+      }
+      if (request.method === "GET" && url.pathname === "/agent/tools") {
+        return sendValue(response, 200, await gateway.listAgentTools(bearer));
+      }
+      if (request.method === "GET" && url.pathname === "/admin/roots") {
+        return sendValue(response, 200, await gateway.listRoots(bearer));
+      }
       if (request.method === "POST" && url.pathname === "/admin/roots") {
         const payload = await body(request);
         const normalized: Record<string, unknown> = {
@@ -76,6 +85,24 @@ export function createTeamMemoryServer(runtimeOrGateway: TeamMemoryRuntime | Tea
         };
         delete normalized.rootEntityId;
         return sendValue(response, 201, await gateway.createRoot(bearer, normalized));
+      }
+      if (request.method === "GET" && url.pathname === "/admin/members") {
+        return sendValue(response, 200, await gateway.listMembers(bearer));
+      }
+      if (request.method === "POST" && url.pathname === "/admin/members/roles") {
+        return sendValue(response, 201, await gateway.assignRole(bearer, await body(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/admin/members/roles/revoke") {
+        return sendValue(response, 200, await gateway.revokeRole(bearer, await body(request)));
+      }
+      if (request.method === "GET" && url.pathname === "/admin/delegations") {
+        return sendValue(response, 200, await gateway.listDelegations(bearer));
+      }
+      if (request.method === "POST" && url.pathname === "/admin/delegations") {
+        return sendValue(response, 201, await gateway.createDelegation(bearer, await body(request)));
+      }
+      if (request.method === "POST" && url.pathname === "/admin/delegations/revoke") {
+        return sendValue(response, 200, await gateway.revokeDelegation(bearer, await body(request)));
       }
       if (request.method === "POST" && url.pathname === "/resources/import") {
         return sendValue(response, 201, await gateway.importResource(bearer, await body(request)));
@@ -105,6 +132,9 @@ export function createTeamMemoryServer(runtimeOrGateway: TeamMemoryRuntime | Tea
       }
       if (request.method === "POST" && url.pathname === "/sync/pull") {
         return send(response, 200, await gateway.pullSync(bearer, await body(request)));
+      }
+      if (request.method === "GET" && url.pathname === "/sync/status") {
+        return sendValue(response, 200, await gateway.syncStatus(bearer));
       }
       return send(response, 404, { error: "not_found" });
     } catch (error) {

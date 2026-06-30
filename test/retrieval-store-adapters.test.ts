@@ -5,9 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
-import { createLibsqlClient } from "../adapters/libsql/client.ts";
-import { LibsqlMemoryRelationStore } from "../adapters/libsql/relation-store.ts";
-import { QdrantVectorMemoryStore } from "../adapters/qdrant/vector-memory-store.ts";
+import { createLibsqlClient } from "../src/adapters/libsql/client.ts";
+import { LibsqlMemoryRelationStore } from "../src/adapters/libsql/relation-store.ts";
+import { QdrantVectorMemoryStore } from "../src/adapters/qdrant/vector-memory-store.ts";
 import type {
   MemoryEntity,
   MemoryEntityBranch,

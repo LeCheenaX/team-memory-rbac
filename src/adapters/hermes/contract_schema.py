@@ -4,7 +4,7 @@ from typing import Any
 
 
 CONTRACT_SCHEMA_PATH = (
-    Path(__file__).resolve().parents[2]
+    Path(__file__).resolve().parents[3]
     / "contracts"
     / "team-memory-rbac.schema.json"
 )

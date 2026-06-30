@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { ResourceCas, ResourceCasObject } from "../../src/memory/stores.ts";
+import type { ResourceCas, ResourceCasObject } from "../../memory/stores.ts";
 
 function digest(content: string | Uint8Array): string {
   return `sha256:${createHash("sha256").update(content).digest("hex")}`;

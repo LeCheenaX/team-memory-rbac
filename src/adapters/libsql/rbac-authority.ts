@@ -10,7 +10,7 @@ import type {
   TaskScope,
   User,
   UserRootRoleAssignment,
-} from "../../src/contracts/rbac.ts";
+} from "../../contracts/rbac.ts";
 import type { LibsqlClient } from "./client.ts";
 
 const RBAC_SCHEMA = `
@@ -129,6 +129,20 @@ export class LibsqlRbacAuthority implements RbacAuthority {
     return this.getMany<AgentDelegation>(
       "select payload_json from rbac_delegations where agent_id = ? and root_entity_id = ?",
       [agentId, rootEntityId],
+    );
+  }
+
+  async listRootAssignments(rootEntityId: string): Promise<UserRootRoleAssignment[]> {
+    return this.getMany<UserRootRoleAssignment>(
+      "select payload_json from rbac_assignments where root_entity_id = ? order by user_id, assignment_id",
+      [rootEntityId],
+    );
+  }
+
+  async listRootDelegations(rootEntityId: string): Promise<AgentDelegation[]> {
+    return this.getMany<AgentDelegation>(
+      "select payload_json from rbac_delegations where root_entity_id = ? order by agent_id, delegation_id",
+      [rootEntityId],
     );
   }
 

@@ -5,7 +5,7 @@ import type {
   VectorMemoryFilter,
   VectorMemoryPoint,
   VectorMemoryStore,
-} from "../../src/memory/stores.ts";
+} from "../../memory/stores.ts";
 
 export class QdrantUnavailableError extends Error {
   constructor(message: string) {

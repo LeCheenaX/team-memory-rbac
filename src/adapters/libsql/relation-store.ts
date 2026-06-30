@@ -1,5 +1,5 @@
-import type { MemoryRelation } from "../../src/contracts/memory.ts";
-import type { MemoryRelationStore } from "../../src/memory/stores.ts";
+import type { MemoryRelation } from "../../contracts/memory.ts";
+import type { MemoryRelationStore } from "../../memory/stores.ts";
 import type { LibsqlClient } from "./client.ts";
 
 const RELATION_SCHEMA = `

@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { McpTeamMemoryAdapter } from "../adapters/agent/transports.ts";
-import { createTeamMemoryServer } from "../adapters/http/server.ts";
+import { McpTeamMemoryAdapter } from "../src/adapters/agent/transports.ts";
+import { createTeamMemoryServer } from "../src/adapters/http/server.ts";
 import {
   bootstrapDevelopment,
   TeamMemoryRuntime,
-} from "../adapters/runtime/development-stack.ts";
-import { TeamMemoryGateway } from "../adapters/runtime/gateway.ts";
+} from "../src/adapters/runtime/development-stack.ts";
+import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
 
 const now = "2026-06-29T00:00:00.000Z";
 

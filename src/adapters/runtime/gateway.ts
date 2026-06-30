@@ -1,4 +1,4 @@
-import { ResourceNotFoundError } from "../../src/resources/service.ts";
+import { ResourceNotFoundError } from "../../resources/service.ts";
 import {
   CloudAuthorizedViewAdapter,
   ConflictResolutionAdapter,
@@ -19,7 +19,8 @@ import {
   type PermissionDecision,
   type PermissionRouteResult,
   type ResourceSourceType,
-} from "../../src/index.ts";
+} from "../../index.ts";
+import type { AgentDelegation, UserRootRoleAssignment } from "../../contracts/rbac.ts";
 import type { AuthenticatedSession } from "../libsql/rbac-authority.ts";
 import type { TeamMemoryRuntime } from "./development-stack.ts";
 
@@ -152,6 +153,17 @@ function gatewaySubject(session: AuthenticatedSession) {
   return session.subject;
 }
 
+const agentToolCatalog = [
+  { name: "memory.importResource", description: "Import a resource", action: "import_resource", resourceKind: "resource" },
+  { name: "memory.readResource", description: "Read a resource", action: "read", resourceKind: "resource" },
+  { name: "memory.write", description: "Write memory", action: "write_entity", resourceKind: "memory_entity" },
+  { name: "memory.search", description: "Search memory", action: "search", resourceKind: "memory_entity" },
+  { name: "memory.history", description: "List memory history", action: "read", resourceKind: "memory_entity" },
+  { name: "memory.conflicts", description: "List memory conflicts", action: "read", resourceKind: "memory_entity" },
+  { name: "memory.resolveConflict", description: "Resolve memory conflicts", action: "merge", resourceKind: "memory_entity" },
+  { name: "memory.syncPull", description: "Pull authorized sync events", action: "read", resourceKind: "memory_entity" },
+] as const;
+
 export class TeamMemoryGateway {
   private readonly runtime: TeamMemoryRuntime;
   private readonly writeRouter: PermissionRouter<
@@ -215,6 +227,218 @@ export class TeamMemoryGateway {
     return session;
   }
 
+  async identity(token: string | undefined): Promise<{
+    sessionId: string;
+    userId: string;
+    agentId?: string;
+    rootEntityId: string;
+    delegationId?: string;
+  }> {
+    const session = await this.authenticate(token);
+    return {
+      sessionId: session.sessionId,
+      userId: session.userId,
+      ...(session.agentId === undefined ? {} : { agentId: session.agentId }),
+      rootEntityId: session.rootEntityId,
+      ...(session.delegationId === undefined
+        ? {}
+        : { delegationId: session.delegationId }),
+    };
+  }
+
+  async listAgentTools(token: string | undefined): Promise<Array<{
+    name: string;
+    description: string;
+    inputSchema: { type: "object"; additionalProperties: true };
+  }>> {
+    const visible = [];
+    for (const tool of agentToolCatalog) {
+      const decision = await this.authorizeAgentTool(token, tool.name);
+      if (decision.allowed) {
+        visible.push({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: { type: "object" as const, additionalProperties: true as const },
+        });
+      }
+    }
+    return visible;
+  }
+
+  async authorizeAgentTool(
+    token: string | undefined,
+    toolName: string,
+  ): Promise<PermissionDecision> {
+    const session = await this.authenticate(token);
+    const tool = agentToolCatalog.find((candidate) => candidate.name === toolName);
+    if (tool === undefined) {
+      throw new TeamMemoryGatewayError("validation_failed", `unknown tool: ${toolName}`);
+    }
+    if (session.subject.kind !== "agent") {
+      return {
+        allowed: false,
+        reason: "agent_session_required",
+        subjectId: session.userId,
+        subjectKind: session.subject.kind,
+        rootEntityId: session.rootEntityId,
+        action: tool.action,
+        resourceKind: tool.resourceKind,
+        matchedRoles: [],
+        missingActions: [tool.action],
+        constraints: {},
+      };
+    }
+    return this.runtime.policy.decide({
+      subject: session.subject,
+      rootEntityId: session.rootEntityId,
+      taskScope: session.taskScope,
+      action: tool.action,
+      resourceKind: tool.resourceKind,
+    });
+  }
+
+  async listRoots(token: string | undefined): Promise<{ roots: string[] }> {
+    const session = await this.authenticate(token);
+    const decision = await this.runtime.policy.decide({
+      subject: session.subject,
+      rootEntityId: session.rootEntityId,
+      taskScope: session.taskScope,
+      action: "read",
+      resourceKind: "memory_entity",
+    });
+    if (!decision.allowed) {
+      throw new TeamMemoryGatewayError(
+        "permission_denied",
+        decision.reason,
+        decision as PermissionDecision & { allowed: false },
+      );
+    }
+    return { roots: [session.rootEntityId] };
+  }
+
+  async listMembers(token: string | undefined): Promise<{
+    assignments: UserRootRoleAssignment[];
+  }> {
+    const session = await this.requireHumanAdmin(token, "assign_user_role");
+    return {
+      assignments: await this.runtime.rbac.listRootAssignments(
+        session.rootEntityId,
+      ),
+    };
+  }
+
+  async assignRole(
+    token: string | undefined,
+    payload: Record<string, unknown>,
+  ): Promise<UserRootRoleAssignment> {
+    const session = await this.authenticate(token);
+    return this.runtime.admin.assignRole(session, {
+      id: stringValue(payload, "assignmentId"),
+      userId: stringValue(payload, "userId"),
+      rootEntityId: session.rootEntityId,
+      roleId: stringValue(payload, "roleId"),
+    });
+  }
+
+  async revokeRole(
+    token: string | undefined,
+    payload: Record<string, unknown>,
+  ): Promise<{ status: "revoked" }> {
+    const session = await this.authenticate(token);
+    await this.runtime.admin.revokeRole(session, {
+      assignmentId: stringValue(payload, "assignmentId"),
+      userId: stringValue(payload, "userId"),
+    });
+    return { status: "revoked" };
+  }
+
+  async listDelegations(token: string | undefined): Promise<{
+    delegations: AgentDelegation[];
+  }> {
+    const session = await this.requireHumanAdmin(token, "assign_user_role");
+    return {
+      delegations: await this.runtime.rbac.listRootDelegations(
+        session.rootEntityId,
+      ),
+    };
+  }
+
+  async createDelegation(
+    token: string | undefined,
+    payload: Record<string, unknown>,
+  ): Promise<AgentDelegation> {
+    const session = await this.authenticate(token);
+    return this.runtime.admin.createDelegation(session, {
+      id: stringValue(payload, "delegationId"),
+      agentId: stringValue(payload, "agentId"),
+      rootEntityId: session.rootEntityId,
+      permissions: (payload.permissions as AgentDelegation["permissions"] | undefined) ?? [],
+      ...(optionalString(payload, "expiresAt") === undefined
+        ? {}
+        : { expiresAt: optionalString(payload, "expiresAt") as string }),
+    });
+  }
+
+  async revokeDelegation(
+    token: string | undefined,
+    payload: Record<string, unknown>,
+  ): Promise<{ status: "revoked" }> {
+    const session = await this.authenticate(token);
+    await this.runtime.admin.revokeDelegation(session, {
+      delegationId: stringValue(payload, "delegationId"),
+      agentId: stringValue(payload, "agentId"),
+    });
+    return { status: "revoked" };
+  }
+
+  async syncStatus(token: string | undefined): Promise<{
+    rootEntityId: string;
+    commitWatermark: number;
+    headCommitId?: string;
+  }> {
+    const session = await this.authenticate(token);
+    const branch = "main";
+    const decision = await this.runtime.policy.decide({
+      subject: session.subject,
+      rootEntityId: session.rootEntityId,
+      taskScope: session.taskScope,
+      branchRef: branch,
+      action: "read",
+      resourceKind: "memory_entity",
+    });
+    if (!decision.allowed) {
+      throw new TeamMemoryGatewayError(
+        "permission_denied",
+        decision.reason,
+        decision as PermissionDecision & { allowed: false },
+      );
+    }
+    const headCommitId = this.runtime.history.headCommitId(
+      session.rootEntityId,
+      branch,
+    );
+    return {
+      rootEntityId: session.rootEntityId,
+      commitWatermark: this.runtime.history.commitWatermark(),
+      ...(headCommitId === undefined ? {} : { headCommitId }),
+    };
+  }
+
+  async health(): Promise<{ live: true; ready: boolean; checks: Record<string, string> }> {
+    try {
+      await this.runtime.ready();
+      return { live: true, ready: true, checks: { runtime: "ready" } };
+    } catch (error) {
+      return {
+        live: true,
+        ready: false,
+        checks: {
+          runtime: error instanceof Error ? error.message : "unknown error",
+        },
+      };
+    }
+  }
+
   async createRoot(
     token: string | undefined,
     payload: Record<string, unknown>,
@@ -226,6 +450,33 @@ export class TeamMemoryGateway {
       clientMutationId: stringValue(payload, "clientMutationId"),
     });
     return { status: "created" };
+  }
+
+  private async requireHumanAdmin(
+    token: string | undefined,
+    action: "assign_user_role" | "revoke_user_role",
+  ): Promise<AuthenticatedSession> {
+    const session = await this.authenticate(token);
+    if (session.subject.kind !== "user") {
+      throw new TeamMemoryGatewayError(
+        "permission_denied",
+        "agents cannot perform administrator actions",
+      );
+    }
+    const decision = await this.runtime.policy.decide({
+      subject: session.subject,
+      rootEntityId: session.rootEntityId,
+      action,
+      resourceKind: "memory_entity",
+    });
+    if (!decision.allowed) {
+      throw new TeamMemoryGatewayError(
+        "permission_denied",
+        decision.reason,
+        decision as PermissionDecision & { allowed: false },
+      );
+    }
+    return session;
   }
 
   async importResource(

@@ -1,6 +1,6 @@
 import type {
   AuthorizedMemoryRequest,
-} from "../../src/permission-router.ts";
+} from "../../permission-router.ts";
 import {
   InMemoryCloudMemoryAuthority,
   type CloudCommitRecord,
@@ -9,11 +9,11 @@ import {
   type CloudMemoryWriteResult,
   type ConflictResolutionCommand,
   type ConflictResolutionResult,
-} from "../../src/history/cloud-authority.ts";
+} from "../../history/cloud-authority.ts";
 import type {
   MemoryActiveView,
   MemoryAuthoritySeed,
-} from "../../src/memory/contracts.ts";
+} from "../../memory/contracts.ts";
 
 /**
  * @deprecated Legacy compatibility prototype. Production Memory uses CAS,

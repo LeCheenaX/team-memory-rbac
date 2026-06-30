@@ -1,7 +1,7 @@
 import type { InStatement, Transaction } from "@libsql/client";
 import type {
   AuthorizedMemoryRequest,
-} from "../../src/permission-router.ts";
+} from "../../permission-router.ts";
 import {
   InMemoryCloudMemoryAuthority,
   type CloudCommitRecord,
@@ -10,12 +10,12 @@ import {
   type ConflictResolutionCommand,
   type ConflictResolutionResult,
   type MemoryConflict,
-} from "../../src/history/cloud-authority.ts";
+} from "../../history/cloud-authority.ts";
 import type {
   HistoryAuthority,
   HistoryProjectionEvent,
   HistoryReplayRequest,
-} from "../../src/history/authority.ts";
+} from "../../history/authority.ts";
 import type { LibsqlClient } from "./client.ts";
 
 const HISTORY_SCHEMA = `

@@ -1,12 +1,12 @@
-import type { PrincipalContext } from "../../src/contracts/rbac.ts";
-import type { AgentSessionAuthority } from "../../src/agent/session.ts";
+import type { PrincipalContext } from "../../contracts/rbac.ts";
+import type { AgentSessionAuthority } from "../../agent/session.ts";
 import type {
   VisibleAgentTool,
-} from "../../src/agent/tools.ts";
-import { ToolPermissionAdapter } from "../../src/agent/tools.ts";
+} from "../../agent/tools.ts";
+import { ToolPermissionAdapter } from "../../agent/tools.ts";
 import type {
   PermissionRouteResult,
-} from "../../src/permission-router.ts";
+} from "../../permission-router.ts";
 import type { TeamMemoryGateway } from "../runtime/gateway.ts";
 
 export interface PrincipalContextTransport {
@@ -14,37 +14,79 @@ export interface PrincipalContextTransport {
 }
 
 class SessionTransportAdapter implements PrincipalContextTransport {
-  private readonly sessions: AgentSessionAuthority;
+  private readonly sessions: AgentSessionAuthority | undefined;
   private readonly tools: ToolPermissionAdapter | undefined;
+  private readonly gateway: TeamMemoryGateway | undefined;
+  private readonly gatewayTools: McpTeamMemoryAdapter | undefined;
 
   constructor(
-    sessions: AgentSessionAuthority,
+    sessionsOrGateway: AgentSessionAuthority | TeamMemoryGateway,
     tools?: ToolPermissionAdapter,
   ) {
-    this.sessions = sessions;
+    if ("authenticate" in sessionsOrGateway) {
+      this.gateway = sessionsOrGateway;
+      this.gatewayTools = new McpTeamMemoryAdapter(sessionsOrGateway);
+    } else {
+      this.sessions = sessionsOrGateway;
+    }
     this.tools = tools;
   }
 
-  resolvePrincipal(sessionToken: string): Promise<PrincipalContext> {
-    return this.sessions.resolve(sessionToken);
+  async resolvePrincipal(sessionToken: string): Promise<PrincipalContext> {
+    if (this.sessions !== undefined) {
+      return this.sessions.resolve(sessionToken);
+    }
+    const session = await this.requireGateway().authenticate(sessionToken);
+    if (session.principal === undefined) {
+      throw new Error("runtime adapter requires an agent session");
+    }
+    return session.principal;
   }
 
   listTools(sessionToken: string): Promise<VisibleAgentTool[]> {
+    if (this.gateway !== undefined) {
+      return this.gateway.listAgentTools(sessionToken);
+    }
     if (this.tools === undefined) {
       throw new Error("tool adapter is not configured");
     }
     return this.tools.listVisibleTools(sessionToken);
   }
 
-  invokeTool(
+  async invokeTool(
     sessionToken: string,
     toolName: string,
     input: Record<string, unknown>,
   ): Promise<PermissionRouteResult<unknown>> {
+    if (this.gatewayTools !== undefined) {
+      const decision = await this.requireGateway().authorizeAgentTool(
+        sessionToken,
+        toolName,
+      );
+      if (!decision.allowed) {
+        return { decision: decision as typeof decision & { allowed: false } };
+      }
+      const value = await this.gatewayTools.callTool(sessionToken, toolName, input);
+      if (
+        value !== null &&
+        typeof value === "object" &&
+        "decision" in value
+      ) {
+        return value as PermissionRouteResult<unknown>;
+      }
+      return { decision: decision as typeof decision & { allowed: true }, value };
+    }
     if (this.tools === undefined) {
       throw new Error("tool adapter is not configured");
     }
     return this.tools.invoke(sessionToken, toolName, input);
+  }
+
+  private requireGateway(): TeamMemoryGateway {
+    if (this.gateway === undefined) {
+      throw new Error("runtime gateway is not configured");
+    }
+    return this.gateway;
   }
 }
 

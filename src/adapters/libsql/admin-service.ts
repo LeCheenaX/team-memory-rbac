@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { AgentDelegation, Permission, UserRootRoleAssignment } from "../../src/contracts/rbac.ts";
-import type { PolicyEngine } from "../../src/contracts/rbac.ts";
-import { validateAgentDelegation } from "../../src/rbac/validation.ts";
+import type { AgentDelegation, Permission, UserRootRoleAssignment } from "../../contracts/rbac.ts";
+import type { PolicyEngine } from "../../contracts/rbac.ts";
+import { validateAgentDelegation } from "../../rbac/validation.ts";
 import { LibsqlRbacAuthority, type AuthenticatedSession } from "./rbac-authority.ts";
 
 function now(): string { return new Date().toISOString(); }

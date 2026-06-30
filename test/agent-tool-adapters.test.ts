@@ -16,7 +16,7 @@ import {
   HttpAgentAdapter,
   McpAgentAdapter,
   OpenClawAgentAdapter,
-} from "../adapters/agent/transports.ts";
+} from "../src/adapters/agent/transports.ts";
 import type {
   AgentDelegation,
   Permission,

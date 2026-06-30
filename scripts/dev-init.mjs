@@ -1,4 +1,4 @@
-import { bootstrapDevelopment, loadRuntimeConfig, TeamMemoryRuntime } from "../adapters/runtime/development-stack.ts";
+import { bootstrapDevelopment, loadRuntimeConfig, TeamMemoryRuntime } from "../src/adapters/runtime/development-stack.ts";
 
 const config = loadRuntimeConfig(process.env);
 const runtime = await TeamMemoryRuntime.create(config);

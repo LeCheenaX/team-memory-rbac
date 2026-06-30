@@ -1,7 +1,7 @@
 import unittest
 
-from adapters.hermes.contract_schema import load_contract_schema
-from adapters.hermes.session_context import (
+from src.adapters.hermes.contract_schema import load_contract_schema
+from src.adapters.hermes.session_context import (
     HermesMemoryAdapter,
     map_principal_context,
 )

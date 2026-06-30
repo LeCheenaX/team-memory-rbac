@@ -4,15 +4,15 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import type { AuthenticatedSession } from "../adapters/libsql/rbac-authority.ts";
-import { createLibsqlClient } from "../adapters/libsql/client.ts";
-import { LibsqlBm25Index } from "../adapters/libsql/bm25-index.ts";
+import type { AuthenticatedSession } from "../src/adapters/libsql/rbac-authority.ts";
+import { createLibsqlClient } from "../src/adapters/libsql/client.ts";
+import { LibsqlBm25Index } from "../src/adapters/libsql/bm25-index.ts";
 import type {
   PermissionDecision,
   PermissionRequest,
   PolicyEngine,
 } from "../src/contracts/rbac.ts";
-import { contentHash } from "../adapters/cas/filesystem.ts";
+import { contentHash } from "../src/adapters/cas/filesystem.ts";
 import {
   InMemoryBm25Index,
   InMemoryCloudMemoryAuthority,
