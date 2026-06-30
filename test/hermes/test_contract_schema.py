@@ -80,6 +80,49 @@ class ContractSchemaTest(unittest.TestCase):
             },
         )
 
+    def test_hermes_adapter_exposes_parallel_and_replacement_memory_modes(self) -> None:
+        adapter = HermesMemoryAdapter(
+            resolve_principal=lambda token: {
+                "sessionId": token,
+                "userId": "user-alice",
+                "agentId": "agent-read",
+                "rootEntityId": "root-project-a",
+                "taskScope": {"rootEntityId": "root-project-a"},
+            },
+            list_tools=lambda token: [
+                {"name": "memory.search"},
+                {"name": "memory.write"},
+            ],
+            invoke_tool=lambda token, name, payload: {},
+        )
+
+        self.assertEqual(
+            adapter.supported_memory_modes,
+            [
+                "parallel_native_team_memory",
+                "team_memory_replaces_native",
+            ],
+        )
+        parallel = adapter.create_memory_integration_plan(
+            "session-1",
+            "parallel_native_team_memory",
+        )
+        self.assertEqual(
+            parallel["nativeMemory"]["disposition"],
+            "not_applicable",
+        )
+        self.assertEqual(parallel["teamMemory"]["canRead"], True)
+        self.assertEqual(parallel["teamMemory"]["canWrite"], True)
+
+        replacement = adapter.create_memory_integration_plan(
+            "session-1",
+            "team_memory_replaces_native",
+        )
+        self.assertEqual(
+            replacement["nativeMemory"]["disposition"],
+            "not_applicable",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

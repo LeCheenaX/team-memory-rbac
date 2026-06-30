@@ -9,19 +9,253 @@ import type {
 } from "../../permission-router.ts";
 import type { TeamMemoryGateway } from "../runtime/gateway.ts";
 
+export const AGENT_MEMORY_INTEGRATION_MODES = [
+  "parallel_native_team_memory",
+  "team_memory_replaces_native",
+] as const;
+
+export type AgentMemoryIntegrationMode =
+  (typeof AGENT_MEMORY_INTEGRATION_MODES)[number];
+
+export type AgentRuntimeHost =
+  | "http"
+  | "mcp"
+  | "openclaw"
+  | "codex"
+  | "claude_code"
+  | "hermes";
+
+export interface AgentMemoryIntegrationPlan {
+  host: AgentRuntimeHost;
+  displayName: string;
+  mode: AgentMemoryIntegrationMode;
+  connector:
+    | "http"
+    | "mcp"
+    | "openclaw_tool_plugin"
+    | "openclaw_active_memory_plugin"
+    | "python_adapter";
+  nativeMemory: {
+    disposition:
+      | "preserved"
+      | "disabled"
+      | "replaced_by_team_memory"
+      | "not_applicable";
+    controls: string[];
+  };
+  hostConfiguration: {
+    actions: string[];
+    settings: Record<string, unknown>;
+  };
+  identitySource: "trusted_session";
+  principal: PrincipalContext;
+  teamMemory: {
+    canRead: boolean;
+    canWrite: boolean;
+    readTools: string[];
+    writeTools: string[];
+    visibleTools: VisibleAgentTool[];
+  };
+}
+
+interface AgentRuntimeProfile {
+  host: AgentRuntimeHost;
+  displayName: string;
+  connector: AgentMemoryIntegrationPlan["connector"];
+  supportedMemoryModes: readonly AgentMemoryIntegrationMode[];
+  plan(
+    mode: AgentMemoryIntegrationMode,
+  ): Pick<
+    AgentMemoryIntegrationPlan,
+    "connector" | "nativeMemory" | "hostConfiguration"
+  >;
+}
+
 export interface PrincipalContextTransport {
   resolvePrincipal(sessionToken: string): Promise<PrincipalContext>;
 }
+
+const allMemoryModes = AGENT_MEMORY_INTEGRATION_MODES;
+
+const HTTP_PROFILE: AgentRuntimeProfile = {
+  host: "http",
+  displayName: "HTTP",
+  connector: "http",
+  supportedMemoryModes: allMemoryModes,
+  plan: (mode) => ({
+    connector: "http",
+    nativeMemory: {
+      disposition:
+        mode === "parallel_native_team_memory"
+          ? "preserved"
+          : "not_applicable",
+      controls: [],
+    },
+    hostConfiguration: {
+      actions: ["Call Team Memory HTTP endpoints with a trusted agent token"],
+      settings: {},
+    },
+  }),
+};
+
+const MCP_PROFILE: AgentRuntimeProfile = {
+  host: "mcp",
+  displayName: "MCP",
+  connector: "mcp",
+  supportedMemoryModes: allMemoryModes,
+  plan: (mode) => ({
+    connector: "mcp",
+    nativeMemory: {
+      disposition:
+        mode === "parallel_native_team_memory"
+          ? "preserved"
+          : "not_applicable",
+      controls: [],
+    },
+    hostConfiguration: {
+      actions: ["Register the Team Memory MCP server"],
+      settings: {},
+    },
+  }),
+};
+
+const OPENCLAW_PROFILE: AgentRuntimeProfile = {
+  host: "openclaw",
+  displayName: "OpenClaw",
+  connector: "openclaw_tool_plugin",
+  supportedMemoryModes: allMemoryModes,
+  plan: (mode) =>
+    mode === "parallel_native_team_memory"
+      ? {
+          connector: "openclaw_tool_plugin",
+          nativeMemory: {
+            disposition: "preserved",
+            controls: [
+              "Keep the existing plugins.slots.memory owner active",
+              "Keep MEMORY.md, memory/*.md, and DREAMS.md available to OpenClaw",
+            ],
+          },
+          hostConfiguration: {
+            actions: [
+              "Install a Team Memory OpenClaw tool plugin",
+              "Expose RBAC-protected team_memory.search and team_memory.write tools",
+              "Optionally add an OpenClaw skill that teaches when to call Team Memory",
+            ],
+            settings: {},
+          },
+        }
+      : {
+          connector: "openclaw_active_memory_plugin",
+          nativeMemory: {
+            disposition: "replaced_by_team_memory",
+            controls: [
+              "Set plugins.slots.memory to the Team Memory plugin id",
+              "Implement the active memory plugin tool contract for recall",
+            ],
+          },
+          hostConfiguration: {
+            actions: [
+              "Register Team Memory as the active memory plugin",
+              "Expose memory_search and memory_get-compatible tools backed by Team Memory",
+              "Route promotion and write tools through the Team Memory gateway",
+            ],
+            settings: {
+              "plugins.slots.memory": "team-memory-rbac",
+            },
+          },
+        },
+};
+
+const CODEX_PROFILE: AgentRuntimeProfile = {
+  host: "codex",
+  displayName: "Codex",
+  connector: "mcp",
+  supportedMemoryModes: allMemoryModes,
+  plan: MCP_PROFILE.plan,
+};
+
+const CLAUDE_CODE_PROFILE: AgentRuntimeProfile = {
+  host: "claude_code",
+  displayName: "Claude Code",
+  connector: "mcp",
+  supportedMemoryModes: allMemoryModes,
+  plan: (mode) =>
+    mode === "parallel_native_team_memory"
+      ? {
+          connector: "mcp",
+          nativeMemory: {
+            disposition: "preserved",
+            controls: [
+              "Keep Claude Code auto memory enabled",
+              "Allow subagent memory frontmatter when wanted",
+            ],
+          },
+          hostConfiguration: {
+            actions: [
+              "Register the Team Memory MCP server in .mcp.json or Claude settings",
+              "Allow subagents to reference the Team Memory MCP server with mcpServers",
+            ],
+            settings: {},
+          },
+        }
+      : {
+          connector: "mcp",
+          nativeMemory: {
+            disposition: "disabled",
+            controls: [
+              "Set autoMemoryEnabled to false or CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
+              "Do not set subagent memory frontmatter for Team Memory-only agents",
+            ],
+          },
+          hostConfiguration: {
+            actions: [
+              "Register the Team Memory MCP server in .mcp.json or Claude settings",
+              "Use Team Memory MCP tools as the only long-term memory write path",
+            ],
+            settings: {
+              autoMemoryEnabled: false,
+              CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+            },
+          },
+        },
+};
+
+const HERMES_PROFILE: AgentRuntimeProfile = {
+  host: "hermes",
+  displayName: "Hermes",
+  connector: "python_adapter",
+  supportedMemoryModes: allMemoryModes,
+  plan: (mode) => ({
+    connector: "python_adapter",
+    nativeMemory: {
+      disposition: "not_applicable",
+      controls: [
+        mode === "parallel_native_team_memory"
+          ? "No documented Hermes native memory surface is configured by this adapter"
+          : "Team Memory is the authoritative long-term memory because no Hermes native memory surface is configured",
+      ],
+    },
+    hostConfiguration: {
+      actions: [
+        "Call the TypeScript Team Memory gateway through the Python Hermes adapter",
+        "Keep authorization, memory writes, retrieval, and history in the TypeScript core",
+      ],
+      settings: {},
+    },
+  }),
+};
 
 class SessionTransportAdapter implements PrincipalContextTransport {
   private readonly sessions: AgentSessionAuthority | undefined;
   private readonly tools: ToolPermissionAdapter | undefined;
   private readonly gateway: TeamMemoryGateway | undefined;
   private readonly gatewayTools: McpTeamMemoryAdapter | undefined;
+  private readonly profile: AgentRuntimeProfile;
 
   constructor(
     sessionsOrGateway: AgentSessionAuthority | TeamMemoryGateway,
     tools?: ToolPermissionAdapter,
+    profile: AgentRuntimeProfile = HTTP_PROFILE,
   ) {
     if ("authenticate" in sessionsOrGateway) {
       this.gateway = sessionsOrGateway;
@@ -30,6 +264,15 @@ class SessionTransportAdapter implements PrincipalContextTransport {
       this.sessions = sessionsOrGateway;
     }
     this.tools = tools;
+    this.profile = profile;
+  }
+
+  get host(): AgentRuntimeHost {
+    return this.profile.host;
+  }
+
+  get supportedMemoryModes(): AgentMemoryIntegrationMode[] {
+    return [...this.profile.supportedMemoryModes];
   }
 
   async resolvePrincipal(sessionToken: string): Promise<PrincipalContext> {
@@ -82,6 +325,54 @@ class SessionTransportAdapter implements PrincipalContextTransport {
     return this.tools.invoke(sessionToken, toolName, input);
   }
 
+  async createMemoryIntegrationPlan(
+    sessionToken: string,
+    mode: AgentMemoryIntegrationMode,
+  ): Promise<AgentMemoryIntegrationPlan> {
+    if (!this.profile.supportedMemoryModes.includes(mode)) {
+      throw new Error(
+        `${this.profile.displayName} does not support memory mode ${mode}`,
+      );
+    }
+    const [principal, visibleTools] = await Promise.all([
+      this.resolvePrincipal(sessionToken),
+      this.listTools(sessionToken),
+    ]);
+    const readTools = visibleTools
+      .map((tool) => tool.name)
+      .filter((name) =>
+        [
+          "memory.read",
+          "memory.search",
+          "memory.readResource",
+          "memory.syncPull",
+        ].includes(name),
+      );
+    const writeTools = visibleTools
+      .map((tool) => tool.name)
+      .filter((name) =>
+        [
+          "memory.write",
+          "memory.importResource",
+        ].includes(name),
+      );
+    return {
+      host: this.profile.host,
+      displayName: this.profile.displayName,
+      mode,
+      ...this.profile.plan(mode),
+      identitySource: "trusted_session",
+      principal,
+      teamMemory: {
+        canRead: readTools.length > 0,
+        canWrite: writeTools.includes("memory.write"),
+        readTools,
+        writeTools,
+        visibleTools,
+      },
+    };
+  }
+
   private requireGateway(): TeamMemoryGateway {
     if (this.gateway === undefined) {
       throw new Error("runtime gateway is not configured");
@@ -90,12 +381,59 @@ class SessionTransportAdapter implements PrincipalContextTransport {
   }
 }
 
-export class HttpAgentAdapter extends SessionTransportAdapter {}
-export class McpAgentAdapter extends SessionTransportAdapter {}
-export class OpenClawAgentAdapter extends SessionTransportAdapter {}
-export class CodexAgentAdapter extends SessionTransportAdapter {}
-export class ClaudeCodeAgentAdapter extends SessionTransportAdapter {}
-export class HermesAgentAdapter extends SessionTransportAdapter {}
+export class HttpAgentAdapter extends SessionTransportAdapter {
+  constructor(
+    sessionsOrGateway: AgentSessionAuthority | TeamMemoryGateway,
+    tools?: ToolPermissionAdapter,
+  ) {
+    super(sessionsOrGateway, tools, HTTP_PROFILE);
+  }
+}
+
+export class McpAgentAdapter extends SessionTransportAdapter {
+  constructor(
+    sessionsOrGateway: AgentSessionAuthority | TeamMemoryGateway,
+    tools?: ToolPermissionAdapter,
+  ) {
+    super(sessionsOrGateway, tools, MCP_PROFILE);
+  }
+}
+
+export class OpenClawAgentAdapter extends SessionTransportAdapter {
+  constructor(
+    sessionsOrGateway: AgentSessionAuthority | TeamMemoryGateway,
+    tools?: ToolPermissionAdapter,
+  ) {
+    super(sessionsOrGateway, tools, OPENCLAW_PROFILE);
+  }
+}
+
+export class CodexAgentAdapter extends SessionTransportAdapter {
+  constructor(
+    sessionsOrGateway: AgentSessionAuthority | TeamMemoryGateway,
+    tools?: ToolPermissionAdapter,
+  ) {
+    super(sessionsOrGateway, tools, CODEX_PROFILE);
+  }
+}
+
+export class ClaudeCodeAgentAdapter extends SessionTransportAdapter {
+  constructor(
+    sessionsOrGateway: AgentSessionAuthority | TeamMemoryGateway,
+    tools?: ToolPermissionAdapter,
+  ) {
+    super(sessionsOrGateway, tools, CLAUDE_CODE_PROFILE);
+  }
+}
+
+export class HermesAgentAdapter extends SessionTransportAdapter {
+  constructor(
+    sessionsOrGateway: AgentSessionAuthority | TeamMemoryGateway,
+    tools?: ToolPermissionAdapter,
+  ) {
+    super(sessionsOrGateway, tools, HERMES_PROFILE);
+  }
+}
 
 export class McpTeamMemoryAdapter {
   private readonly gateway: TeamMemoryGateway;

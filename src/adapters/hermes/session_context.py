@@ -1,6 +1,11 @@
 from dataclasses import dataclass
 from typing import Any, Callable
 
+SUPPORTED_MEMORY_MODES = [
+    "parallel_native_team_memory",
+    "team_memory_replaces_native",
+]
+
 
 @dataclass(frozen=True)
 class PrincipalContext:
@@ -41,6 +46,10 @@ class HermesMemoryAdapter:
         self._list_tools = list_tools
         self._invoke_tool = invoke_tool
 
+    @property
+    def supported_memory_modes(self) -> list[str]:
+        return list(SUPPORTED_MEMORY_MODES)
+
     def resolve_principal(self, session_token: str) -> PrincipalContext:
         return map_principal_context(
             self._resolve_principal(session_token)
@@ -58,3 +67,69 @@ class HermesMemoryAdapter:
         return self._invoke_tool(
             session_token, tool_name, input_payload
         )
+
+    def create_memory_integration_plan(
+        self,
+        session_token: str,
+        mode: str,
+    ) -> dict[str, Any]:
+        if mode not in SUPPORTED_MEMORY_MODES:
+            raise ValueError(f"unsupported memory mode: {mode}")
+        principal_payload = self._resolve_principal(session_token)
+        tools = self.list_tools(session_token)
+        tool_names = [tool["name"] for tool in tools]
+        read_tools = [
+            name for name in tool_names
+            if name in {
+                "memory.read",
+                "memory.search",
+                "memory.readResource",
+                "memory.syncPull",
+            }
+        ]
+        write_tools = [
+            name for name in tool_names
+            if name in {"memory.write", "memory.importResource"}
+        ]
+        return {
+            "host": "hermes",
+            "displayName": "Hermes",
+            "mode": mode,
+            "connector": "python_adapter",
+            "nativeMemory": {
+                "disposition": "not_applicable",
+                "controls": [
+                    (
+                        "No documented Hermes native memory surface is "
+                        "configured by this adapter"
+                    )
+                    if mode == "parallel_native_team_memory"
+                    else (
+                        "Team Memory is the authoritative long-term memory "
+                        "because no Hermes native memory surface is configured"
+                    )
+                ],
+            },
+            "hostConfiguration": {
+                "actions": [
+                    (
+                        "Call the TypeScript Team Memory gateway through "
+                        "the Python Hermes adapter"
+                    ),
+                    (
+                        "Keep authorization, memory writes, retrieval, "
+                        "and history in the TypeScript core"
+                    ),
+                ],
+                "settings": {},
+            },
+            "identitySource": "trusted_session",
+            "principal": principal_payload,
+            "teamMemory": {
+                "canRead": len(read_tools) > 0,
+                "canWrite": "memory.write" in write_tools,
+                "readTools": read_tools,
+                "writeTools": write_tools,
+                "visibleTools": tools,
+            },
+        }

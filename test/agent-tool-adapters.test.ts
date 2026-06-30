@@ -387,3 +387,93 @@ test("HTTP, MCP, OpenClaw, Hermes, Claude Code, and Codex map the same session c
     ),
   );
 });
+
+test("OpenClaw, Claude Code, and Hermes expose host-specific memory integration plans", async () => {
+  const { policy, sessions } = setup();
+  const session = await createSession(
+    sessions,
+    "agent-curator",
+    "delegation-curator",
+  );
+  const toolAdapter = new ToolPermissionAdapter(
+    new SessionMemorySdk(sessions, policy),
+    [
+      {
+        name: "memory.read",
+        description: "Read team memory",
+        action: "read",
+        resourceKind: "memory_entity",
+        inputSchema: { type: "object", properties: {} },
+        execute: async () => "search",
+      },
+      {
+        name: "memory.write",
+        description: "Write team memory",
+        action: "write_entity",
+        resourceKind: "memory_entity",
+        inputSchema: { type: "object", properties: {} },
+        execute: async () => "write",
+      },
+    ],
+  );
+  const openClaw = new OpenClawAgentAdapter(sessions, toolAdapter);
+  const openClawParallel = await openClaw.createMemoryIntegrationPlan(
+    session.token,
+    "parallel_native_team_memory",
+  );
+  assert.equal(openClawParallel.connector, "openclaw_tool_plugin");
+  assert.equal(openClawParallel.nativeMemory.disposition, "preserved");
+  assert.equal(openClawParallel.teamMemory.canRead, true);
+  assert.equal(openClawParallel.teamMemory.canWrite, true);
+  const openClawReplacement = await openClaw.createMemoryIntegrationPlan(
+    session.token,
+    "team_memory_replaces_native",
+  );
+  assert.equal(
+    openClawReplacement.connector,
+    "openclaw_active_memory_plugin",
+  );
+  assert.equal(
+    openClawReplacement.nativeMemory.disposition,
+    "replaced_by_team_memory",
+  );
+  assert.equal(
+    openClawReplacement.hostConfiguration.settings["plugins.slots.memory"],
+    "team-memory-rbac",
+  );
+
+  const claudeCode = new ClaudeCodeAgentAdapter(sessions, toolAdapter);
+  const claudeParallel = await claudeCode.createMemoryIntegrationPlan(
+    session.token,
+    "parallel_native_team_memory",
+  );
+  assert.equal(claudeParallel.connector, "mcp");
+  assert.equal(claudeParallel.nativeMemory.disposition, "preserved");
+  const claudeReplacement = await claudeCode.createMemoryIntegrationPlan(
+    session.token,
+    "team_memory_replaces_native",
+  );
+  assert.equal(claudeReplacement.nativeMemory.disposition, "disabled");
+  assert.equal(
+    claudeReplacement.hostConfiguration.settings.autoMemoryEnabled,
+    false,
+  );
+  assert.equal(
+    claudeReplacement.hostConfiguration.settings
+      .CLAUDE_CODE_DISABLE_AUTO_MEMORY,
+    "1",
+  );
+
+  const hermes = new HermesAgentAdapter(sessions, toolAdapter);
+  const hermesReplacement = await hermes.createMemoryIntegrationPlan(
+    session.token,
+    "team_memory_replaces_native",
+  );
+  assert.equal(hermesReplacement.connector, "python_adapter");
+  assert.equal(
+    hermesReplacement.nativeMemory.disposition,
+    "not_applicable",
+  );
+  assert.equal(hermesReplacement.teamMemory.canRead, true);
+  assert.equal(hermesReplacement.teamMemory.canWrite, true);
+});
