@@ -1054,7 +1054,7 @@
         },
         "metadata": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "headingPath": {
               "type": "array",
@@ -1076,6 +1076,14 @@
             "tokenCount": {
               "type": "integer",
               "minimum": 0
+            },
+            "revisionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "contentHash": {
+              "type": "string",
+              "minLength": 1
             }
           }
         },

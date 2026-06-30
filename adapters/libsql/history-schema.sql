@@ -1,14 +1,35 @@
--- History is independent from Memory's Qdrant payloads and relation table.
-create table if not exists history_commits (
-  commit_id text primary key,
+-- Cloud History is independent from Memory's Qdrant payloads and relation table.
+-- The journal and the normalized tables are committed atomically by the adapter.
+create table if not exists history_request_journal (
+  sequence integer primary key autoincrement,
+  request_kind text not null,
+  request_json text not null
+);
+
+create table if not exists history_idempotency (
   root_entity_id text not null,
   branch_ref text not null,
-  parent_commit_id text,
-  actor_kind text not null,
-  actor_id text not null,
-  message text,
-  created_at text not null
+  client_mutation_id text not null,
+  request_kind text not null,
+  request_json text not null,
+  result_json text not null,
+  primary key (root_entity_id, branch_ref, client_mutation_id, request_kind)
 );
+
+create table if not exists history_commits (
+  sequence integer primary key,
+  commit_id text not null unique,
+  root_entity_id text not null,
+  target_branch_ref text not null,
+  stored_branch_ref text not null,
+  client_mutation_id text not null,
+  status text not null,
+  conflict_keys_json text not null,
+  payload_json text not null
+);
+
+create unique index if not exists history_commits_idempotency
+  on history_commits(root_entity_id, target_branch_ref, client_mutation_id);
 
 create table if not exists history_operations (
   operation_id text primary key,
@@ -30,12 +51,6 @@ create table if not exists history_branch_heads (
   primary key (root_entity_id, branch_ref)
 );
 
-create table if not exists history_conflict_keys (
-  commit_id text not null references history_commits(commit_id),
-  conflict_key text not null,
-  primary key (commit_id, conflict_key)
-);
-
 create table if not exists history_conflicts (
   conflict_id text primary key,
   root_entity_id text not null,
@@ -44,14 +59,15 @@ create table if not exists history_conflicts (
   incoming_commit_id text not null,
   status text not null,
   resolution_commit_id text,
-  created_at text not null
+  payload_json text not null
 );
 
 create table if not exists history_resolutions (
-  resolution_commit_id text primary key references history_commits(commit_id),
+  resolution_commit_id text not null,
   conflict_id text not null references history_conflicts(conflict_id),
   incoming_commit_id text not null,
-  resolution_kind text not null
+  resolution_kind text not null,
+  primary key (resolution_commit_id, conflict_id)
 );
 
 create table if not exists history_sync_watermarks (

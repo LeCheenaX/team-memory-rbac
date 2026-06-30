@@ -1,6 +1,6 @@
 # 本地可运行开发栈与服务健康检查
 
-Status: ready-for-agent
+Status: complete
 
 ## What to build
 
@@ -17,3 +17,8 @@ Status: ready-for-agent
 ## Blocked by
 
 None - can start immediately.
+
+## Comments
+
+- Completed with `compose.yaml`, explicit `.env.example` configuration, `dev:init` / `dev:server`, and `/live` plus dependency-aware `/ready` endpoints.
+- `test/production-stack.test.ts` covers an empty local stack bootstrap, authenticated import, and authorized HTTP read.

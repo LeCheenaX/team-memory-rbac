@@ -1,0 +1,56 @@
+services:
+  libsql:
+    image: ghcr.io/tursodatabase/libsql-server:latest
+    command: ["sqld", "--db-path", "/var/lib/sqld/team-memory.db", "--http-listen-addr", "0.0.0.0:8080"]
+    ports: ["8080:8080"]
+    volumes: ["libsql-data:/var/lib/sqld"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.4
+    ports: ["6333:6333"]
+    volumes: ["qdrant-data:/qdrant/storage"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:6333/healthz >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  object-store:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: local-dev
+      MINIO_ROOT_PASSWORD: local-development-only
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["object-data:/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  service:
+    build: .
+    environment:
+      LIBSQL_URL: http://libsql:8080
+      CAS_DIRECTORY: /data/cas
+      QDRANT_URL: http://qdrant:6333
+      OBJECT_STORE_URL: http://object-store:9000
+      PORT: "3000"
+    ports: ["3000:3000"]
+    volumes: ["cas-data:/data/cas"]
+    depends_on:
+      libsql: { condition: service_healthy }
+      qdrant: { condition: service_healthy }
+      object-store: { condition: service_healthy }
+
+volumes:
+  libsql-data:
+  qdrant-data:
+  object-data:
+  cas-data:

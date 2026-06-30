@@ -41,8 +41,8 @@ export class StoreMemoryProjector implements MemoryProjector {
     if (write.resource !== undefined) {
       await this.resources.put(write.resource);
     }
-    for (const point of write.vectorPoints ?? []) {
-      await this.vectors.upsert(point);
+    if (write.vectorPoints !== undefined) {
+      await this.vectors.upsertMany(write.vectorPoints);
     }
     for (const relation of write.relations ?? []) {
       await this.relations.upsert(relation);

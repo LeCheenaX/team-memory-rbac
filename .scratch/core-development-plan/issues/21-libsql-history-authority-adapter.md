@@ -1,6 +1,6 @@
 # libSQL History Authority 生产适配器
 
-Status: ready-for-agent
+Status: complete
 
 ## What to build
 
@@ -18,3 +18,8 @@ Status: ready-for-agent
 
 - Issue 19 - 本地可运行开发栈与服务健康检查
 - Issue 20 - 持久化 RBAC、身份认证与管理员 CLI
+
+## Comments
+
+- Added a libSQL journal plus atomically maintained normalized commit, operation, branch-head, conflict, resolution, idempotency, and watermark tables.
+- The durable adapter rehydrates the existing History semantics at startup; the in-memory authority remains test/reference-only.

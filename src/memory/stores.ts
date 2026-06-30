@@ -16,6 +16,8 @@ export type VectorMemoryCollection =
 
 /** The portable subset of a Qdrant payload used by Memory adapters. */
 export interface MemoryVectorPayload extends Record<string, unknown> {
+  memoryId?: string;
+  collection?: VectorMemoryCollection;
   rootEntityId: string | null;
   branchRef?: string;
   resourceId?: string;
@@ -32,18 +34,22 @@ export interface VectorMemoryPoint {
   id: string;
   vector: number[];
   payload: MemoryVectorPayload;
+  score?: number;
 }
 
 export interface VectorMemoryFilter {
   rootEntityId: string | null;
   branchRef?: string;
-  resourceId?: string;
-  entityId?: string;
-  status?: string;
+  resourceId?: string | string[];
+  entityId?: string | string[];
+  status?: string | string[];
+  tagsAny?: string[];
+  tagsNone?: string[];
 }
 
 export interface VectorMemoryStore {
   upsert(point: VectorMemoryPoint): Promise<void>;
+  upsertMany(points: VectorMemoryPoint[]): Promise<void>;
   get(
     collection: VectorMemoryCollection,
     id: string,
@@ -51,6 +57,11 @@ export interface VectorMemoryStore {
   search(options: {
     collection: VectorMemoryCollection;
     vector: number[];
+    filter: VectorMemoryFilter;
+    limit?: number;
+  }): Promise<VectorMemoryPoint[]>;
+  list(options: {
+    collection: VectorMemoryCollection;
     filter: VectorMemoryFilter;
     limit?: number;
   }): Promise<VectorMemoryPoint[]>;
@@ -78,6 +89,8 @@ export interface MemoryRelationStore {
     rootEntityId: string;
     branchRef: string;
     sourceId?: string;
+    relationTypes?: MemoryRelation["relationType"][];
+    status?: MemoryRelation["status"];
   }): Promise<MemoryRelation[]>;
   tombstone(id: string, updatedAt: string): Promise<void>;
 }
@@ -95,6 +108,9 @@ function score(vector: number[], query: number[]): number {
 
 function normalizedPayload(point: VectorMemoryPoint): MemoryVectorPayload {
   const payload = clone(point.payload);
+  payload.memoryId ??= point.id;
+  payload.collection ??= point.collection;
+  payload.status ??= "active";
   if (point.collection === "resource_chunks") {
     payload.chunkId ??= point.id;
   }
@@ -107,6 +123,43 @@ function normalizedPayload(point: VectorMemoryPoint): MemoryVectorPayload {
   return payload;
 }
 
+function payloadMatches(
+  payload: MemoryVectorPayload,
+  filter: VectorMemoryFilter,
+): boolean {
+  for (const [key, value] of Object.entries(filter)) {
+    if (key === "tagsAny") {
+      const tags = Array.isArray(payload.tags) ? payload.tags : [];
+      if (
+        value !== undefined &&
+        !(value as string[]).some((tag) => tags.includes(tag))
+      ) {
+        return false;
+      }
+      continue;
+    }
+    if (key === "tagsNone") {
+      const tags = Array.isArray(payload.tags) ? payload.tags : [];
+      if (
+        value !== undefined &&
+        (value as string[]).some((tag) => tags.includes(tag))
+      ) {
+        return false;
+      }
+      continue;
+    }
+    const actual = payload[key];
+    if (Array.isArray(value)) {
+      if (!value.includes(actual as never)) {
+        return false;
+      }
+    } else if (actual !== value) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /** In-memory Qdrant-shaped adapter for tests and local composition. */
 export class InMemoryVectorMemoryStore implements VectorMemoryStore {
   private readonly points = new Map<string, VectorMemoryPoint>();
@@ -116,6 +169,16 @@ export class InMemoryVectorMemoryStore implements VectorMemoryStore {
       ...clone(point),
       payload: normalizedPayload(point),
     });
+  }
+
+  async upsertMany(points: VectorMemoryPoint[]): Promise<void> {
+    const normalized = points.map((point) => ({
+      ...clone(point),
+      payload: normalizedPayload(point),
+    }));
+    for (const point of normalized) {
+      this.points.set(`${point.collection}:${point.id}`, point);
+    }
   }
 
   async get(
@@ -134,17 +197,28 @@ export class InMemoryVectorMemoryStore implements VectorMemoryStore {
   }): Promise<VectorMemoryPoint[]> {
     return [...this.points.values()]
       .filter((point) => point.collection === options.collection)
-      .filter((point) =>
-        Object.entries(options.filter).every(
-          ([key, value]) => point.payload[key] === value,
-        ),
-      )
+      .filter((point) => payloadMatches(point.payload, options.filter))
       .sort(
         (left, right) =>
           score(right.vector, options.vector) -
           score(left.vector, options.vector),
       )
       .slice(0, options.limit ?? 20)
+      .map((point) => ({
+        ...clone(point),
+        score: score(point.vector, options.vector),
+      }));
+  }
+
+  async list(options: {
+    collection: VectorMemoryCollection;
+    filter: VectorMemoryFilter;
+    limit?: number;
+  }): Promise<VectorMemoryPoint[]> {
+    return [...this.points.values()]
+      .filter((point) => point.collection === options.collection)
+      .filter((point) => payloadMatches(point.payload, options.filter))
+      .slice(0, options.limit ?? 100)
       .map(clone);
   }
 
@@ -190,6 +264,8 @@ export class InMemoryMemoryRelationStore implements MemoryRelationStore {
     rootEntityId: string;
     branchRef: string;
     sourceId?: string;
+    relationTypes?: MemoryRelation["relationType"][];
+    status?: MemoryRelation["status"];
   }): Promise<MemoryRelation[]> {
     return [...this.relations.values()]
       .filter(
@@ -197,7 +273,11 @@ export class InMemoryMemoryRelationStore implements MemoryRelationStore {
           relation.rootEntityId === options.rootEntityId &&
           relation.branchRef === options.branchRef &&
           (options.sourceId === undefined ||
-            relation.sourceId === options.sourceId),
+            relation.sourceId === options.sourceId) &&
+          (options.relationTypes === undefined ||
+            options.relationTypes.includes(relation.relationType)) &&
+          (options.status === undefined ||
+            relation.status === options.status),
       )
       .map(clone);
   }

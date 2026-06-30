@@ -1,6 +1,6 @@
 # 持久化 RBAC 与身份认证基础
 
-Status: ready-for-agent
+Status: complete
 
 ## What to build
 
@@ -17,3 +17,8 @@ Status: ready-for-agent
 ## Blocked by
 
 - Issue 19 - 本地可运行开发栈与服务健康检查
+
+## Comments
+
+- Added libSQL-backed users, roles, assignments, delegations, opaque-token sessions, and audit records. Session authentication constructs server-owned subjects/PrincipalContext and re-checks delegation status.
+- Protected RootEntity, role, and delegation mutation services reject agent administrator actions; restart, expiry, revocation, and cross-root paths are integration-tested.

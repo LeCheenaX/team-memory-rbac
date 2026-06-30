@@ -504,7 +504,7 @@ export const CONTRACT_SCHEMA = {
         status: { enum: ["active", "tombstoned"] },
         metadata: {
           type: "object",
-          additionalProperties: false,
+          additionalProperties: true,
           properties: {
             headingPath: {
               type: "array",
@@ -514,6 +514,8 @@ export const CONTRACT_SCHEMA = {
             startLine: { type: "integer", minimum: 1 },
             endLine: { type: "integer", minimum: 1 },
             tokenCount: { type: "integer", minimum: 0 },
+            revisionId: nonEmptyString,
+            contentHash: nonEmptyString,
           },
         },
         createdAt: timestamp,

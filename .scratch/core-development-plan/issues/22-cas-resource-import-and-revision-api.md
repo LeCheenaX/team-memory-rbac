@@ -1,6 +1,6 @@
 # CAS 资源导入、修订与内容读取闭环
 
-Status: ready-for-agent
+Status: complete
 
 ## What to build
 
@@ -19,3 +19,8 @@ Status: ready-for-agent
 - Issue 19 - 本地可运行开发栈与服务健康检查
 - Issue 20 - 持久化 RBAC、身份认证与管理员 CLI
 - Issue 21 - libSQL History Authority 生产适配器
+
+## Comments
+
+- Added authenticated Resource import, revision, read, and tombstone services backed by immutable SHA-256 filesystem CAS objects and durable History operations.
+- Unauthorized and tombstoned reads return the same not-found result; mismatch, duplicate CAS storage, revision preservation, and HTTP smoke paths are tested.

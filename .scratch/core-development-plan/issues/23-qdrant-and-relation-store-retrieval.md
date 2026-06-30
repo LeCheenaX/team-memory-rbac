@@ -1,6 +1,6 @@
 # Qdrant 与 libSQL Relation Store 授权检索闭环
 
-Status: ready-for-agent
+Status: complete
 
 ## What to build
 
@@ -8,11 +8,18 @@ Status: ready-for-agent
 
 ## Acceptance criteria
 
-- [ ] ResourceChunk、MemoryEntityBranch、MemoryEntity metadata 写入 Qdrant payload，relation 写入 libSQL。
-- [ ] 所有查询在存储调用前应用 rootEntityId、TaskScope 与状态过滤。
-- [ ] relation expansion 使用 libSQL edge table，遵守 relation type 与 maxDepth。
-- [ ] 检索结果可以回溯至有权限的 L1 evidence。
-- [ ] Qdrant/libSQL 重启后状态可恢复，in-memory query source 只用于测试。
+- [x] ResourceChunk、MemoryEntityBranch、MemoryEntity metadata 写入 Qdrant payload，relation 写入 libSQL。
+- [x] 所有查询在存储调用前应用 rootEntityId、TaskScope 与状态过滤。
+- [x] relation expansion 使用 libSQL edge table，遵守 relation type 与 maxDepth。
+- [x] 检索结果可以回溯至有权限的 L1 evidence。
+- [x] Qdrant/libSQL 重启后状态可恢复，in-memory query source 只用于测试。
+
+## Implementation notes
+
+- Added `QdrantVectorMemoryStore` for durable Qdrant-backed entity branch and chunk vector payloads.
+- Added `LibsqlMemoryRelationStore` for durable relation edges and relation expansion.
+- Added `StoreBackedAuthorizedQuerySource` so retrieval can use production stores while keeping `MemoryRetrievalAdapter` as the authorization boundary.
+- Covered the restart path with `test/retrieval-store-adapters.test.ts`.
 
 ## Blocked by
 

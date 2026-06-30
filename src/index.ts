@@ -5,6 +5,8 @@ export * from "./contracts/schema.ts";
 export * from "./permission-router.ts";
 export * from "./agent/index.ts";
 export * from "./history/index.ts";
+export * from "./ingestion/index.ts";
 export * from "./memory/index.ts";
 export * from "./rbac/index.ts";
 export * from "./sync/index.ts";
+export * from "./resources/service.ts";

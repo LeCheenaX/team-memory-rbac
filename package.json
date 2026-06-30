@@ -8,6 +8,8 @@
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "test:hermes-contract": "python -m unittest discover -s test/hermes -p \"test_*.py\"",
     "typecheck": "tsc --noEmit",
+    "dev:init": "node --experimental-strip-types scripts/dev-init.mjs",
+    "dev:server": "node --experimental-strip-types scripts/dev-server.mjs",
     "check": "npm run typecheck && npm test && npm run test:hermes-contract"
   },
   "engines": {
@@ -15,5 +17,8 @@
   },
   "devDependencies": {
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.15.8"
   }
 }

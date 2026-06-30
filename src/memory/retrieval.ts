@@ -15,6 +15,13 @@ import type {
   MemoryAdapter,
 } from "../permission-router.ts";
 import type { MemoryActiveView } from "./contracts.ts";
+import type {
+  MemoryRelationStore,
+  VectorMemoryFilter,
+  VectorMemoryPoint,
+  VectorMemoryStore,
+} from "./stores.ts";
+import type { Bm25Index } from "../ingestion/bm25.ts";
 
 export type RetrievalOrigin =
   | "cloud_active"
@@ -94,6 +101,7 @@ export interface MemoryRetrievalResult {
 export interface MemoryQueryContext {
   rootEntityId: string;
   branchRef: string;
+  taskScope?: TaskScope;
 }
 
 export interface MemoryQuerySource {
@@ -216,6 +224,9 @@ export class MemoryRetrievalAdapter
     const context = {
       rootEntityId: request.rootEntityId,
       branchRef: request.branchRef,
+      ...(request.taskScope === undefined
+        ? {}
+        : { taskScope: request.taskScope }),
     };
     let items: MemoryRetrievalItem[];
 
@@ -294,6 +305,440 @@ export class MemoryRetrievalAdapter
       branchRef: request.branchRef,
       items: withEvidence,
     };
+  }
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function activeFilter(
+  context: MemoryQueryContext,
+  extra: Omit<VectorMemoryFilter, "rootEntityId" | "branchRef" | "status"> = {},
+): VectorMemoryFilter {
+  return {
+    rootEntityId: context.rootEntityId,
+    branchRef: context.branchRef,
+    status: "active",
+    ...extra,
+  };
+}
+
+function entityFilter(
+  context: MemoryQueryContext,
+  entityIds?: string[],
+): VectorMemoryFilter {
+  const allowedEntityIds = context.taskScope?.allowedEntityIds;
+  const requested =
+    entityIds === undefined
+      ? allowedEntityIds
+      : allowedEntityIds === undefined
+        ? entityIds
+        : entityIds.filter((id) => allowedEntityIds.includes(id));
+  return activeFilter(context, {
+    ...(requested === undefined ? {} : { entityId: requested }),
+    ...(context.taskScope?.allowedTags === undefined
+      ? {}
+      : { tagsAny: context.taskScope.allowedTags }),
+    ...(context.taskScope?.deniedTags === undefined
+      ? {}
+      : { tagsNone: context.taskScope.deniedTags }),
+  });
+}
+
+function resourceFilter(context: MemoryQueryContext): VectorMemoryFilter {
+  return activeFilter(context, {
+    ...(context.taskScope?.allowedResourceIds === undefined
+      ? {}
+      : { resourceId: context.taskScope.allowedResourceIds }),
+  });
+}
+
+function isDeniedEntity(
+  context: MemoryQueryContext,
+  entityId: string,
+): boolean {
+  return context.taskScope?.deniedEntityIds?.includes(entityId) === true;
+}
+
+function isDeniedResource(
+  context: MemoryQueryContext,
+  resourceId: string,
+): boolean {
+  return context.taskScope?.deniedResourceIds?.includes(resourceId) === true;
+}
+
+function pointId(point: VectorMemoryPoint): string {
+  return (
+    (typeof point.payload.memoryId === "string"
+      ? point.payload.memoryId
+      : undefined) ??
+    (typeof point.payload.chunkId === "string"
+      ? point.payload.chunkId
+      : undefined) ??
+    (typeof point.payload.entityBranchId === "string"
+      ? point.payload.entityBranchId
+      : undefined) ??
+    (typeof point.payload.entityId === "string"
+      ? point.payload.entityId
+      : undefined) ??
+    point.id
+  );
+}
+
+function branchFromPoint(point: VectorMemoryPoint): MemoryEntityBranch {
+  return {
+    ...(point.payload as unknown as MemoryEntityBranch),
+    id:
+      (typeof point.payload.entityBranchId === "string"
+        ? point.payload.entityBranchId
+        : undefined) ?? pointId(point),
+  };
+}
+
+function entityFromPoint(point: VectorMemoryPoint): MemoryEntity {
+  return {
+    ...(point.payload as unknown as MemoryEntity),
+    id:
+      (typeof point.payload.entityId === "string"
+        ? point.payload.entityId
+        : undefined) ?? pointId(point),
+  };
+}
+
+function chunkFromPoint(point: VectorMemoryPoint): ResourceChunk {
+  return {
+    ...(point.payload as unknown as ResourceChunk),
+    id:
+      (typeof point.payload.chunkId === "string"
+        ? point.payload.chunkId
+        : undefined) ?? pointId(point),
+  };
+}
+
+function relationTypesForContext(
+  context: MemoryQueryContext,
+  requested?: MemoryRelationType[],
+): MemoryRelationType[] | undefined {
+  const scoped = context.taskScope?.relationExpansionPolicy?.allowedRelationTypes;
+  return (
+    requested === undefined
+      ? scoped
+      : scoped === undefined
+        ? requested
+        : requested.filter((type) => scoped.includes(type))
+  );
+}
+
+function maxDepthForContext(
+  context: MemoryQueryContext,
+  requested: number,
+): number {
+  const scoped = context.taskScope?.relationExpansionPolicy?.maxDepth;
+  return scoped === undefined ? requested : Math.min(requested, scoped);
+}
+
+export class StoreBackedAuthorizedQuerySource implements MemoryQuerySource {
+  private readonly vectors: VectorMemoryStore;
+  private readonly relations: MemoryRelationStore;
+  private readonly origin: RetrievalOrigin;
+  private readonly bm25: Bm25Index | undefined;
+
+  constructor(
+    vectors: VectorMemoryStore,
+    relations: MemoryRelationStore,
+    origin: RetrievalOrigin = "cloud_active",
+    bm25?: Bm25Index,
+  ) {
+    this.vectors = vectors;
+    this.relations = relations;
+    this.origin = origin;
+    this.bm25 = bm25;
+  }
+
+  async keywordSearch(
+    context: MemoryQueryContext,
+    text: string,
+    limit = 20,
+  ): Promise<MemoryRetrievalItem[]> {
+    const [branches, chunkItems] = await Promise.all([
+      this.vectors.list({
+        collection: "memory_entity_branches",
+        filter: entityFilter(context),
+        limit,
+      }),
+      this.keywordChunks(context, text, limit),
+    ]);
+    const entityItems = await this.entityItemsForBranches(
+      context,
+      branches.filter((point) => {
+        const branch = branchFromPoint(point);
+        return (
+          includesText(branch.title, text) ||
+          includesText(branch.description, text) ||
+          branch.tags.some((tag) => includesText(tag, text))
+        );
+      }),
+    );
+    return [...entityItems, ...chunkItems].slice(0, limit);
+  }
+
+  async semanticSearch(
+    context: MemoryQueryContext,
+    embedding: number[],
+    limit = 20,
+  ): Promise<MemoryRetrievalItem[]> {
+    const [branchPoints, chunkPoints] = await Promise.all([
+      this.vectors.search({
+        collection: "memory_entity_branches",
+        vector: embedding,
+        filter: entityFilter(context),
+        limit,
+      }),
+      this.vectors.search({
+        collection: "resource_chunks",
+        vector: embedding,
+        filter: resourceFilter(context),
+        limit,
+      }),
+    ]);
+    const entityItems = await this.entityItemsForBranches(context, branchPoints);
+    const chunkItems: ResourceChunkRetrievalItem[] = chunkPoints
+      .map((point) => ({ point, chunk: chunkFromPoint(point) }))
+      .filter(({ chunk }) => !isDeniedResource(context, chunk.resourceId))
+      .map(({ point, chunk }) => ({
+        kind: "resource_chunk",
+        chunk,
+        score: point.score ?? 0,
+        origin: this.origin,
+      }));
+    return [...entityItems, ...chunkItems]
+      .sort((left, right) => right.score - left.score)
+      .slice(0, limit);
+  }
+
+  async entitySearch(
+    context: MemoryQueryContext,
+    options: {
+      text?: string;
+      entityIds?: string[];
+      limit?: number;
+    },
+  ): Promise<EntityRetrievalItem[]> {
+    const branches = await this.vectors.list({
+      collection: "memory_entity_branches",
+      filter: entityFilter(context, options.entityIds),
+      ...(options.limit === undefined ? {} : { limit: options.limit }),
+    });
+    return (
+      await this.entityItemsForBranches(
+        context,
+        branches.filter((point) => {
+          const branch = branchFromPoint(point);
+          return (
+            options.text === undefined ||
+            includesText(branch.title, options.text) ||
+            includesText(branch.description, options.text) ||
+            branch.tags.some((tag) => includesText(tag, options.text ?? ""))
+          );
+        }),
+      )
+    ).slice(0, options.limit ?? 20);
+  }
+
+  async expandRelations(
+    context: MemoryQueryContext,
+    options: {
+      startEntityId: string;
+      relationTypes?: MemoryRelationType[];
+      maxDepth: number;
+    },
+  ): Promise<RelationRetrievalItem[]> {
+    const maxDepth = maxDepthForContext(context, options.maxDepth);
+    const relationTypes = relationTypesForContext(
+      context,
+      options.relationTypes,
+    );
+    if (maxDepth === 0 || relationTypes?.length === 0) {
+      return [];
+    }
+
+    const results: RelationRetrievalItem[] = [];
+    let frontier = [options.startEntityId].filter(
+      (id) => !isDeniedEntity(context, id),
+    );
+    const visited = new Set(frontier);
+    for (let depth = 1; depth <= maxDepth; depth += 1) {
+      const next: string[] = [];
+      for (const sourceId of frontier) {
+        const relations = await this.relations.list({
+          rootEntityId: context.rootEntityId,
+          branchRef: context.branchRef,
+          sourceId,
+          ...(relationTypes === undefined ? {} : { relationTypes }),
+          status: "active",
+        });
+        for (const relation of relations) {
+          results.push({
+            kind: "relation",
+            relation,
+            depth,
+            score: relation.weight,
+            origin: this.origin,
+          });
+          if (
+            relation.targetKind === "memory_entity" &&
+            !visited.has(relation.targetId) &&
+            !isDeniedEntity(context, relation.targetId)
+          ) {
+            visited.add(relation.targetId);
+            next.push(relation.targetId);
+          }
+        }
+      }
+      frontier = next;
+      if (frontier.length === 0) {
+        break;
+      }
+    }
+    return results;
+  }
+
+  async evidenceFor(
+    context: MemoryQueryContext,
+    entityIds: string[],
+  ): Promise<Map<string, ResourceChunk[]>> {
+    const result = new Map<string, ResourceChunk[]>();
+    const scopedEntityIds = entityIds.filter((id) => !isDeniedEntity(context, id));
+    for (const entityId of scopedEntityIds) {
+      const evidenceRelations = await this.relations.list({
+        rootEntityId: context.rootEntityId,
+        branchRef: context.branchRef,
+        sourceId: entityId,
+        relationTypes: ["refers_to"],
+        status: "active",
+      });
+      const chunks = await this.vectors.list({
+        collection: "resource_chunks",
+        filter: resourceFilter(context),
+        limit: 100,
+      });
+      const byId = new Map(
+        chunks
+          .map(chunkFromPoint)
+          .filter((chunk) => !isDeniedResource(context, chunk.resourceId))
+          .map((chunk) => [chunk.id, chunk]),
+      );
+      const evidence = evidenceRelations
+        .filter((relation) => relation.targetKind === "resource_chunk")
+        .map((relation) => byId.get(relation.targetId))
+        .filter((chunk): chunk is ResourceChunk => chunk !== undefined);
+      if (evidence.length > 0) {
+        result.set(entityId, evidence);
+      }
+    }
+    return result;
+  }
+
+  private async entityItemsForBranches(
+    context: MemoryQueryContext,
+    points: VectorMemoryPoint[],
+  ): Promise<EntityRetrievalItem[]> {
+    const items: EntityRetrievalItem[] = [];
+    for (const point of points) {
+      const branch = branchFromPoint(point);
+      if (isDeniedEntity(context, branch.entityId)) {
+        continue;
+      }
+      const entityPoint = await this.vectors.get(
+        "memory_entities",
+        branch.entityId,
+      );
+      if (entityPoint === undefined) {
+        continue;
+      }
+      const entity = entityFromPoint(entityPoint);
+      if (entity.status !== "active" || isDeniedEntity(context, entity.id)) {
+        continue;
+      }
+      items.push({
+        kind: "entity",
+        entity,
+        branch,
+        evidence: [],
+        score: point.score ?? 1,
+        origin: this.origin,
+      });
+    }
+    return items;
+  }
+
+  private async keywordChunks(
+    context: MemoryQueryContext,
+    text: string,
+    limit: number,
+  ): Promise<ResourceChunkRetrievalItem[]> {
+    if (this.bm25 !== undefined) {
+      const results = await this.bm25.search({
+        rootEntityId: context.rootEntityId,
+        branchRef: context.branchRef,
+        text,
+        limit,
+        ...(context.taskScope?.allowedResourceIds === undefined
+          ? {}
+          : { allowedResourceIds: context.taskScope.allowedResourceIds }),
+        ...(context.taskScope?.deniedResourceIds === undefined
+          ? {}
+          : { deniedResourceIds: context.taskScope.deniedResourceIds }),
+      });
+      const chunks = await this.vectors.list({
+        collection: "resource_chunks",
+        filter: resourceFilter(context),
+        limit: Math.max(results.length, limit),
+      });
+      const byId = new Map(
+        chunks
+          .map(chunkFromPoint)
+          .filter((chunk) => !isDeniedResource(context, chunk.resourceId))
+          .map((chunk) => [chunk.id, chunk]),
+      );
+      const matched: Array<{
+        result: (typeof results)[number];
+        chunk: ResourceChunk;
+      }> = [];
+      for (const result of results) {
+        const chunk = byId.get(result.document.chunkId);
+        if (chunk !== undefined) {
+          matched.push({ result, chunk });
+        }
+      }
+      return matched.map(({ result, chunk }) => ({
+          kind: "resource_chunk",
+          chunk,
+          score: result.score,
+          origin: this.origin,
+        }));
+    }
+    const chunks = await this.vectors.list({
+      collection: "resource_chunks",
+      filter: resourceFilter(context),
+      limit,
+    });
+    return chunks
+      .map(chunkFromPoint)
+      .filter(
+        (chunk) =>
+          !isDeniedResource(context, chunk.resourceId) &&
+          includesText(chunk.text, text),
+      )
+      .map((chunk) => ({
+        kind: "resource_chunk",
+        chunk,
+        score: 1,
+        origin: this.origin,
+      }));
   }
 }
 

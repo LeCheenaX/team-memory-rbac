@@ -141,6 +141,9 @@ export interface ResourceChunk {
     startLine?: number;
     endLine?: number;
     tokenCount?: number;
+    revisionId?: string;
+    contentHash?: string;
+    [key: string]: unknown;
   };
   createdAt: string;
   updatedAt: string;
