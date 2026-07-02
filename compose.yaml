@@ -38,6 +38,7 @@ services:
     build: .
     environment:
       LIBSQL_URL: http://libsql:8080
+      CAS_BACKEND: object_store
       CAS_DIRECTORY: /data/cas
       QDRANT_URL: http://qdrant:6333
       OBJECT_STORE_URL: http://object-store:9000

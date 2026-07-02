@@ -49,13 +49,16 @@ async function setup() {
 async function close(
   fixture: Awaited<ReturnType<typeof setup>>,
 ): Promise<void> {
+  fixture.server.closeAllConnections();
+  fixture.server.closeIdleConnections();
   await new Promise<void>((resolve) => fixture.server.close(() => resolve()));
   fixture.runtime.close();
+  await new Promise((resolve) => setTimeout(resolve, 500));
   await rm(fixture.directory, {
     recursive: true,
     force: true,
     maxRetries: 20,
-    retryDelay: 100,
+    retryDelay: 250,
   });
 }
 

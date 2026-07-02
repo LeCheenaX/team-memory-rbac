@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentDelegation, Permission, UserRootRoleAssignment } from "../../contracts/rbac.ts";
+import type { AgentIdentity, User } from "../../contracts/rbac.ts";
 import type { PolicyEngine } from "../../contracts/rbac.ts";
 import { validateAgentDelegation } from "../../rbac/validation.ts";
 import { LibsqlRbacAuthority, type AuthenticatedSession } from "./rbac-authority.ts";
@@ -52,6 +53,26 @@ export class PersistentRbacAdminService {
     if (delegation === undefined) throw new Error("delegation not found in this root");
     await this.authority.revokeDelegation(delegation.id, this.clock());
     await this.audit(session, "revoke_delegation", { delegationId: delegation.id, agentId: delegation.agentId });
+  }
+
+  async disableUser(session: AuthenticatedSession, input: { userId: string }): Promise<User> {
+    await this.requireHumanAdmin(session, "revoke_user_role");
+    const user = await this.authority.getUser(input.userId);
+    if (user === undefined) throw new Error("user not found");
+    const updated: User = { ...user, status: "disabled", updatedAt: this.clock() };
+    await this.authority.saveUser(updated);
+    await this.audit(session, "disable_user", { userId: input.userId });
+    return updated;
+  }
+
+  async disableAgent(session: AuthenticatedSession, input: { agentId: string }): Promise<AgentIdentity> {
+    await this.requireHumanAdmin(session, "revoke_user_role");
+    const agent = await this.authority.getAgent(input.agentId);
+    if (agent === undefined || agent.ownerUserId !== session.userId) throw new Error("agent not found for this administrator");
+    const updated: AgentIdentity = { ...agent, status: "disabled", updatedAt: this.clock() };
+    await this.authority.saveAgent(updated);
+    await this.audit(session, "disable_agent", { agentId: input.agentId });
+    return updated;
   }
 
   private async requireHumanAdmin(session: AuthenticatedSession, action: "assign_user_role" | "revoke_user_role"): Promise<void> {

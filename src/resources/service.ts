@@ -63,7 +63,7 @@ export class ResourceService {
     const rootEntityId = session.rootEntityId;
     const branchRef = input.branchRef ?? "main";
     const hash = contentHash(input.content);
-    await this.cas.put({ contentHash: hash, content: input.content });
+    await this.putAndVerify(hash, input.content);
     const createdAt = this.now();
     const resourceId = input.resourceId ?? `resource:${randomUUID()}`;
     const revisionId = input.revisionId ?? `revision:${randomUUID()}`;
@@ -101,7 +101,7 @@ export class ResourceService {
     if (resource === undefined) throw new ResourceNotFoundError();
     await this.require(session, "import_resource", "resource", input.resourceId);
     const hash = contentHash(input.content);
-    await this.cas.put({ contentHash: hash, content: input.content });
+    await this.putAndVerify(hash, input.content);
     const revisionId = input.revisionId ?? `revision:${randomUUID()}`;
     await this.write(session, {
       clientMutationId: input.clientMutationId,
@@ -153,6 +153,14 @@ export class ResourceService {
   private async require(session: AuthenticatedSession, action: "import_resource", resourceKind: "resource", resourceId: string): Promise<void> {
     const decision = await this.policy.decide({ subject: session.subject, rootEntityId: session.rootEntityId, action, resourceKind, resourceId, taskScope: session.taskScope });
     if (!decision.allowed) throw new ResourceNotFoundError();
+  }
+
+  private async putAndVerify(hash: string, content: string | Uint8Array): Promise<void> {
+    await this.cas.put({ contentHash: hash, content });
+    const object = await this.cas.get(hash);
+    if (object === undefined || object.contentHash !== hash || contentHash(object.content) !== hash) {
+      throw new Error("CAS object is not durably readable after write");
+    }
   }
 
   private findRevision(rootEntityId: string, branchRef: string, resourceId: string, requestedRevisionId?: string): { id: string; contentHash: string } | undefined {

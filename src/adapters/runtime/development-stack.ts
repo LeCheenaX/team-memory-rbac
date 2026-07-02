@@ -1,5 +1,6 @@
 import type { Client } from "@libsql/client";
 import { FileSystemResourceCas } from "../cas/filesystem.ts";
+import { ObjectStoreResourceCas } from "../cas/object-store.ts";
 import { createLibsqlClient } from "../libsql/client.ts";
 import { LibsqlHistoryAuthority } from "../libsql/history-authority.ts";
 import { LibsqlRbacAuthority, type CreatedSession } from "../libsql/rbac-authority.ts";
@@ -19,13 +20,17 @@ import {
 } from "../../memory/retrieval.ts";
 import { PermissionRouter } from "../../permission-router.ts";
 import { ResourceIngestionService } from "../../ingestion/service.ts";
+import type { ResourceCas } from "../../memory/stores.ts";
+
+export type CasBackendKind = "filesystem" | "object_store";
 
 export interface RuntimeConfig {
   libsqlUrl: string;
   libsqlAuthToken?: string;
-  casDirectory: string;
+  casBackend?: CasBackendKind;
+  casDirectory?: string;
   qdrantUrl: string;
-  objectStoreUrl: string;
+  objectStoreUrl?: string;
   qdrantApiKey?: string;
 }
 
@@ -36,12 +41,17 @@ export function loadRuntimeConfig(environment: Record<string, string | undefined
     return value;
   };
   const authToken = environment.LIBSQL_AUTH_TOKEN;
+  const casBackend = required("CAS_BACKEND");
+  if (casBackend !== "filesystem" && casBackend !== "object_store") {
+    throw new Error("CAS_BACKEND must be filesystem or object_store");
+  }
   return {
     libsqlUrl: required("LIBSQL_URL"),
     ...(authToken === undefined || authToken.length === 0 ? {} : { libsqlAuthToken: authToken }),
-    casDirectory: required("CAS_DIRECTORY"),
+    casBackend,
+    ...(casBackend === "filesystem" ? { casDirectory: required("CAS_DIRECTORY") } : {}),
     qdrantUrl: required("QDRANT_URL"),
-    objectStoreUrl: required("OBJECT_STORE_URL"),
+    ...(casBackend === "object_store" ? { objectStoreUrl: required("OBJECT_STORE_URL") } : {}),
     ...(environment.QDRANT_API_KEY === undefined ||
     environment.QDRANT_API_KEY.length === 0
       ? {}
@@ -49,12 +59,28 @@ export function loadRuntimeConfig(environment: Record<string, string | undefined
   };
 }
 
+function createResourceCas(config: RuntimeConfig): ResourceCas {
+  const backend = config.casBackend ?? "filesystem";
+  if (backend === "object_store") {
+    if (config.objectStoreUrl === undefined) throw new Error("OBJECT_STORE_URL must be configured for object_store CAS");
+    return new ObjectStoreResourceCas(config.objectStoreUrl);
+  }
+  if (config.casDirectory === undefined) throw new Error("CAS_DIRECTORY must be configured for filesystem CAS");
+  return new FileSystemResourceCas(config.casDirectory);
+}
+
+async function readyCas(cas: ResourceCas): Promise<void> {
+  if ("ready" in cas && typeof cas.ready === "function") {
+    await cas.ready();
+  }
+}
+
 export class TeamMemoryRuntime {
   readonly client: Client;
   readonly rbac: LibsqlRbacAuthority;
   readonly history: LibsqlHistoryAuthority;
   readonly policy: ScopedPolicyEngine;
-  readonly cas: FileSystemResourceCas;
+  readonly cas: ResourceCas;
   readonly resources: ResourceService;
   readonly admin: PersistentRbacAdminService;
   readonly vectors: QdrantVectorMemoryStore;
@@ -72,7 +98,7 @@ export class TeamMemoryRuntime {
     rbac: LibsqlRbacAuthority,
     history: LibsqlHistoryAuthority,
     policy: ScopedPolicyEngine,
-    cas: FileSystemResourceCas,
+    cas: ResourceCas,
     resources: ResourceService,
     admin: PersistentRbacAdminService,
     vectors: QdrantVectorMemoryStore,
@@ -88,8 +114,8 @@ export class TeamMemoryRuntime {
     const rbac = await LibsqlRbacAuthority.create(client);
     const history = await LibsqlHistoryAuthority.create(client);
     const policy = new ScopedPolicyEngine(rbac);
-    const cas = new FileSystemResourceCas(config.casDirectory);
-    await cas.ready();
+    const cas = createResourceCas(config);
+    await readyCas(cas);
     const resources = new ResourceService(policy, history, cas);
     const admin = new PersistentRbacAdminService(rbac, policy);
     const vectors = new QdrantVectorMemoryStore({ url: config.qdrantUrl, ...(config.qdrantApiKey === undefined ? {} : { apiKey: config.qdrantApiKey }) });
@@ -102,12 +128,15 @@ export class TeamMemoryRuntime {
 
   async ready(): Promise<void> {
     await this.client.execute("select 1");
-    await this.cas.ready();
-    const [qdrant, objectStore] = await Promise.all([
+    await readyCas(this.cas);
+    const checks = [
       fetch(new URL("/healthz", this.config.qdrantUrl)).then((response) => { if (!response.ok) throw new Error(`Qdrant is not ready (${response.status})`); }),
-      fetch(new URL("/minio/health/live", this.config.objectStoreUrl)).then((response) => { if (!response.ok) throw new Error(`object store is not ready (${response.status})`); }),
-    ]);
-    void qdrant; void objectStore;
+    ];
+    if ((this.config.casBackend ?? "filesystem") === "object_store") {
+      if (this.config.objectStoreUrl === undefined) throw new Error("OBJECT_STORE_URL must be configured for object_store CAS");
+      checks.push(fetch(new URL("/minio/health/live", this.config.objectStoreUrl)).then((response) => { if (!response.ok) throw new Error(`object store is not ready (${response.status})`); }));
+    }
+    await Promise.all(checks);
   }
 
   /** Create a new RootEntity from an existing human administrator session. */

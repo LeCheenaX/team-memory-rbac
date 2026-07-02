@@ -3,7 +3,6 @@ import {
   CloudAuthorizedViewAdapter,
   ConflictResolutionAdapter,
   InMemoryAuthorizedQuerySource,
-  InMemoryPermissionWatermarkAuthority,
   MemoryRetrievalAdapter,
   PermissionRouter,
   type AuthorizedSyncBatch,
@@ -14,6 +13,7 @@ import {
   type ConflictResolutionResult,
   type MemoryAction,
   type MemoryObjectKind,
+  type PermissionWatermarkProvider,
   type MemoryRetrievalRequest,
   type MemoryRetrievalResult,
   type PermissionDecision,
@@ -51,7 +51,7 @@ export class TeamMemoryGatewayError extends Error {
 
 export interface TeamMemoryGatewayOptions {
   retrieval?: "runtime" | "active-view";
-  permissionWatermarks?: InMemoryPermissionWatermarkAuthority;
+  permissionWatermarks?: PermissionWatermarkProvider;
 }
 
 const forbiddenPayloadFields = new Set([
@@ -230,8 +230,7 @@ export class TeamMemoryGateway {
       runtime.policy,
       new CloudAuthorizedViewAdapter(
         runtime.history,
-        options.permissionWatermarks ??
-          new InMemoryPermissionWatermarkAuthority(),
+        options.permissionWatermarks ?? runtime.rbac,
       ),
     );
   }

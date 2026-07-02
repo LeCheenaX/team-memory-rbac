@@ -1,24 +1,39 @@
 import assert from "node:assert/strict";
+import { createServer, type IncomingMessage } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { FileSystemResourceCas, contentHash } from "../src/adapters/cas/filesystem.ts";
+import { ObjectStoreResourceCas } from "../src/adapters/cas/object-store.ts";
 import { LibsqlHistoryAuthority } from "../src/adapters/libsql/history-authority.ts";
 import { LibsqlRbacAuthority } from "../src/adapters/libsql/rbac-authority.ts";
 import { createLibsqlClient } from "../src/adapters/libsql/client.ts";
-import { bootstrapDevelopment, TeamMemoryRuntime } from "../src/adapters/runtime/development-stack.ts";
+import { bootstrapDevelopment, loadRuntimeConfig, TeamMemoryRuntime } from "../src/adapters/runtime/development-stack.ts";
 import { createTeamMemoryServer } from "../src/adapters/http/server.ts";
-import { ScopedPolicyEngine } from "../src/rbac/policy-engine.ts";
-import { ResourceNotFoundError } from "../src/resources/service.ts";
+import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
+import { ResourceNotFoundError, ResourceService } from "../src/resources/service.ts";
+import {
+  AuthorizedWorkingReplicaSynchronizer,
+  CloudAuthorizedViewAdapter,
+  InMemoryLocalAuthorizedWorkingReplica,
+  PermissionRouter,
+  SynchronizedLocalQuerySource,
+  InMemoryCloudMemoryAuthority,
+  type PermissionDecision,
+  type PermissionRequest,
+  type PolicyEngine,
+} from "../src/index.ts";
+import type { ResourceCas, ResourceCasObject } from "../src/memory/stores.ts";
 
 async function temporaryDirectory(): Promise<string> {
   return mkdtemp(join(tmpdir(), "team-memory-rbac-"));
 }
 
 async function removeTemporary(directory: string): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
 }
 
 function allowedRootWrite(rootEntityId: string) {
@@ -48,6 +63,62 @@ function allowedRootWrite(rootEntityId: string) {
       constraints: { allowRootEntityMutation: true },
     },
   };
+}
+
+async function readRequest(request: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+async function objectStoreFixture(): Promise<{ url: string; close(): Promise<void> }> {
+  const objects = new Map<string, Buffer>();
+  const server = createServer(async (request, response) => {
+    if (request.url === "/minio/health/live") {
+      response.writeHead(200).end("ok");
+      return;
+    }
+    if (request.url?.startsWith("/cas/sha256/") !== true) {
+      response.writeHead(404).end();
+      return;
+    }
+    if (request.method === "PUT") {
+      objects.set(request.url, await readRequest(request));
+      response.writeHead(201).end();
+      return;
+    }
+    if (request.method === "GET") {
+      const object = objects.get(request.url);
+      if (object === undefined) {
+        response.writeHead(404).end();
+      } else {
+        response.writeHead(200).end(object);
+      }
+      return;
+    }
+    response.writeHead(405).end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address !== null && typeof address !== "string");
+  if (address === null || typeof address === "string") throw new Error("server did not bind");
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+class AllowAllPolicy implements PolicyEngine {
+  async decide(request: PermissionRequest): Promise<PermissionDecision> {
+    const subjectId = request.subject.kind === "user" ? request.subject.userId : request.subject.agentId;
+    return { allowed: true, reason: "test", subjectId, subjectKind: request.subject.kind, rootEntityId: request.rootEntityId, action: request.action, resourceKind: request.resourceKind, matchedRoles: ["role-test"], missingActions: [], constraints: {} };
+  }
+}
+
+class UnreadableCas implements ResourceCas {
+  async put(_object: ResourceCasObject): Promise<void> {}
+  async get(_contentHash: string): Promise<ResourceCasObject | undefined> { return undefined; }
+  async remove(_contentHash: string): Promise<void> {}
 }
 
 test("libSQL authorities survive restart and revoked delegations invalidate sessions", async () => {
@@ -120,12 +191,124 @@ test("authorized CAS imports preserve revisions and do not reveal tombstoned res
   } finally { runtime.close(); }
 });
 
+test("production v1 architecture and CAS deployment modes are documented", async () => {
+  const notes = await readFile("DESIGN-NOTES.md", "utf8");
+  assert.match(notes, /one logical Cloud Authority/);
+  assert.match(notes, /single service worker/);
+  assert.match(notes, /same durable shared volume/);
+  assert.match(notes, /object_store/);
+  assert.match(notes, /CP distributed\s+systems/);
+  assert.match(notes, /not an AP multi-master design/);
+
+  assert.equal(loadRuntimeConfig({ LIBSQL_URL: "file:prod.db", CAS_BACKEND: "filesystem", CAS_DIRECTORY: "/var/cas", QDRANT_URL: "http://qdrant" }).casBackend, "filesystem");
+  assert.equal(loadRuntimeConfig({ LIBSQL_URL: "file:prod.db", CAS_BACKEND: "object_store", OBJECT_STORE_URL: "http://objects", QDRANT_URL: "http://qdrant" }).casBackend, "object_store");
+  assert.throws(() => loadRuntimeConfig({ LIBSQL_URL: "file:prod.db", CAS_DIRECTORY: "/var/cas", QDRANT_URL: "http://qdrant" }), /CAS_BACKEND/);
+});
+
+test("CAS-first visibility blocks History commits when CAS is not durably readable", async () => {
+  const history = new InMemoryCloudMemoryAuthority();
+  const service = new ResourceService(new AllowAllPolicy(), history, new UnreadableCas());
+  await assert.rejects(
+    () => service.import({
+      sessionId: "session-cas",
+      userId: "user-cas",
+      rootEntityId: "root-cas",
+      taskScope: { rootEntityId: "root-cas" },
+      subject: { kind: "user", userId: "user-cas" },
+    }, {
+      clientMutationId: "import-unreadable",
+      resourceId: "resource-unreadable",
+      title: "Unreadable",
+      sourceType: "document",
+      content: "not durable",
+    }),
+    /durably readable/,
+  );
+  assert.equal(history.commitWatermark(), 0);
+  assert.equal(history.readActiveView("root-cas", "main").resources.length, 0);
+});
+
+test("a second service worker reads filesystem CAS content through a shared volume", async () => {
+  const directory = await temporaryDirectory();
+  try {
+    const first = new FileSystemResourceCas(directory);
+    const second = new FileSystemResourceCas(directory);
+    const hash = contentHash("visible from worker two");
+    await first.ready();
+    await second.ready();
+    await first.put({ contentHash: hash, content: "visible from worker two" });
+    assert.equal(Buffer.from((await second.get(hash))?.content ?? "").toString(), "visible from worker two");
+  } finally {
+    await removeTemporary(directory);
+  }
+});
+
+test("a second service worker reads object-store CAS content imported by the first", async () => {
+  const objectStore = await objectStoreFixture();
+  try {
+    const first = new ObjectStoreResourceCas(objectStore.url);
+    const second = new ObjectStoreResourceCas(objectStore.url);
+    const hash = contentHash("visible through object store");
+    await first.put({ contentHash: hash, content: "visible through object store" });
+    assert.equal(Buffer.from((await second.get(hash))?.content ?? "").toString(), "visible through object store");
+  } finally {
+    await objectStore.close();
+  }
+});
+
 test("CAS rejects a claimed hash that does not match its bytes", async () => {
   const directory = await temporaryDirectory();
   try {
     const cas = new FileSystemResourceCas(directory);
     await assert.rejects(() => cas.put({ contentHash: contentHash("expected"), content: "different" }), /hash does not match/);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("gateway sync uses durable permission watermarks for role and delegation changes", async () => {
+  const directory = await temporaryDirectory();
+  const runtime = await TeamMemoryRuntime.create({ libsqlUrl: `file:${join(directory, "watermarks.db")}`, casDirectory: join(directory, "cas"), qdrantUrl: "http://127.0.0.1:6333" });
+  const gateway = new TeamMemoryGateway(runtime, { retrieval: "active-view" });
+  try {
+    const adminSession = await bootstrapDevelopment(runtime, { rootEntityId: "root-watermark", userId: "user-watermark", displayName: "Watermark Admin", sessionId: "session-watermark-admin", sessionExpiresAt: "2030-01-01T00:00:00.000Z", now: "2026-06-26T00:00:00.000Z" });
+    const initial = await gateway.pullSync(adminSession.token, { branchRef: "main" });
+    if (!("value" in initial)) assert.fail("expected sync");
+    await gateway.assignRole(adminSession.token, { assignmentId: "assignment-watermark-extra", userId: "user-watermark", roleId: "role-researcher" });
+    const changed = await gateway.pullSync(adminSession.token, {
+      branchRef: "main",
+      knownCommitWatermark: initial.value.identity.commitWatermark,
+      knownPermissionWatermark: initial.value.identity.permissionWatermark,
+      knownTaskScopeHash: initial.value.identity.taskScopeHash,
+    });
+    if (!("value" in changed)) assert.fail("expected sync");
+    assert.equal(changed.value.kind, "replace");
+    if (changed.value.kind !== "replace") assert.fail("expected replacement");
+    assert.equal(changed.value.reason, "permission_changed");
+
+    await runtime.rbac.saveAgent({ id: "agent-watermark", ownerUserId: "user-watermark", agentType: "sub_agent", displayName: "Watermark Agent", status: "active", createdAt: "2026-06-26T00:00:00.000Z", updatedAt: "2026-06-26T00:00:00.000Z" });
+    await gateway.createDelegation(adminSession.token, { delegationId: "delegation-watermark", agentId: "agent-watermark", permissions: [{ action: "read", resourceKind: "memory_entity", constraints: { allowRootEntityMutation: true } }, { action: "search", resourceKind: "memory_entity", constraints: { allowRootEntityMutation: true } }] });
+    const agentSession = await runtime.rbac.createSession({ id: "session-watermark-agent", userId: "user-watermark", agentId: "agent-watermark", delegationId: "delegation-watermark", rootEntityId: "root-watermark", taskScope: { rootEntityId: "root-watermark" }, expiresAt: "2030-01-01T00:00:00.000Z", createdAt: "2026-06-26T00:00:00.000Z" });
+    const agent = await runtime.rbac.authenticate(agentSession.token);
+    assert.ok(agent !== undefined);
+    if (agent === undefined) return;
+    const store = new InMemoryLocalAuthorizedWorkingReplica();
+    await new AuthorizedWorkingReplicaSynchronizer(
+      new PermissionRouter(runtime.policy, new CloudAuthorizedViewAdapter(runtime.history, runtime.rbac)),
+      store,
+    ).sync({ subject: agent.subject, rootEntityId: agent.rootEntityId, branchRef: "main", action: "read", resourceKind: "memory_entity", taskScope: agent.taskScope });
+    const localQuery = new SynchronizedLocalQuerySource(store, runtime.rbac);
+    assert.equal((await localQuery.entitySearch({ rootEntityId: "root-watermark", branchRef: "main", taskScope: agent.taskScope }, { entityIds: ["root-watermark"] }))[0]?.entity.id, "root-watermark");
+    const beforeRevoke = await runtime.rbac.getPermissionWatermark("agent-watermark", "root-watermark");
+    await gateway.revokeDelegation(adminSession.token, { delegationId: "delegation-watermark", agentId: "agent-watermark" });
+    assert.notEqual(await runtime.rbac.getPermissionWatermark("agent-watermark", "root-watermark"), beforeRevoke);
+    await assert.rejects(
+      () => localQuery.entitySearch({ rootEntityId: "root-watermark", branchRef: "main", taskScope: agent.taskScope }, { entityIds: ["root-watermark"] }),
+      /permission watermark changed/,
+    );
+    assert.equal(store.inspect().valid, false);
+  } finally {
+    runtime.close();
+    await removeTemporary(directory);
+  }
 });
 
 test("HTTP smoke flow bootstraps, imports, and reads through a trusted session", async () => {
@@ -150,6 +333,7 @@ test("HTTP smoke flow bootstraps, imports, and reads through a trusted session",
     assert.equal(read.status, 200);
     assert.equal(Buffer.from((await read.json() as { contentBase64: string }).contentBase64, "base64").toString(), "hello from HTTP");
   } finally {
+    server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     runtime.close();
   }

@@ -24,6 +24,7 @@ create index if not exists rbac_delegations_agent_root on rbac_delegations(agent
 create table if not exists rbac_sessions (session_id text primary key, token_hash text not null unique, user_id text not null, agent_id text, root_entity_id text not null, task_scope_json text not null, delegation_id text, parent_agent_id text, expires_at text not null, revoked_at text, created_at text not null);
 create table if not exists rbac_audit_log (audit_id text primary key, root_entity_id text not null, actor_user_id text not null, action text not null, payload_json text not null, created_at text not null);
 create index if not exists rbac_audit_log_root_created on rbac_audit_log(root_entity_id, created_at);
+create table if not exists rbac_permission_watermarks (subject_id text not null, root_entity_id text not null, watermark integer not null, updated_at text not null, primary key(subject_id, root_entity_id));
 `;
 
 export interface AuthenticatedSession {
@@ -148,6 +149,7 @@ export class LibsqlRbacAuthority implements RbacAuthority {
 
   async saveUser(user: User): Promise<void> {
     await this.upsert("rbac_users", "user_id", user.id, user);
+    await this.advanceUserEverywhere(user.id);
   }
 
   async saveAgent(agent: AgentIdentity): Promise<void> {
@@ -155,10 +157,12 @@ export class LibsqlRbacAuthority implements RbacAuthority {
       sql: "insert into rbac_agents(agent_id, owner_user_id, payload_json) values (?, ?, ?) on conflict(agent_id) do update set owner_user_id = excluded.owner_user_id, payload_json = excluded.payload_json",
       args: [agent.id, agent.ownerUserId, JSON.stringify(agent)],
     });
+    await this.advanceAgentEverywhere(agent.id);
   }
 
   async saveRole(role: Role): Promise<void> {
     await this.upsert("rbac_roles", "role_id", role.id, role);
+    await this.advanceRoleAssignments(role.id);
   }
 
   async saveAssignment(assignment: UserRootRoleAssignment): Promise<void> {
@@ -166,6 +170,7 @@ export class LibsqlRbacAuthority implements RbacAuthority {
       sql: "insert into rbac_assignments(assignment_id, user_id, root_entity_id, payload_json) values (?, ?, ?, ?) on conflict(assignment_id) do update set user_id = excluded.user_id, root_entity_id = excluded.root_entity_id, payload_json = excluded.payload_json",
       args: [assignment.id, assignment.userId, assignment.rootEntityId, JSON.stringify(assignment)],
     });
+    await this.advanceUserAtRoot(assignment.userId, assignment.rootEntityId);
   }
 
   async saveDelegation(delegation: AgentDelegation): Promise<void> {
@@ -173,14 +178,17 @@ export class LibsqlRbacAuthority implements RbacAuthority {
       sql: "insert into rbac_delegations(delegation_id, agent_id, owner_user_id, root_entity_id, payload_json) values (?, ?, ?, ?, ?) on conflict(delegation_id) do update set agent_id = excluded.agent_id, owner_user_id = excluded.owner_user_id, root_entity_id = excluded.root_entity_id, payload_json = excluded.payload_json",
       args: [delegation.id, delegation.agentId, delegation.ownerUserId, delegation.rootEntityId, JSON.stringify(delegation)],
     });
+    await this.advancePermissionWatermark(delegation.agentId, delegation.rootEntityId);
   }
 
   async revokeAssignment(id: string, revokedAt: string): Promise<void> {
-    await this.revoke<UserRootRoleAssignment>("rbac_assignments", "assignment_id", id, revokedAt);
+    const assignment = await this.revoke<UserRootRoleAssignment>("rbac_assignments", "assignment_id", id, revokedAt);
+    await this.advanceUserAtRoot(assignment.userId, assignment.rootEntityId);
   }
 
   async revokeDelegation(id: string, revokedAt: string): Promise<void> {
-    await this.revoke<AgentDelegation>("rbac_delegations", "delegation_id", id, revokedAt);
+    const delegation = await this.revoke<AgentDelegation>("rbac_delegations", "delegation_id", id, revokedAt);
+    await this.advancePermissionWatermark(delegation.agentId, delegation.rootEntityId);
   }
 
   async createSession(input: CreateSessionInput): Promise<CreatedSession> {
@@ -226,7 +234,9 @@ export class LibsqlRbacAuthority implements RbacAuthority {
   }
 
   async revokeSession(sessionId: string, revokedAt: string): Promise<void> {
+    const session = await this.sessionWatermarkSubject(sessionId);
     await this.client.execute({ sql: "update rbac_sessions set revoked_at = ? where session_id = ?", args: [revokedAt, sessionId] });
+    if (session !== undefined) await this.advancePermissionWatermark(session.subjectId, session.rootEntityId);
   }
 
   async authenticate(token: string): Promise<AuthenticatedSession | undefined> {
@@ -283,6 +293,28 @@ export class LibsqlRbacAuthority implements RbacAuthority {
     });
   }
 
+  async get(subjectId: string, rootEntityId: string): Promise<string> {
+    return this.getPermissionWatermark(subjectId, rootEntityId);
+  }
+
+  async getPermissionWatermark(subjectId: string, rootEntityId: string): Promise<string> {
+    const result = await this.client.execute({
+      sql: "select watermark from rbac_permission_watermarks where subject_id = ? and root_entity_id = ?",
+      args: [subjectId, rootEntityId],
+    });
+    const watermark = result.rows[0]?.watermark;
+    if (typeof watermark === "number" || typeof watermark === "bigint") return String(watermark);
+    return "0";
+  }
+
+  async advancePermissionWatermark(subjectId: string, rootEntityId: string, updatedAt = new Date().toISOString()): Promise<string> {
+    await this.client.execute({
+      sql: "insert into rbac_permission_watermarks(subject_id, root_entity_id, watermark, updated_at) values (?, ?, 1, ?) on conflict(subject_id, root_entity_id) do update set watermark = watermark + 1, updated_at = excluded.updated_at",
+      args: [subjectId, rootEntityId, updatedAt],
+    });
+    return this.getPermissionWatermark(subjectId, rootEntityId);
+  }
+
   private async getOne<T>(sql: string, args: InValue[]): Promise<T | undefined> {
     const result = await this.client.execute({ sql, args });
     const row = result.rows[0] as Record<string, unknown> | undefined;
@@ -298,7 +330,7 @@ export class LibsqlRbacAuthority implements RbacAuthority {
     await this.client.execute({ sql: `insert into ${table}(${idColumn}, payload_json) values (?, ?) on conflict(${idColumn}) do update set payload_json = excluded.payload_json`, args: [id, JSON.stringify(payload)] });
   }
 
-  private async revoke<T extends { status: "active" | "revoked"; revokedAt?: string }>(table: string, idColumn: string, id: string, revokedAt: string): Promise<void> {
+  private async revoke<T extends { status: "active" | "revoked"; revokedAt?: string }>(table: string, idColumn: string, id: string, revokedAt: string): Promise<T> {
     const result = await this.client.execute({ sql: `select payload_json from ${table} where ${idColumn} = ?`, args: [id] });
     const row = result.rows[0] as Record<string, unknown> | undefined;
     if (row === undefined) throw new Error(`${idColumn} not found: ${id}`);
@@ -306,6 +338,80 @@ export class LibsqlRbacAuthority implements RbacAuthority {
     record.status = "revoked";
     record.revokedAt = revokedAt;
     await this.client.execute({ sql: `update ${table} set payload_json = ? where ${idColumn} = ?`, args: [JSON.stringify(record), id] });
+    return record;
+  }
+
+  private async advanceUserAtRoot(userId: string, rootEntityId: string): Promise<void> {
+    await this.advancePermissionWatermark(userId, rootEntityId);
+    const agentIds = await this.agentIdsOwnedByUserAtRoot(userId, rootEntityId);
+    for (const agentId of agentIds) await this.advancePermissionWatermark(agentId, rootEntityId);
+  }
+
+  private async advanceUserEverywhere(userId: string): Promise<void> {
+    const roots = await this.rootsForUser(userId);
+    for (const rootEntityId of roots) await this.advanceUserAtRoot(userId, rootEntityId);
+  }
+
+  private async advanceAgentEverywhere(agentId: string): Promise<void> {
+    const roots = await this.rootsForAgent(agentId);
+    for (const rootEntityId of roots) await this.advancePermissionWatermark(agentId, rootEntityId);
+  }
+
+  private async advanceRoleAssignments(roleId: string): Promise<void> {
+    const assignments = await this.getMany<UserRootRoleAssignment>("select payload_json from rbac_assignments", []);
+    const affected = new Set(
+      assignments
+        .filter((assignment) => assignment.roleId === roleId)
+        .map((assignment) => `${assignment.userId}\0${assignment.rootEntityId}`),
+    );
+    for (const key of affected) {
+      const [userId, rootEntityId] = key.split("\0");
+      if (userId !== undefined && rootEntityId !== undefined) await this.advanceUserAtRoot(userId, rootEntityId);
+    }
+  }
+
+  private async rootsForUser(userId: string): Promise<string[]> {
+    const [assignmentRows, delegationRows] = await Promise.all([
+      this.client.execute({ sql: "select distinct root_entity_id from rbac_assignments where user_id = ?", args: [userId] }),
+      this.client.execute({ sql: "select distinct root_entity_id from rbac_delegations where owner_user_id = ?", args: [userId] }),
+    ]);
+    return [...new Set([...assignmentRows.rows, ...delegationRows.rows].flatMap((row) => {
+      const value = (row as Record<string, unknown>).root_entity_id;
+      return typeof value === "string" ? [value] : [];
+    }))];
+  }
+
+  private async rootsForAgent(agentId: string): Promise<string[]> {
+    const result = await this.client.execute({ sql: "select distinct root_entity_id from rbac_delegations where agent_id = ?", args: [agentId] });
+    return result.rows.flatMap((row) => {
+      const value = (row as Record<string, unknown>).root_entity_id;
+      return typeof value === "string" ? [value] : [];
+    });
+  }
+
+  private async agentIdsOwnedByUserAtRoot(userId: string, rootEntityId: string): Promise<string[]> {
+    const result = await this.client.execute({
+      sql: "select distinct agent_id from rbac_delegations where owner_user_id = ? and root_entity_id = ?",
+      args: [userId, rootEntityId],
+    });
+    return result.rows.flatMap((row) => {
+      const value = (row as Record<string, unknown>).agent_id;
+      return typeof value === "string" ? [value] : [];
+    });
+  }
+
+  private async sessionWatermarkSubject(sessionId: string): Promise<{ subjectId: string; rootEntityId: string } | undefined> {
+    const result = await this.client.execute({
+      sql: "select user_id, agent_id, root_entity_id from rbac_sessions where session_id = ?",
+      args: [sessionId],
+    });
+    const row = result.rows[0] as Record<string, unknown> | undefined;
+    if (row === undefined) return undefined;
+    const userId = value(row, "user_id");
+    const agentId = value(row, "agent_id");
+    const rootEntityId = value(row, "root_entity_id");
+    if (userId === null || rootEntityId === null) return undefined;
+    return { subjectId: agentId ?? userId, rootEntityId };
   }
 }
 

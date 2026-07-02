@@ -13,7 +13,13 @@ function pathFor(rootDirectory: string, contentHash: string): string {
   return join(rootDirectory, "sha256", match[1].slice(0, 2), match[1]);
 }
 
-/** Immutable filesystem CAS; suitable for a mounted development object volume. */
+/**
+ * Immutable filesystem CAS.
+ *
+ * Production use is limited to a single service worker or multiple workers
+ * sharing the same durable volume. Workers with independent filesystems must
+ * use the object-store CAS backend instead.
+ */
 export class FileSystemResourceCas implements ResourceCas {
   private readonly rootDirectory: string;
 
