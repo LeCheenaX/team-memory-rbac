@@ -10,6 +10,7 @@ export type TeamManagementCommand =
   | ["delegations", "list"]
   | ["delegations", "create", string, string, string]
   | ["delegations", "revoke", string, string]
+  | ["agents", "onboard", string, string, string, string]
   | ["conflicts", "list"]
   | ["conflicts", "resolve", string, "keep_target" | "take_incoming" | "manual_merge"]
   | ["replica", "status"]
@@ -33,6 +34,13 @@ export class TeamManagementCli {
         return this.members(token, command);
       case "delegations":
         return this.delegations(token, command);
+      case "agents":
+        return this.gateway.onboardAgent(token, {
+          agentId: command[2],
+          delegationId: command[3],
+          sessionId: command[4],
+          sessionExpiresAt: command[5],
+        });
       case "conflicts":
         return this.conflicts(token, command);
       case "replica":
@@ -107,6 +115,16 @@ export function parseTeamManagementCommand(args: string[]): TeamManagementComman
   }
   if (area === "delegations" && action === "revoke" && first !== undefined && second !== undefined) {
     return ["delegations", "revoke", first, second];
+  }
+  if (
+    area === "agents" &&
+    action === "onboard" &&
+    first !== undefined &&
+    second !== undefined &&
+    third !== undefined &&
+    args[5] !== undefined
+  ) {
+    return ["agents", "onboard", first, second, third, args[5]];
   }
   if (area === "conflicts" && action === "list") return ["conflicts", "list"];
   if (

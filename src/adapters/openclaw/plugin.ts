@@ -1,0 +1,127 @@
+import { TeamMemoryHttpClient } from "../http/client.ts";
+import type {
+  AgentMemoryIntegrationMode,
+} from "../agent/transports.ts";
+
+export interface OpenClawTeamMemoryPluginOptions {
+  baseUrl: string;
+  token: string;
+  mode: AgentMemoryIntegrationMode;
+  fetch?: typeof fetch;
+}
+
+export interface OpenClawToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: "object";
+    additionalProperties: true;
+  };
+}
+
+/** Host-facing OpenClaw adapter for both tool-plugin and active-memory modes. */
+export class OpenClawTeamMemoryPlugin {
+  readonly id = "team-memory-rbac";
+  readonly mode: AgentMemoryIntegrationMode;
+  private readonly client: TeamMemoryHttpClient;
+
+  constructor(options: OpenClawTeamMemoryPluginOptions) {
+    this.mode = options.mode;
+    this.client = new TeamMemoryHttpClient(options);
+  }
+
+  tools(): OpenClawToolDefinition[] {
+    const common = [
+      this.tool("team_memory.search", "Search RBAC-protected Team Memory"),
+      this.tool("team_memory.write", "Write RBAC-protected Team Memory"),
+      this.tool("team_memory.import_resource", "Import a resource into Team Memory"),
+      this.tool("team_memory.read_resource", "Read a Team Memory resource"),
+    ];
+    if (this.mode === "parallel_native_team_memory") return common;
+    return [
+      this.tool("memory_search", "OpenClaw active-memory recall through Team Memory"),
+      this.tool("memory_get", "OpenClaw active-memory resource lookup through Team Memory"),
+      this.tool("memory_write", "OpenClaw active-memory write through Team Memory"),
+      this.tool("memory_import", "OpenClaw active-memory import through Team Memory"),
+    ];
+  }
+
+  async call(name: string, input: Record<string, unknown>): Promise<unknown> {
+    switch (name) {
+      case "team_memory.search":
+      case "memory_search":
+        return this.client.search(this.normalizeSearch(input));
+      case "team_memory.write":
+      case "memory_write":
+        return this.client.write(input);
+      case "team_memory.import_resource":
+      case "memory_import":
+        return this.client.importResource(input);
+      case "team_memory.read_resource":
+      case "memory_get":
+        return this.client.readResource(
+          this.requiredString(input, "resourceId"),
+          typeof input.revisionId === "string" ? input.revisionId : undefined,
+        );
+      default:
+        throw new Error(`unknown OpenClaw Team Memory tool: ${name}`);
+    }
+  }
+
+  manifest(): Record<string, unknown> {
+    return {
+      id: this.id,
+      name: "Team Memory RBAC",
+      mode: this.mode,
+      slot: this.mode === "team_memory_replaces_native" ? "memory" : undefined,
+      tools: this.tools(),
+    };
+  }
+
+  private normalizeSearch(input: Record<string, unknown>): Record<string, unknown> {
+    if ("query" in input) return input;
+    const text = this.requiredString(input, "text");
+    return {
+      ...input,
+      query: { kind: "entity", text },
+    };
+  }
+
+  private tool(name: string, description: string): OpenClawToolDefinition {
+    return {
+      name,
+      description,
+      inputSchema: { type: "object", additionalProperties: true },
+    };
+  }
+
+  private requiredString(input: Record<string, unknown>, key: string): string {
+    const value = input[key];
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error(`${key} is required`);
+    }
+    return value;
+  }
+}
+
+export function createOpenClawTeamMemoryPluginFromEnv(
+  environment: Record<string, string | undefined>,
+): OpenClawTeamMemoryPlugin {
+  const baseUrl = environment.TEAM_MEMORY_URL;
+  const token = environment.TEAM_MEMORY_TOKEN;
+  const mode =
+    environment.TEAM_MEMORY_MODE ?? "parallel_native_team_memory";
+  if (baseUrl === undefined || baseUrl.length === 0) {
+    throw new Error("TEAM_MEMORY_URL must be configured");
+  }
+  if (token === undefined || token.length === 0) {
+    throw new Error("TEAM_MEMORY_TOKEN must be configured");
+  }
+  if (
+    mode !== "parallel_native_team_memory" &&
+    mode !== "team_memory_replaces_native"
+  ) {
+    throw new Error(`unsupported TEAM_MEMORY_MODE: ${mode}`);
+  }
+  return new OpenClawTeamMemoryPlugin({ baseUrl, token, mode });
+}

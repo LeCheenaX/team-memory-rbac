@@ -5,6 +5,7 @@ from src.adapters.hermes.session_context import (
     HermesMemoryAdapter,
     map_principal_context,
 )
+from src.adapters.hermes.http_client import TeamMemoryHttpClient
 
 
 class ContractSchemaTest(unittest.TestCase):
@@ -122,6 +123,47 @@ class ContractSchemaTest(unittest.TestCase):
             replacement["nativeMemory"]["disposition"],
             "not_applicable",
         )
+
+    def test_http_client_backs_hermes_adapter_without_rbac_logic(self) -> None:
+        calls: list[tuple[str, str, dict | None]] = []
+
+        def transport(method: str, path: str, payload: dict | None) -> dict:
+            calls.append((method, path, payload))
+            if path == "identity":
+                return {
+                    "sessionId": "session-http",
+                    "userId": "user-http",
+                    "agentId": "agent-http",
+                    "rootEntityId": "root-http",
+                    "taskScope": {"rootEntityId": "root-http"},
+                }
+            if path == "agent/tools":
+                return {
+                    "value": [
+                        {"name": "memory.search"},
+                        {"name": "memory.write"},
+                    ]
+                }
+            if path == "memory/search":
+                return {"value": {"items": [{"id": "entity-http"}]}}
+            raise AssertionError(path)
+
+        client = TeamMemoryHttpClient(
+            "https://memory.example",
+            "token",
+            transport=transport,
+        )
+        self.assertEqual(client.identity()["agentId"], "agent-http")
+        self.assertEqual(client.list_tools()[0]["name"], "memory.search")
+        self.assertEqual(
+            client.call_tool(
+                "memory.search",
+                {"query": {"kind": "entity", "text": "http"}},
+            )["value"]["items"][0]["id"],
+            "entity-http",
+        )
+        self.assertEqual(calls[0], ("GET", "identity", None))
+        self.assertEqual(calls[2][0], "POST")
 
 
 if __name__ == "__main__":

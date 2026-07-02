@@ -1,17 +1,24 @@
 {
   "name": "team-memory-rbac",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "bin": {
+    "team-memory": "scripts/team-memory.mjs",
+    "team-memory-server": "scripts/dev-server.mjs",
+    "team-memory-mcp": "scripts/team-memory-mcp.mjs",
+    "openclaw-team-memory": "scripts/openclaw-team-memory.mjs"
+  },
   "scripts": {
     "contracts:generate": "node --experimental-strip-types scripts/generate-contracts.mjs",
-    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts",
     "test:hermes-contract": "python -m unittest discover -s test/hermes -p \"test_*.py\"",
     "typecheck": "tsc --noEmit",
     "migrations:validate": "node scripts/validate-migrations.mjs",
     "smoke:dev": "node --experimental-strip-types scripts/smoke-dev.mjs",
     "dev:init": "node --experimental-strip-types scripts/dev-init.mjs",
     "dev:server": "node --experimental-strip-types scripts/dev-server.mjs",
+    "mcp:stdio": "node --experimental-strip-types scripts/team-memory-mcp.mjs",
+    "openclaw": "node --experimental-strip-types scripts/openclaw-team-memory.mjs",
     "team": "node --experimental-strip-types scripts/team-memory.mjs",
     "check": "npm run typecheck && npm test && npm run test:hermes-contract"
   },

@@ -104,6 +104,9 @@ export function createTeamMemoryServer(runtimeOrGateway: TeamMemoryRuntime | Tea
       if (request.method === "POST" && url.pathname === "/admin/delegations/revoke") {
         return sendValue(response, 200, await gateway.revokeDelegation(bearer, await body(request)));
       }
+      if (request.method === "POST" && url.pathname === "/admin/agents/onboard") {
+        return sendValue(response, 201, await gateway.onboardAgent(bearer, await body(request)));
+      }
       if (request.method === "POST" && url.pathname === "/resources/import") {
         return sendValue(response, 201, await gateway.importResource(bearer, await body(request)));
       }

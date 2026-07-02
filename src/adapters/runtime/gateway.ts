@@ -21,7 +21,9 @@ import {
   type ResourceSourceType,
 } from "../../index.ts";
 import type { AgentDelegation, UserRootRoleAssignment } from "../../contracts/rbac.ts";
+import type { AgentType, Permission } from "../../contracts/rbac.ts";
 import type { AuthenticatedSession } from "../libsql/rbac-authority.ts";
+import type { CreatedSession } from "../libsql/rbac-authority.ts";
 import type { TeamMemoryRuntime } from "./development-stack.ts";
 
 export type GatewayErrorCode =
@@ -151,6 +153,24 @@ function numberValue(
 
 function gatewaySubject(session: AuthenticatedSession) {
   return session.subject;
+}
+
+function defaultAgentPermissions(ownerPermissions: readonly Permission[]): Permission[] {
+  const desired = new Set([
+    "read:memory_entity",
+    "search:memory_entity",
+    "write_entity:memory_entity",
+    "write_entity_branch:memory_entity_branch",
+    "import_resource:resource",
+    "read:resource",
+    "search:resource",
+    "write_resource_chunk:resource_chunk",
+    "index_resource:resource",
+    "index_resource:resource_chunk",
+  ]);
+  return ownerPermissions.filter((permission) =>
+    desired.has(`${permission.action}:${permission.resourceKind}`),
+  );
 }
 
 const agentToolCatalog = [
@@ -377,6 +397,76 @@ export class TeamMemoryGateway {
         ? {}
         : { expiresAt: optionalString(payload, "expiresAt") as string }),
     });
+  }
+
+  async onboardAgent(
+    token: string | undefined,
+    payload: Record<string, unknown>,
+  ): Promise<{
+    agentId: string;
+    delegationId: string;
+    session: CreatedSession;
+  }> {
+    const session = await this.requireHumanAdmin(token, "assign_user_role");
+    const now = new Date().toISOString();
+    const agentId = stringValue(payload, "agentId");
+    const delegationId = stringValue(payload, "delegationId");
+    const sessionId = stringValue(payload, "sessionId");
+    const expiresAt = stringValue(payload, "sessionExpiresAt");
+    const agentType = (optionalString(payload, "agentType") ?? "curator_agent") as AgentType;
+    await this.runtime.rbac.saveAgent({
+      id: agentId,
+      ownerUserId: session.userId,
+      agentType,
+      displayName: optionalString(payload, "displayName") ?? agentId,
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const ownerPermissions = await this.effectiveUserPermissions(
+      session.userId,
+      session.rootEntityId,
+    );
+    await this.runtime.admin.createDelegation(session, {
+      id: delegationId,
+      agentId,
+      rootEntityId: session.rootEntityId,
+      permissions: (payload.permissions as Permission[] | undefined) ??
+        defaultAgentPermissions(ownerPermissions),
+      ...(optionalString(payload, "delegationExpiresAt") === undefined
+        ? {}
+        : { expiresAt: optionalString(payload, "delegationExpiresAt") as string }),
+    });
+    return {
+      agentId,
+      delegationId,
+      session: await this.runtime.rbac.createSession({
+        id: sessionId,
+        userId: session.userId,
+        agentId,
+        delegationId,
+        rootEntityId: session.rootEntityId,
+        taskScope: { rootEntityId: session.rootEntityId },
+        expiresAt,
+        createdAt: now,
+      }),
+    };
+  }
+
+  private async effectiveUserPermissions(
+    userId: string,
+    rootEntityId: string,
+  ): Promise<Permission[]> {
+    const assignments = await this.runtime.rbac.listUserRootRoleAssignments(
+      userId,
+      rootEntityId,
+    );
+    const roles = await Promise.all(
+      assignments
+        .filter((assignment) => assignment.status === "active")
+        .map((assignment) => this.runtime.rbac.getRole(assignment.roleId)),
+    );
+    return roles.flatMap((role) => role?.permissions ?? []);
   }
 
   async revokeDelegation(

@@ -4,6 +4,49 @@
 
 Configure `LIBSQL_URL`, `CAS_DIRECTORY`, `QDRANT_URL`, `OBJECT_STORE_URL`, and optional secret values through the deployment environment. Start the service with `npm run dev:server` or the container entry point.
 
+## Agent Onboarding
+
+Use a root administrator token to create a production agent identity, delegation, and one-time agent session token:
+
+```sh
+TEAM_MEMORY_TOKEN=<admin-token> npm run team -- agents onboard <agent-id> <delegation-id> <session-id> <session-expires-at>
+```
+
+The returned `session.token` is the only value OpenClaw, Hermes, Claude Code, Codex, or another host should receive. Hosts must pass it as `TEAM_MEMORY_TOKEN`; they must not provide user, root, agent, or task-scope identity fields in tool payloads.
+
+## OpenClaw
+
+Set `TEAM_MEMORY_URL`, `TEAM_MEMORY_TOKEN`, and `TEAM_MEMORY_MODE`.
+
+For parallel memory, use `TEAM_MEMORY_MODE=parallel_native_team_memory` and install `adapters/openclaw/openclaw.plugin.json` as a tool plugin. It exposes `team_memory.search`, `team_memory.write`, `team_memory.import_resource`, and `team_memory.read_resource`.
+
+For full replacement, use `TEAM_MEMORY_MODE=team_memory_replaces_native`, set `plugins.slots.memory` to `team-memory-rbac`, and install the same plugin as the active memory implementation. It exposes OpenClaw-compatible `memory_search`, `memory_get`, `memory_write`, and `memory_import`.
+
+## Hermes
+
+Install the Python adapter package or vendor `src.adapters.hermes`, then construct:
+
+```python
+from src.adapters.hermes.http_client import HermesMemoryHttpAdapter
+
+memory = HermesMemoryHttpAdapter(
+    "https://team-memory.example.com",
+    "agent-session-token",
+)
+```
+
+Hermes calls route through the TypeScript gateway; the Python adapter does not duplicate RBAC, History, retrieval, sync, or conflict rules.
+
+## MCP Hosts
+
+Claude Code, Codex, and other MCP hosts can run:
+
+```sh
+TEAM_MEMORY_URL=https://team-memory.example.com TEAM_MEMORY_TOKEN=<agent-token> npm run mcp:stdio
+```
+
+Use `adapters/claude-code/.mcp.json` as a project-scoped starting point. In replacement mode, disable host-native memory separately and keep Team Memory MCP as the only long-term memory write path.
+
 ## Upgrade And Rollback
 
 Run CI checks before deployment: typecheck, integration tests, Hermes contract tests, migration validation, and smoke validation. For rollback, stop the new service, restore the previous image and environment, then verify `/live`, `/ready`, and an authenticated read.

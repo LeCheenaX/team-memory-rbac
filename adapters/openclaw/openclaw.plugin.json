@@ -1,0 +1,37 @@
+{
+  "id": "team-memory-rbac",
+  "name": "Team Memory RBAC",
+  "description": "RBAC-protected Team Memory integration for OpenClaw agents.",
+  "entry": "node --experimental-strip-types scripts/openclaw-team-memory.mjs",
+  "modes": [
+    "parallel_native_team_memory",
+    "team_memory_replaces_native"
+  ],
+  "toolPlugin": {
+    "mode": "parallel_native_team_memory",
+    "tools": [
+      "team_memory.search",
+      "team_memory.write",
+      "team_memory.import_resource",
+      "team_memory.read_resource"
+    ]
+  },
+  "activeMemoryPlugin": {
+    "mode": "team_memory_replaces_native",
+    "slot": "memory",
+    "tools": [
+      "memory_search",
+      "memory_get",
+      "memory_write",
+      "memory_import"
+    ],
+    "settings": {
+      "plugins.slots.memory": "team-memory-rbac"
+    }
+  },
+  "environment": [
+    "TEAM_MEMORY_URL",
+    "TEAM_MEMORY_TOKEN",
+    "TEAM_MEMORY_MODE"
+  ]
+}
