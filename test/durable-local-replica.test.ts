@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -77,6 +78,55 @@ const deltaBranch = {
   updatedAt: now,
 };
 
+const chunkText = "Offline resource chunk survives restart";
+const chunkHash = `sha256:${createHash("sha256").update(chunkText).digest("hex")}`;
+
+const deltaResource = {
+  id: "resource-local",
+  rootEntityId: "root-local",
+  sourceType: "document" as const,
+  title: "Offline source",
+  contentHash: chunkHash,
+  status: "active" as const,
+  metadata: { content: chunkText },
+  createdAt: now,
+  updatedAt: now,
+};
+
+const deltaChunk = {
+  id: "chunk-local",
+  rootEntityId: "root-local",
+  resourceId: "resource-local",
+  chunkIndex: 0,
+  text: chunkText,
+  contentHash: chunkHash,
+  sourceType: "document" as const,
+  status: "active" as const,
+  createdAt: now,
+  updatedAt: now,
+};
+
+const deltaRelation = {
+  id: "relation-local",
+  rootEntityId: "root-local",
+  sourceId: "entity-local",
+  sourceKind: "memory_entity" as const,
+  targetId: "chunk-local",
+  targetKind: "resource_chunk" as const,
+  relationType: "refers_to" as const,
+  weight: 1,
+  confidence: 1,
+  branchRef: "main",
+  status: "active" as const,
+  createdAt: now,
+  updatedAt: now,
+};
+
+function casPath(directory: string, contentHash: string): string {
+  const hex = contentHash.replace("sha256:", "");
+  return join(directory, "cas", "objects", "sha256", hex.slice(0, 2), hex);
+}
+
 function record(sequence: number, commitId: string): CloudCommitRecord {
   return {
     sequence,
@@ -141,9 +191,9 @@ class ScriptedSyncAdapter
       delta: {
         entities: [deltaEntity],
         entityBranches: [deltaBranch],
-        relations: [],
-        resources: [],
-        resourceChunks: [],
+        relations: [deltaRelation],
+        resources: [deltaResource],
+        resourceChunks: [deltaChunk],
         removeEntityCascadeIds: [],
         removeEntityBranchIds: [],
         removeRelationIds: [],
@@ -199,6 +249,37 @@ test("filesystem local replica survives restart and resumes sync from the durabl
       ),
       true,
     );
+    assert.equal(
+      await readFile(casPath(directory, chunkHash), "utf8"),
+      chunkText,
+    );
+    assert.match(
+      await readFile(join(directory, "vectors", "memory_entity_branches.json"), "utf8"),
+      /branch-local/,
+    );
+    assert.match(
+      await readFile(join(directory, "vectors", "resource_chunks.json"), "utf8"),
+      /chunk-local/,
+    );
+    assert.match(
+      await readFile(join(directory, "relations", "memory_relations.json"), "utf8"),
+      /relation-local/,
+    );
+    assert.match(
+      await readFile(join(directory, "history", "records.json"), "utf8"),
+      /commit-2/,
+    );
+    assert.match(
+      await readFile(join(directory, "pending", "operations.json"), "utf8"),
+      /pending-1/,
+    );
+    await unlink(join(directory, "state.json"));
+    const recoveredFromStores = new FileSystemLocalAuthorizedWorkingReplica(directory);
+    assert.equal(
+      recoveredFromStores.inspect().snapshot?.resourceChunks[0]?.id,
+      "chunk-local",
+    );
+    assert.equal(recoveredFromStores.inspect().historyRecords.length, 2);
 
     const watermarks = new InMemoryPermissionWatermarkAuthority();
     watermarks.advance("agent-local", "root-local");
@@ -232,9 +313,13 @@ test("filesystem local replica survives restart and resumes sync from the durabl
         ),
       /permission watermark changed/,
     );
+    const invalidated = new FileSystemLocalAuthorizedWorkingReplica(directory);
+    assert.equal(invalidated.inspect().valid, false);
+    assert.deepEqual(invalidated.inspect().pendingOperations, []);
+    assert.deepEqual(invalidated.inspect().conflicts, []);
     assert.equal(
-      new FileSystemLocalAuthorizedWorkingReplica(directory).inspect().valid,
-      false,
+      await readFile(join(directory, "relations", "memory_relations.json"), "utf8"),
+      "[]\n",
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

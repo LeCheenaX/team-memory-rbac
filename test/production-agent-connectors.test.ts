@@ -49,11 +49,11 @@ async function setup() {
 async function close(
   fixture: Awaited<ReturnType<typeof setup>>,
 ): Promise<void> {
+  fixture.server.close();
   fixture.server.closeAllConnections();
   fixture.server.closeIdleConnections();
-  await new Promise<void>((resolve) => fixture.server.close(() => resolve()));
+  await new Promise<void>((resolve) => setImmediate(resolve));
   fixture.runtime.close();
-  await new Promise((resolve) => setTimeout(resolve, 500));
   await rm(fixture.directory, {
     recursive: true,
     force: true,
@@ -62,8 +62,14 @@ async function close(
   });
 }
 
+const connectorFetch: typeof fetch = (input, init = {}) => {
+  const headers = new Headers(init.headers);
+  headers.set("connection", "close");
+  return fetch(input, { ...init, headers });
+};
+
 async function onboard(baseUrl: string, token: string): Promise<string> {
-  const response = await fetch(`${baseUrl}/admin/agents/onboard`, {
+  const response = await connectorFetch(`${baseUrl}/admin/agents/onboard`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${token}`,
@@ -148,11 +154,15 @@ async function waitForResponses(writes: string[], count: number): Promise<void> 
   throw new Error(`expected ${count} MCP responses, got ${writes.length}`);
 }
 
-test("production onboarding issues a host token usable through HTTP and OpenClaw replacement memory tools", async () => {
+test("production connector paths cover OpenClaw replacement memory and MCP stdio hosts without hanging", async () => {
   const fixture = await setup();
   try {
     const token = await onboard(fixture.baseUrl, fixture.admin.token);
-    const client = new TeamMemoryHttpClient({ baseUrl: fixture.baseUrl, token });
+    const client = new TeamMemoryHttpClient({
+      baseUrl: fixture.baseUrl,
+      token,
+      fetch: connectorFetch,
+    });
     const identity = await client.identity() as { agentId: string; rootEntityId: string };
     assert.equal(identity.agentId, "agent-prod-openclaw");
     assert.equal(identity.rootEntityId, "root-prod");
@@ -164,6 +174,7 @@ test("production onboarding issues a host token usable through HTTP and OpenClaw
       baseUrl: fixture.baseUrl,
       token,
       mode: "team_memory_replaces_native",
+      fetch: connectorFetch,
     });
     assert.deepEqual(
       openclaw.tools().map((tool) => tool.name),
@@ -225,22 +236,13 @@ test("production onboarding issues a host token usable through HTTP and OpenClaw
       resourceId: "resource-openclaw",
     }) as { resource: { id: string } };
     assert.equal(resource.resource.id, "resource-openclaw");
-  } finally {
-    await close(fixture);
-  }
-});
 
-test("MCP stdio server exposes gateway tools to Claude Code and Codex style hosts", async () => {
-  const fixture = await setup();
-  const writes: string[] = [];
-  try {
-    const token = await onboard(fixture.baseUrl, fixture.admin.token);
-    const client = new TeamMemoryHttpClient({ baseUrl: fixture.baseUrl, token });
     await writeNote(client, "mcp");
-    const server = new TeamMemoryMcpStdioServer(client, (payload) => writes.push(payload));
-    server.receive(frame({ jsonrpc: "2.0", id: 1, method: "initialize" }));
-    server.receive(frame({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
-    server.receive(frame({
+    const writes: string[] = [];
+    const mcp = new TeamMemoryMcpStdioServer(client, (payload) => writes.push(payload));
+    mcp.receive(frame({ jsonrpc: "2.0", id: 1, method: "initialize" }));
+    mcp.receive(frame({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
+    mcp.receive(frame({
       jsonrpc: "2.0",
       id: 3,
       method: "tools/call",
@@ -254,9 +256,10 @@ test("MCP stdio server exposes gateway tools to Claude Code and Codex style host
       id: number;
       result: Record<string, unknown>;
     }>;
-    assert.equal((responses[0]?.result as { serverInfo: { name: string } }).serverInfo.name, "team-memory-rbac");
-    assert.ok((responses[1]?.result as { tools: Array<{ name: string }> }).tools.some((tool) => tool.name === "memory.search"));
-    const content = (responses[2]?.result as { content: Array<{ text: string }> }).content[0]?.text;
+    const byId = new Map(responses.map((response) => [response.id, response.result]));
+    assert.equal((byId.get(1) as { serverInfo: { name: string } }).serverInfo.name, "team-memory-rbac");
+    assert.ok((byId.get(2) as { tools: Array<{ name: string }> }).tools.some((tool) => tool.name === "memory.search"));
+    const content = (byId.get(3) as { content: Array<{ text: string }> }).content[0]?.text;
     assert.equal(JSON.parse(content ?? "{}").value.items.length, 1);
   } finally {
     await close(fixture);

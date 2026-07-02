@@ -9,7 +9,7 @@ export interface DeploymentSecrets {
   objectStoreSecretKey?: string;
 }
 
-const secretNamePattern = /(secret|token|password|api[-_]?key|access[-_]?key)/i;
+const secretNamePattern = /(secret|token|password|api[-_]?key|access[-_]?key|authorization|cookie)/i;
 
 export function loadDeploymentSecrets(source: SecretSource): DeploymentSecrets {
   const optional = (name: string): string | undefined => {
