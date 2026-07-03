@@ -84,12 +84,17 @@ class HermesMemoryAdapter:
                 "memory.read",
                 "memory.search",
                 "memory.readResource",
+                "memory.ingestResource",
                 "memory.syncPull",
             }
         ]
         write_tools = [
             name for name in tool_names
-            if name in {"memory.write", "memory.importResource"}
+            if name in {
+                "memory.write",
+                "memory.importResource",
+                "memory.ingestResource",
+            }
         ]
         return {
             "host": "hermes",
@@ -97,24 +102,28 @@ class HermesMemoryAdapter:
             "mode": mode,
             "connector": "python_adapter",
             "nativeMemory": {
-                "disposition": "not_applicable",
+                "disposition": (
+                    "preserved"
+                    if mode == "parallel_native_team_memory"
+                    else "replaced_by_team_memory"
+                ),
                 "controls": [
                     (
-                        "No documented Hermes native memory surface is "
-                        "configured by this adapter"
+                        "Keep Hermes official memory providers such as mem0 "
+                        "separate from the Team Memory provider namespace"
                     )
                     if mode == "parallel_native_team_memory"
                     else (
-                        "Team Memory is the authoritative long-term memory "
-                        "because no Hermes native memory surface is configured"
+                        "Configure Team Memory as the authoritative Hermes "
+                        "long-term memory provider"
                     )
                 ],
             },
             "hostConfiguration": {
                 "actions": [
                     (
-                        "Call the TypeScript Team Memory gateway through "
-                        "the Python Hermes adapter"
+                        "Register the Team Memory Hermes provider at the "
+                        "same memory-plugin seam as mem0-style providers"
                     ),
                     (
                         "Keep authorization, memory writes, retrieval, "

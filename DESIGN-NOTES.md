@@ -45,3 +45,45 @@ v2 keeps one logical Cloud Authority, but may implement it with CP distributed
 systems: distributed SQL for History/RBAC, distributed object storage for CAS,
 and clustered retrieval projections. v2 is not an AP multi-master design with
 independent cloud authority replicas.
+
+## Conflict Visibility Requirements
+
+Production v1 keeps unresolved cloud conflict branches out of the local
+authorized working replica. If a local pending atomic operation caused the
+conflict, the local pending overlay remains the local visible state until a
+resolution commit arrives. If another client produced an unresolved cloud
+conflict for a file or memory object that this client has not locally modified,
+v1 keeps the local replica unchanged rather than syncing the conflict branch.
+
+After a conflict is resolved, agents do not require a built-in background sync
+loop for v1. They need an exposed CLI or tool call that can pull the resolution
+commit and reconcile the local replica on demand.
+
+Raw Resource edits use the same v1 local-pending rule. A client can stage a
+pending resource revision in its local authorized working replica and keep that
+revision visible locally while the cloud stores an unresolved resource conflict.
+Pushing the revision to the cloud must still use the CAS-first resource write
+path; local pending state is not allowed to create visible SQL/History metadata
+without durable CAS bytes.
+
+Production v2 must add a ranked unresolved-conflict preview for clients that do
+not already have a local pending operation on the conflicted object. The cloud
+should score competing atomic operations and return the highest-scoring
+candidate as a preview while preserving the unresolved conflict branch and the
+eventual resolution-commit semantics.
+
+## Agent Memory Lifecycle Requirement
+
+The current OpenClaw, Hermes, Claude Code, and Codex adapters are tool bridges:
+they expose `memory.search`, `memory.write`, sync, and resource tools to an
+agent session. A production host lifecycle integration must additionally run
+authorized recall before each user instruction and record success or failure
+paths after task completion, including enough provenance to recall both the
+successful path and failed attempts on a later similar task.
+
+## Resource Ingestion Requirement
+
+Production v1 does not automatically run ingestion after every resource import
+or revision. Instead, HTTP, MCP/agent tools, and CLI must expose an explicit
+incremental ingestion command so an agent can chunk and index a chosen resource
+revision when the host workflow decides the raw resource is ready.

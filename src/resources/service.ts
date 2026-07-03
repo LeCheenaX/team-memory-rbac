@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { CloudMemoryAuthority, CloudMemoryWriteCommand } from "../history/cloud-authority.ts";
+import type {
+  CloudMemoryAuthority,
+  CloudMemoryWriteCommand,
+  CloudMemoryWriteResult,
+} from "../history/cloud-authority.ts";
 import type { MemoryOperationInput } from "../contracts/history.ts";
 import type { Resource, ResourceSourceType } from "../contracts/memory.ts";
 import type { PolicyEngine } from "../contracts/rbac.ts";
@@ -9,6 +13,15 @@ import { contentHash } from "../adapters/cas/filesystem.ts";
 
 export class ResourceNotFoundError extends Error {
   constructor() { super("resource not found"); }
+}
+
+export class ResourceConflictError extends Error {
+  readonly conflictId: string;
+
+  constructor(conflictId: string) {
+    super(conflictId);
+    this.conflictId = conflictId;
+  }
 }
 
 export interface ResourceImportInput {
@@ -83,7 +96,7 @@ export class ResourceService {
         updatedAt: createdAt,
       },
     };
-    await this.write(session, {
+    const result = await this.write(session, {
       clientMutationId: input.clientMutationId,
       branchRef,
       ...(input.expectedHeadCommitId === undefined ? {} : { expectedHeadCommitId: input.expectedHeadCommitId }),
@@ -92,6 +105,9 @@ export class ResourceService {
       resourceKind: "resource",
       operation,
     });
+    if (result.status === "conflict") {
+      throw new ResourceConflictError(result.conflict.id);
+    }
     return { resource: operation.resource, contentHash: hash };
   }
 
@@ -103,7 +119,7 @@ export class ResourceService {
     const hash = contentHash(input.content);
     await this.putAndVerify(hash, input.content);
     const revisionId = input.revisionId ?? `revision:${randomUUID()}`;
-    await this.write(session, {
+    const result = await this.write(session, {
       clientMutationId: input.clientMutationId,
       branchRef,
       ...(input.expectedHeadCommitId === undefined
@@ -114,6 +130,9 @@ export class ResourceService {
       resourceKind: "resource",
       operation: { kind: "revise_resource", id: `operation:${input.commitId ?? input.clientMutationId}`, resourceId: input.resourceId, revisionId, contentHash: hash, ...(input.metadata === undefined ? {} : { metadata: input.metadata }) },
     });
+    if (result.status === "conflict") {
+      throw new ResourceConflictError(result.conflict.id);
+    }
     return { revisionId, contentHash: hash };
   }
 
@@ -132,7 +151,7 @@ export class ResourceService {
 
   async tombstone(session: AuthenticatedSession, input: { clientMutationId: string; resourceId: string; commitId?: string; branchRef?: string }): Promise<void> {
     const branchRef = input.branchRef ?? "main";
-    await this.write(session, {
+    const result = await this.write(session, {
       clientMutationId: input.clientMutationId,
       branchRef,
       ...this.expectedHead(session.rootEntityId, branchRef),
@@ -142,12 +161,15 @@ export class ResourceService {
       resourceId: input.resourceId,
       operation: { kind: "tombstone_resource", id: `operation:${input.commitId ?? input.clientMutationId}`, targetId: input.resourceId },
     });
+    if (result.status === "conflict") {
+      throw new ResourceConflictError(result.conflict.id);
+    }
   }
 
-  private async write(session: AuthenticatedSession, command: Omit<CloudMemoryWriteCommand, "subject" | "rootEntityId" | "taskScope">): Promise<void> {
+  private async write(session: AuthenticatedSession, command: Omit<CloudMemoryWriteCommand, "subject" | "rootEntityId" | "taskScope">): Promise<CloudMemoryWriteResult> {
     const decision = await this.policy.decide({ ...command, subject: session.subject, rootEntityId: session.rootEntityId, taskScope: session.taskScope });
     if (!decision.allowed) throw new Error(`permission denied: ${decision.reason}`);
-    await this.history.execute({ ...command, subject: session.subject, rootEntityId: session.rootEntityId, taskScope: session.taskScope, authorization: decision as typeof decision & { allowed: true } });
+    return this.history.execute({ ...command, subject: session.subject, rootEntityId: session.rootEntityId, taskScope: session.taskScope, authorization: decision as typeof decision & { allowed: true } });
   }
 
   private async require(session: AuthenticatedSession, action: "import_resource", resourceKind: "resource", resourceId: string): Promise<void> {

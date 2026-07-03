@@ -56,9 +56,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     qdrantUrl: "http://127.0.0.1:6333",
     objectStoreUrl: "http://127.0.0.1:9000",
   });
-  const gateway = new TeamMemoryGateway(runtime, {
-    retrieval: "active-view",
-  });
+  const gateway = new TeamMemoryGateway(runtime);
   const server = createTeamMemoryServer(gateway);
   try {
     const adminSession = await bootstrapDevelopment(runtime, {
@@ -95,6 +93,8 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       permissions: [
         { action: "read", resourceKind: "memory_entity" },
         { action: "search", resourceKind: "memory_entity" },
+        { action: "read", resourceKind: "resource_chunk" },
+        { action: "search", resourceKind: "resource_chunk" },
       ],
       delegatedBy: "user-gateway",
       delegatedAt: now,
@@ -113,6 +113,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
           action: "write_entity_branch",
           resourceKind: "memory_entity_branch",
         },
+        { action: "write_resource_chunk", resourceKind: "resource_chunk" },
       ],
       delegatedBy: "user-gateway",
       delegatedAt: now,
@@ -199,6 +200,36 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       ).status,
       200,
     );
+    await gateway.importResource(adminSession.token, {
+      clientMutationId: "import-gateway-resource",
+      resourceId: "resource-gateway",
+      title: "Gateway Resource",
+      sourceType: "document",
+      content: "HTTP and MCP resource backing content",
+    });
+    const chunkWrite = await post(base, "/memory/write", writeSession.token, {
+      clientMutationId: "write-chunk",
+      action: "write_resource_chunk",
+      resourceKind: "resource_chunk",
+      commit: { id: "commit-chunk", message: "Index chunk" },
+      operation: {
+        kind: "create_resource_chunk",
+        id: "operation-chunk",
+        chunk: {
+          id: "chunk-gateway",
+          rootEntityId: "root-gateway",
+          resourceId: "resource-gateway",
+          chunkIndex: 0,
+          text: "HTTP and MCP share the same projected BM25 retrieval path",
+          status: "active",
+          metadata: { revisionId: "revision-gateway" },
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+    });
+    const chunkWriteText = await chunkWrite.text();
+    assert.equal(chunkWrite.status, 200, chunkWriteText);
 
     const httpSearch = await post(base, "/memory/search", readSession.token, {
       branchRef: "main",
@@ -208,6 +239,18 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     assert.equal(httpSearch.status, 200, httpSearchText);
     assert.equal(
       (JSON.parse(httpSearchText) as { value: { items: unknown[] } }).value
+        .items.length,
+      1,
+    );
+    const keywordSearch = await post(base, "/memory/search", readSession.token, {
+      branchRef: "main",
+      resourceKind: "resource_chunk",
+      query: { kind: "keyword", text: "projected BM25", limit: 5 },
+    });
+    const keywordSearchText = await keywordSearch.text();
+    assert.equal(keywordSearch.status, 200, keywordSearchText);
+    assert.equal(
+      (JSON.parse(keywordSearchText) as { value: { items: unknown[] } }).value
         .items.length,
       1,
     );
@@ -251,7 +294,13 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     assert.deepEqual(
       ((await history.json()) as { value: { records: { commit: { id: string } }[] } })
         .value.records.map(({ commit }) => commit.id),
-      ["bootstrap-root-commit:root-gateway", "commit-entity", "commit-branch"],
+      [
+        "bootstrap-root-commit:root-gateway",
+        "commit-entity",
+        "commit-branch",
+        "commit:import-gateway-resource",
+        "commit-chunk",
+      ],
     );
 
     const unsafe = await post(base, "/memory/search", readSession.token, {

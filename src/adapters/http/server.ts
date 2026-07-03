@@ -37,9 +37,12 @@ interface GatewayLike {
   onboardAgent(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   importResource(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   reviseResource(token: string | undefined, resourceId: string, payload: Record<string, unknown>): Promise<unknown>;
+  ingestResource(token: string | undefined, resourceId: string, payload: Record<string, unknown>): Promise<unknown>;
   readResource(token: string | undefined, resourceId: string, revisionId?: string): Promise<unknown>;
   writeMemory(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   searchMemory(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
+  recallHostMemory(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
+  captureHostMemory(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   listHistory(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   listConflicts(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   resolveConflict(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
@@ -255,6 +258,10 @@ async function handleRequest(
   if (request.method === "POST" && revisionMatch?.[1] !== undefined) {
     return responseValue(201, await gateway.reviseResource(bearer, decodeURIComponent(revisionMatch[1]), await body(request, bodyLimitBytes)));
   }
+  const ingestMatch = /^\/resources\/([^/]+)\/ingest$/.exec(url.pathname);
+  if (request.method === "POST" && ingestMatch?.[1] !== undefined) {
+    return responseValue(200, await gateway.ingestResource(bearer, decodeURIComponent(ingestMatch[1]), await body(request, bodyLimitBytes)));
+  }
   const resourceMatch = /^\/resources\/([^/]+)$/.exec(url.pathname);
   if (request.method === "GET" && resourceMatch?.[1] !== undefined) {
     return { status: 200, payload: await gateway.readResource(bearer, decodeURIComponent(resourceMatch[1]), url.searchParams.get("revisionId") ?? undefined) };
@@ -264,6 +271,22 @@ async function handleRequest(
   }
   if (request.method === "POST" && url.pathname === "/memory/search") {
     return { status: 200, payload: await gateway.searchMemory(bearer, await body(request, bodyLimitBytes)) };
+  }
+  const hostRecallMatch = /^\/host\/([^/]+)\/recall$/.exec(url.pathname);
+  if (request.method === "POST" && hostRecallMatch?.[1] !== undefined) {
+    const payload = await body(request, bodyLimitBytes);
+    return responseValue(200, await gateway.recallHostMemory(bearer, {
+      ...payload,
+      host: decodeURIComponent(hostRecallMatch[1]),
+    }));
+  }
+  const hostCaptureMatch = /^\/host\/([^/]+)\/capture$/.exec(url.pathname);
+  if (request.method === "POST" && hostCaptureMatch?.[1] !== undefined) {
+    const payload = await body(request, bodyLimitBytes);
+    return responseValue(200, await gateway.captureHostMemory(bearer, {
+      ...payload,
+      host: decodeURIComponent(hostCaptureMatch[1]),
+    }));
   }
   if (request.method === "GET" && url.pathname === "/history") {
     return responseValue(200, await gateway.listHistory(bearer, queryPayload(url)));

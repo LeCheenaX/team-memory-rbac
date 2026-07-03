@@ -32,9 +32,11 @@ export interface AgentMemoryIntegrationPlan {
   connector:
     | "http"
     | "mcp"
+    | "claude_code_hooks"
     | "openclaw_tool_plugin"
     | "openclaw_active_memory_plugin"
-    | "python_adapter";
+    | "python_adapter"
+    | "hermes_memory_provider";
   nativeMemory: {
     disposition:
       | "preserved"
@@ -177,12 +179,12 @@ const CODEX_PROFILE: AgentRuntimeProfile = {
 const CLAUDE_CODE_PROFILE: AgentRuntimeProfile = {
   host: "claude_code",
   displayName: "Claude Code",
-  connector: "mcp",
+  connector: "claude_code_hooks",
   supportedMemoryModes: allMemoryModes,
   plan: (mode) =>
     mode === "parallel_native_team_memory"
       ? {
-          connector: "mcp",
+          connector: "claude_code_hooks",
           nativeMemory: {
             disposition: "preserved",
             controls: [
@@ -192,14 +194,19 @@ const CLAUDE_CODE_PROFILE: AgentRuntimeProfile = {
           },
           hostConfiguration: {
             actions: [
-              "Register the Team Memory MCP server in .mcp.json or Claude settings",
-              "Allow subagents to reference the Team Memory MCP server with mcpServers",
+              "Register a Claude Code UserPromptSubmit hook that calls Team Memory recall",
+              "Register Claude Code Stop and StopFailure hooks that call Team Memory capture",
+              "Optionally keep Team Memory MCP tools for explicit agent reads and writes",
             ],
-            settings: {},
+            settings: {
+              "hooks.UserPromptSubmit": "/host/claude_code/recall",
+              "hooks.Stop": "/host/claude_code/capture",
+              "hooks.StopFailure": "/host/claude_code/capture",
+            },
           },
         }
       : {
-          connector: "mcp",
+          connector: "claude_code_hooks",
           nativeMemory: {
             disposition: "disabled",
             controls: [
@@ -209,12 +216,16 @@ const CLAUDE_CODE_PROFILE: AgentRuntimeProfile = {
           },
           hostConfiguration: {
             actions: [
-              "Register the Team Memory MCP server in .mcp.json or Claude settings",
-              "Use Team Memory MCP tools as the only long-term memory write path",
+              "Disable Claude Code auto memory",
+              "Register Team Memory lifecycle hooks as the only automatic long-term memory path",
+              "Optionally expose Team Memory MCP tools for explicit agent reads and writes",
             ],
             settings: {
               autoMemoryEnabled: false,
               CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+              "hooks.UserPromptSubmit": "/host/claude_code/recall",
+              "hooks.Stop": "/host/claude_code/capture",
+              "hooks.StopFailure": "/host/claude_code/capture",
             },
           },
         },
@@ -223,21 +234,25 @@ const CLAUDE_CODE_PROFILE: AgentRuntimeProfile = {
 const HERMES_PROFILE: AgentRuntimeProfile = {
   host: "hermes",
   displayName: "Hermes",
-  connector: "python_adapter",
+  connector: "hermes_memory_provider",
   supportedMemoryModes: allMemoryModes,
   plan: (mode) => ({
-    connector: "python_adapter",
+    connector: "hermes_memory_provider",
     nativeMemory: {
-      disposition: "not_applicable",
+      disposition:
+        mode === "parallel_native_team_memory"
+          ? "preserved"
+          : "replaced_by_team_memory",
       controls: [
         mode === "parallel_native_team_memory"
-          ? "No documented Hermes native memory surface is configured by this adapter"
-          : "Team Memory is the authoritative long-term memory because no Hermes native memory surface is configured",
+          ? "Keep Hermes official memory providers such as mem0 separate from the Team Memory provider namespace"
+          : "Configure Team Memory as the authoritative Hermes long-term memory provider",
       ],
     },
     hostConfiguration: {
       actions: [
-        "Call the TypeScript Team Memory gateway through the Python Hermes adapter",
+        "Register the Team Memory Hermes provider at the same memory-plugin seam as mem0-style providers",
+        "Use lifecycle recall and capture endpoints for automatic read/write",
         "Keep authorization, memory writes, retrieval, and history in the TypeScript core",
       ],
       settings: {},
@@ -345,6 +360,7 @@ class SessionTransportAdapter implements PrincipalContextTransport {
           "memory.read",
           "memory.search",
           "memory.readResource",
+          "memory.ingestResource",
           "memory.syncPull",
         ].includes(name),
       );
@@ -354,6 +370,7 @@ class SessionTransportAdapter implements PrincipalContextTransport {
         [
           "memory.write",
           "memory.importResource",
+          "memory.ingestResource",
         ].includes(name),
       );
     return {
@@ -448,6 +465,7 @@ export class McpTeamMemoryAdapter {
   }> {
     return [
       "memory.importResource",
+      "memory.ingestResource",
       "memory.readResource",
       "memory.write",
       "memory.search",
@@ -469,6 +487,12 @@ export class McpTeamMemoryAdapter {
     switch (toolName) {
       case "memory.importResource":
         return this.gateway.importResource(sessionToken, input);
+      case "memory.ingestResource":
+        return this.gateway.ingestResource(
+          sessionToken,
+          this.requiredString(input, "resourceId"),
+          input,
+        );
       case "memory.readResource":
         return this.gateway.readResource(
           sessionToken,

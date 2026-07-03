@@ -8,6 +8,14 @@
 保存完整 commit/operation 历史并决定共享 active state 的唯一系统权威源。
 _Avoid_: 云端缓存、远程副本
 
+**Team Memory Service**:
+接收 Agent 和客户端请求的业务入口；它使用 Cloud Memory Authority 做授权、写入、检索和同步编排，但自身不是权威源。
+_Avoid_: 存储节点、云端副本、第二权威源
+
+**Logical Cloud Authority**:
+业务语义上的单一 Cloud Memory Authority；物理实现可以是单实例或 CP 分布式系统，但对冲突、权限和提交顺序表现为一个权威源。
+_Avoid_: 多主最终一致副本、每台服务器一个权威源
+
 **Authorized Snapshot**:
 某个 subject 在特定 root、branch 和 TaskScope 下有权读取的云端 active state 本地快照。
 _Avoid_: 本地权威库、完整镜像
@@ -43,6 +51,10 @@ _Avoid_: lastSyncedAt
 **Permission Watermark**:
 标识 subject 在 root 下授权状态版本的云端游标；变化会使旧 Authorized Snapshot 失效。
 _Avoid_: 权限缓存时间
+
+**CAS-first Visibility**:
+引用原始资源内容的权威提交只有在对应 CAS object 已按 contentHash 可读后才能对读路径可见。
+_Avoid_: SQL 先可见、metadata 指向未同步文件
 
 **Principal Context**:
 由受信任 transport/session 解析出的用户、Agent、delegation、root 和 TaskScope 身份上下文。

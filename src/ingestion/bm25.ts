@@ -24,6 +24,7 @@ export interface Bm25SearchResult {
 }
 
 export interface Bm25Index {
+  upsertDocuments(documents: Bm25Document[]): Promise<void>;
   replaceRevision(input: {
     rootEntityId: string;
     branchRef: string;
@@ -85,6 +86,12 @@ function scoreDocuments(
 
 export class InMemoryBm25Index implements Bm25Index {
   private readonly documents = new Map<string, Bm25Document>();
+
+  async upsertDocuments(documents: Bm25Document[]): Promise<void> {
+    for (const document of documents) {
+      this.documents.set(document.id, structuredClone(document));
+    }
+  }
 
   async replaceRevision(input: {
     rootEntityId: string;

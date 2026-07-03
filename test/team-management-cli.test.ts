@@ -97,6 +97,19 @@ test("team management CLI routes identity, RBAC, delegation, conflict, sync, and
       ((await cli.run(session.token, ["replica", "status"])) as { rootEntityId: string }).rootEntityId,
       "root-cli",
     );
+    await new TeamMemoryGateway(runtime).importResource(session.token, {
+      clientMutationId: "cli-import-resource",
+      resourceId: "resource-cli",
+      title: "CLI resource",
+      sourceType: "document",
+      content: "CLI ingestion creates searchable chunks.",
+    });
+    const ingestion = await cli.run(
+      session.token,
+      parseTeamManagementCommand(["resources", "ingest", "resource-cli"]),
+    ) as { chunks: unknown[]; rebuiltOnly: boolean };
+    assert.equal(ingestion.chunks.length, 1);
+    assert.equal(ingestion.rebuiltOnly, false);
     assert.equal(
       ((await cli.run(session.token, ["health"])) as { live: boolean }).live,
       true,

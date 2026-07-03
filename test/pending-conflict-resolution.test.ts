@@ -459,6 +459,83 @@ test("a pending delete continues to hide a remotely updated object until resolut
   );
 });
 
+test("a pending resource revision keeps local raw resource changes visible until resolution", async () => {
+  const {
+    cloud,
+    local,
+    synchronizer,
+    syncRequest,
+    writeRouter,
+  } = await setup();
+  const pending = new InMemoryPendingOverlay(local);
+  const staged = await pending.stageResourceRevision({
+    subject,
+    resourceId: "resource-runbook",
+    content: "Local raw revision",
+    clientMutationId: "local-revise-resource",
+    revisionId: "revision-local-resource",
+    provenance: { sessionId: "session-resource", ownerUserId: "user-admin" },
+  });
+  assert.equal(staged.revisionId, "revision-local-resource");
+  assert.equal(
+    pending.inspect().records[0]?.localCasObjects?.[0]?.content,
+    "Local raw revision",
+  );
+
+  await writeRouter.execute(
+    write({
+      clientMutationId: "remote-revise-resource",
+      action: "import_resource",
+      resourceKind: "resource",
+      commit: { id: "commit-remote-revise-resource" },
+      operation: {
+        kind: "revise_resource",
+        id: "operation-remote-revise-resource",
+        resourceId: "resource-runbook",
+        revisionId: "revision-remote-resource",
+        contentHash: "sha256:remote-resource",
+      },
+    }),
+  );
+  await pending.push(writeRouter);
+  await synchronizer.sync(syncRequest);
+  pending.reconcile(cloud.listCommitRecords(rootEntityId, "main"));
+
+  assert.equal(pending.inspect().records[0]?.status, "conflicted");
+  assert.equal(
+    (await pending.materialize()).resources[0]?.currentRevisionId,
+    "revision-local-resource",
+  );
+  assert.equal(
+    (await pending.materialize()).resources[0]?.contentHash,
+    staged.contentHash,
+  );
+
+  const conflictId = pending.inspect().records[0]?.cloudConflictId;
+  assert.ok(conflictId);
+  await cloud.resolveConflict(
+    resolutionAuthorization({
+      subject,
+      rootEntityId,
+      branchRef: "main",
+      action: "merge",
+      resourceKind: "memory_entity",
+      clientMutationId: "resolve-keep-remote-resource",
+      commit: { id: "commit-resolution-keep-remote-resource" },
+      conflictIds: [conflictId],
+      resolutionKind: "keep_target",
+    }),
+  );
+  await synchronizer.sync(syncRequest);
+  pending.reconcile(cloud.listCommitRecords(rootEntityId, "main"));
+
+  assert.equal(pending.inspect().records[0]?.status, "rejected");
+  assert.equal(
+    (await pending.materialize()).resources[0]?.currentRevisionId,
+    "revision-remote-resource",
+  );
+});
+
 test("take-incoming and manual-merge resolutions create explicit authoritative resolution commits", async () => {
   const {
     cloud,

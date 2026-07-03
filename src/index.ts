@@ -5,6 +5,8 @@ export * from "./contracts/schema.ts";
 export * from "./permission-router.ts";
 export * from "./agent/index.ts";
 export * from "./adapters/http/client.ts";
+export * from "./adapters/claude-code/hooks.ts";
+export * from "./adapters/lifecycle/host-memory.ts";
 export * from "./adapters/mcp/stdio-server.ts";
 export * from "./adapters/openclaw/plugin.ts";
 export * from "./history/index.ts";

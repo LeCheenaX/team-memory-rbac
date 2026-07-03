@@ -22,11 +22,11 @@ Set `TEAM_MEMORY_URL`, `TEAM_MEMORY_TOKEN`, and `TEAM_MEMORY_MODE`.
 
 For parallel memory, use `TEAM_MEMORY_MODE=parallel_native_team_memory` and install `adapters/openclaw/openclaw.plugin.json` as a tool plugin. It exposes `team_memory.search`, `team_memory.write`, `team_memory.import_resource`, and `team_memory.read_resource`.
 
-For full replacement, use `TEAM_MEMORY_MODE=team_memory_replaces_native`, set `plugins.slots.memory` to `team-memory-rbac`, and install the same plugin as the active memory implementation. It exposes OpenClaw-compatible `memory_search`, `memory_get`, `memory_write`, and `memory_import`.
+For full replacement, use `TEAM_MEMORY_MODE=team_memory_replaces_native`, set `plugins.slots.memory` to `team-memory-rbac`, and install the same plugin as the active memory implementation. It exposes OpenClaw-compatible `memory_search`, `memory_get`, `memory_write`, `memory_import`, and `memory_ingest`. The plugin manifest also advertises lifecycle recall and capture through `/host/openclaw/recall` and `/host/openclaw/capture`.
 
 ## Hermes
 
-Install the Python adapter package or vendor `src.adapters.hermes`, then construct:
+Install the Python adapter package or vendor `src.adapters.hermes`. For tool-style calls, construct:
 
 ```python
 from src.adapters.hermes.http_client import HermesMemoryHttpAdapter
@@ -37,17 +37,32 @@ memory = HermesMemoryHttpAdapter(
 )
 ```
 
-Hermes calls route through the TypeScript gateway; the Python adapter does not duplicate RBAC, History, retrieval, sync, or conflict rules.
+For Hermes memory-provider integration, register `HermesTeamMemoryProvider` at the same provider seam used by mem0-style Hermes memory modules:
+
+```python
+from src.adapters.hermes.http_client import HermesTeamMemoryProvider
+
+provider = HermesTeamMemoryProvider.from_http(
+    "https://team-memory.example.com",
+    "agent-session-token",
+)
+```
+
+The provider exposes `recall_context`, `search`, and `add`; all calls route through the TypeScript lifecycle gateway. The Python adapter does not duplicate RBAC, History, retrieval, sync, or conflict rules.
+
+## Claude Code
+
+Use `ClaudeCodeTeamMemoryHooks` for automatic lifecycle integration. Configure `UserPromptSubmit` to call `/host/claude_code/recall`, and configure `Stop` and `StopFailure` to call `/host/claude_code/capture`. MCP remains available for explicit tools, but hooks are the primary zero-main-agent-tool-call path.
 
 ## MCP Hosts
 
-Claude Code, Codex, and other MCP hosts can run:
+Codex and other MCP hosts can run:
 
 ```sh
 TEAM_MEMORY_URL=https://team-memory.example.com TEAM_MEMORY_TOKEN=<agent-token> npm run mcp:stdio
 ```
 
-Use `adapters/claude-code/.mcp.json` as a project-scoped starting point. In replacement mode, disable host-native memory separately and keep Team Memory MCP as the only long-term memory write path.
+Use `adapters/claude-code/.mcp.json` as a project-scoped starting point only when Claude Code also needs explicit Team Memory tools.
 
 ## Upgrade And Rollback
 

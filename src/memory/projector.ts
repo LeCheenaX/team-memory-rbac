@@ -2,6 +2,8 @@ import type { MemoryRelation } from "../contracts/memory.ts";
 import type {
   ResourceCas,
   ResourceCasObject,
+  VectorMemoryCollection,
+  VectorMemoryFilter,
   VectorMemoryPoint,
   VectorMemoryStore,
   MemoryRelationStore,
@@ -11,7 +13,19 @@ import type {
 export interface MemoryProjectionWrite {
   resource?: ResourceCasObject;
   vectorPoints?: VectorMemoryPoint[];
+  removeVectorPoints?: Array<{
+    collection: VectorMemoryCollection;
+    id: string;
+  }>;
+  removeVectorPointsByFilter?: Array<{
+    collection: VectorMemoryCollection;
+    filter: VectorMemoryFilter;
+  }>;
   relations?: MemoryRelation[];
+  tombstoneRelationIds?: Array<{
+    id: string;
+    updatedAt: string;
+  }>;
 }
 
 /**
@@ -44,8 +58,27 @@ export class StoreMemoryProjector implements MemoryProjector {
     if (write.vectorPoints !== undefined) {
       await this.vectors.upsertMany(write.vectorPoints);
     }
+    for (const point of write.removeVectorPoints ?? []) {
+      await this.vectors.remove(point);
+    }
+    for (const removal of write.removeVectorPointsByFilter ?? []) {
+      const points = await this.vectors.list({
+        collection: removal.collection,
+        filter: removal.filter,
+        limit: 10_000,
+      });
+      for (const point of points) {
+        await this.vectors.remove({
+          collection: removal.collection,
+          id: point.id,
+        });
+      }
+    }
     for (const relation of write.relations ?? []) {
       await this.relations.upsert(relation);
+    }
+    for (const relation of write.tombstoneRelationIds ?? []) {
+      await this.relations.tombstone(relation.id, relation.updatedAt);
     }
   }
 }

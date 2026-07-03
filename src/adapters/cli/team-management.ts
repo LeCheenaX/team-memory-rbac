@@ -11,6 +11,7 @@ export type TeamManagementCommand =
   | ["delegations", "create", string, string, string]
   | ["delegations", "revoke", string, string]
   | ["agents", "onboard", string, string, string, string]
+  | ["resources", "ingest", string, string?]
   | ["conflicts", "list"]
   | ["conflicts", "resolve", string, "keep_target" | "take_incoming" | "manual_merge"]
   | ["replica", "status"]
@@ -40,6 +41,10 @@ export class TeamManagementCli {
           delegationId: command[3],
           sessionId: command[4],
           sessionExpiresAt: command[5],
+        });
+      case "resources":
+        return this.gateway.ingestResource(token, command[2], {
+          clientMutationId: command[3] ?? `cli-ingest:${command[2]}`,
         });
       case "conflicts":
         return this.conflicts(token, command);
@@ -125,6 +130,11 @@ export function parseTeamManagementCommand(args: string[]): TeamManagementComman
     args[5] !== undefined
   ) {
     return ["agents", "onboard", first, second, third, args[5]];
+  }
+  if (area === "resources" && action === "ingest" && first !== undefined) {
+    return second === undefined
+      ? ["resources", "ingest", first]
+      : ["resources", "ingest", first, second];
   }
   if (area === "conflicts" && action === "list") return ["conflicts", "list"];
   if (

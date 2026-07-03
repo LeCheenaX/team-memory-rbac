@@ -27,8 +27,10 @@ import type {
 } from "../../contracts/memory.ts";
 import type {
   MemoryVectorPayload,
+  ResourceCasObject,
   VectorMemoryCollection,
 } from "../../memory/stores.ts";
+import type { PendingOperationRecord } from "../../sync/pending.ts";
 
 function clone<T>(value: T): T {
   return structuredClone(value);
@@ -131,6 +133,15 @@ function persistCasObject(
     throw new Error("local CAS content hash does not match bytes");
   }
   writeBytes(objectPath(casDirectory, contentHash), content);
+}
+
+function pendingCasObjects(
+  pendingOperations: unknown[],
+): ResourceCasObject[] {
+  return pendingOperations.flatMap((operation) => {
+    const objects = (operation as Partial<PendingOperationRecord>).localCasObjects;
+    return Array.isArray(objects) ? objects : [];
+  });
 }
 
 function assertCasObjectReadable(
@@ -331,6 +342,9 @@ export class FileSystemLocalAuthorizedWorkingReplica
           chunk.contentHash ?? chunk.metadata?.contentHash,
           chunkContent(chunk),
         );
+      }
+      for (const object of pendingCasObjects(state.pendingOperations)) {
+        persistCasObject(this.paths.cas, object.contentHash, object.content);
       }
       return;
     }

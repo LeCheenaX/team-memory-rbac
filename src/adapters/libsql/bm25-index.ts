@@ -48,6 +48,46 @@ export class LibsqlBm25Index implements Bm25Index {
     await this.client.executeMultiple(BM25_SCHEMA);
   }
 
+  async upsertDocuments(documents: Bm25Document[]): Promise<void> {
+    const transaction = await this.client.transaction("write");
+    try {
+      for (const document of documents) {
+        await transaction.execute({
+          sql: `insert into bm25_documents(
+            id, root_entity_id, branch_ref, resource_id, revision_id,
+            chunk_id, status, text, payload_json
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          on conflict(id) do update set
+            root_entity_id = excluded.root_entity_id,
+            branch_ref = excluded.branch_ref,
+            resource_id = excluded.resource_id,
+            revision_id = excluded.revision_id,
+            chunk_id = excluded.chunk_id,
+            status = excluded.status,
+            text = excluded.text,
+            payload_json = excluded.payload_json`,
+          args: [
+            document.id,
+            document.rootEntityId,
+            document.branchRef,
+            document.resourceId,
+            document.revisionId,
+            document.chunkId,
+            document.status,
+            document.text,
+            JSON.stringify(document),
+          ],
+        });
+      }
+      await transaction.commit();
+    } catch (error) {
+      await transaction.rollback().catch(() => undefined);
+      throw error;
+    } finally {
+      transaction.close();
+    }
+  }
+
   async replaceRevision(input: {
     rootEntityId: string;
     branchRef: string;

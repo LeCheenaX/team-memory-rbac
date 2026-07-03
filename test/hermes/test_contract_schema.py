@@ -5,7 +5,10 @@ from src.adapters.hermes.session_context import (
     HermesMemoryAdapter,
     map_principal_context,
 )
-from src.adapters.hermes.http_client import TeamMemoryHttpClient
+from src.adapters.hermes.http_client import (
+    HermesTeamMemoryProvider,
+    TeamMemoryHttpClient,
+)
 
 
 class ContractSchemaTest(unittest.TestCase):
@@ -110,7 +113,7 @@ class ContractSchemaTest(unittest.TestCase):
         )
         self.assertEqual(
             parallel["nativeMemory"]["disposition"],
-            "not_applicable",
+            "preserved",
         )
         self.assertEqual(parallel["teamMemory"]["canRead"], True)
         self.assertEqual(parallel["teamMemory"]["canWrite"], True)
@@ -121,7 +124,7 @@ class ContractSchemaTest(unittest.TestCase):
         )
         self.assertEqual(
             replacement["nativeMemory"]["disposition"],
-            "not_applicable",
+            "replaced_by_team_memory",
         )
 
     def test_http_client_backs_hermes_adapter_without_rbac_logic(self) -> None:
@@ -164,6 +167,66 @@ class ContractSchemaTest(unittest.TestCase):
         )
         self.assertEqual(calls[0], ("GET", "identity", None))
         self.assertEqual(calls[2][0], "POST")
+
+    def test_hermes_provider_uses_lifecycle_recall_and_capture(self) -> None:
+        calls: list[tuple[str, str, dict | None]] = []
+
+        def transport(method: str, path: str, payload: dict | None) -> dict:
+            calls.append((method, path, payload))
+            if path == "host/hermes/recall":
+                return {
+                    "value": {
+                        "text": "<team-memory-context>Hermes memory</team-memory-context>",
+                        "memoryIds": ["memory-1"],
+                        "provenance": [
+                            {
+                                "memoryId": "memory-1",
+                                "source": "history",
+                                "score": 1.0,
+                            }
+                        ],
+                    }
+                }
+            if path == "host/hermes/capture":
+                return {
+                    "value": {
+                        "status": "captured",
+                        "entityId": "entity-1",
+                        "branchId": "branch-1",
+                        "commitIds": ["commit-1"],
+                    }
+                }
+            raise AssertionError(path)
+
+        provider = HermesTeamMemoryProvider(
+            TeamMemoryHttpClient(
+                "https://memory.example",
+                "token",
+                transport=transport,
+            )
+        )
+
+        recalled = provider.search(
+            "Hermes memory",
+            user_id="hermes-user",
+            limit=3,
+        )
+        self.assertEqual(recalled["tag"], "memory-context")
+        self.assertEqual(recalled["memoryIds"], ["memory-1"])
+        self.assertEqual(calls[0][1], "host/hermes/recall")
+        self.assertEqual(calls[0][2]["sessionId"], "hermes-user")
+
+        captured = provider.add(
+            [
+                {"role": "user", "content": "do the work"},
+                {"role": "assistant", "content": "done"},
+            ],
+            user_id="hermes-user",
+            outcome="success",
+        )
+        self.assertEqual(captured["status"], "captured")
+        self.assertEqual(calls[1][1], "host/hermes/capture")
+        self.assertEqual(calls[1][2]["finalAssistantMessage"], "done")
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@ import { createLibsqlClient } from "../src/adapters/libsql/client.ts";
 import { bootstrapDevelopment, loadRuntimeConfig, TeamMemoryRuntime } from "../src/adapters/runtime/development-stack.ts";
 import { createTeamMemoryServer } from "../src/adapters/http/server.ts";
 import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
-import { ResourceNotFoundError, ResourceService } from "../src/resources/service.ts";
+import { ResourceConflictError, ResourceNotFoundError, ResourceService } from "../src/resources/service.ts";
 import {
   AuthorizedWorkingReplicaSynchronizer,
   CloudAuthorizedViewAdapter,
@@ -183,7 +183,18 @@ test("authorized CAS imports preserve revisions and do not reveal tombstoned res
     if (session === undefined) return;
     const imported = await runtime.resources.import(session, { clientMutationId: "import-v1", resourceId: "resource-1", revisionId: "revision-1", title: "Notes", sourceType: "document", content: "version one" });
     assert.equal(imported.contentHash, contentHash("version one"));
+    const v1Head = runtime.history.headCommitId("root-resources", "main");
     await runtime.resources.revise(session, { clientMutationId: "import-v2", resourceId: "resource-1", revisionId: "revision-2", content: "version two" });
+    await assert.rejects(
+      () => runtime.resources.revise(session, {
+        clientMutationId: "import-stale",
+        resourceId: "resource-1",
+        revisionId: "revision-stale",
+        content: "stale version",
+        expectedHeadCommitId: v1Head,
+      }),
+      ResourceConflictError,
+    );
     assert.equal(Buffer.from((await runtime.resources.read(session, { resourceId: "resource-1", revisionId: "revision-1" })).content).toString(), "version one");
     assert.equal(Buffer.from((await runtime.resources.read(session, { resourceId: "resource-1" })).content).toString(), "version two");
     await runtime.resources.tombstone(session, { clientMutationId: "delete-v1", resourceId: "resource-1" });

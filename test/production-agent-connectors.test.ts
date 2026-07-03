@@ -169,6 +169,7 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     const tools = await client.listTools() as Array<{ name: string }>;
     assert.ok(tools.some((tool) => tool.name === "memory.write"));
     assert.ok(tools.some((tool) => tool.name === "memory.importResource"));
+    assert.ok(tools.some((tool) => tool.name === "memory.ingestResource"));
 
     const openclaw = new OpenClawTeamMemoryPlugin({
       baseUrl: fixture.baseUrl,
@@ -178,7 +179,7 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     });
     assert.deepEqual(
       openclaw.tools().map((tool) => tool.name),
-      ["memory_search", "memory_get", "memory_write", "memory_import"],
+      ["memory_search", "memory_get", "memory_write", "memory_import", "memory_ingest"],
     );
 
     await openclaw.call("memory_write", {
@@ -232,6 +233,11 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
       sourceType: "document",
       content: "OpenClaw can import resources",
     });
+    const ingested = await openclaw.call("memory_ingest", {
+      clientMutationId: "openclaw-ingest-resource",
+      resourceId: "resource-openclaw",
+    }) as { chunks: unknown[] };
+    assert.equal(ingested.chunks.length, 1);
     const resource = await openclaw.call("memory_get", {
       resourceId: "resource-openclaw",
     }) as { resource: { id: string } };

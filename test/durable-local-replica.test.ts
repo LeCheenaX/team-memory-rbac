@@ -80,6 +80,8 @@ const deltaBranch = {
 
 const chunkText = "Offline resource chunk survives restart";
 const chunkHash = `sha256:${createHash("sha256").update(chunkText).digest("hex")}`;
+const pendingResourceText = "Pending local resource revision";
+const pendingResourceHash = `sha256:${createHash("sha256").update(pendingResourceText).digest("hex")}`;
 
 const deltaResource = {
   id: "resource-local",
@@ -228,14 +230,30 @@ test("filesystem local replica survives restart and resumes sync from the durabl
       request,
     );
     replica.replacePendingOperations([
-      { id: "pending-1", status: "conflicted" },
+      {
+        id: "pending-1",
+        status: "conflicted",
+        localCasObjects: [
+          { contentHash: pendingResourceHash, content: pendingResourceText },
+        ],
+      },
     ]);
 
     const restarted = new FileSystemLocalAuthorizedWorkingReplica(directory);
     assert.equal(restarted.inspect().identity?.commitWatermark, 1);
     assert.deepEqual(restarted.inspect().pendingOperations, [
-      { id: "pending-1", status: "conflicted" },
+      {
+        id: "pending-1",
+        status: "conflicted",
+        localCasObjects: [
+          { contentHash: pendingResourceHash, content: pendingResourceText },
+        ],
+      },
     ]);
+    assert.equal(
+      await readFile(casPath(directory, pendingResourceHash), "utf8"),
+      pendingResourceText,
+    );
 
     const resumedAdapter = new ScriptedSyncAdapter();
     await new AuthorizedWorkingReplicaSynchronizer(

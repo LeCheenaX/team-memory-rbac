@@ -62,12 +62,36 @@ export class TeamMemoryHttpClient {
     return this.request("POST", "memory/search", input, false);
   }
 
+  recallHostMemory(host: string, input: Record<string, unknown>): Promise<unknown> {
+    return this.request(
+      "POST",
+      `host/${encodeURIComponent(host)}/recall`,
+      input,
+    );
+  }
+
+  captureHostMemory(host: string, input: Record<string, unknown>): Promise<unknown> {
+    return this.request(
+      "POST",
+      `host/${encodeURIComponent(host)}/capture`,
+      input,
+    );
+  }
+
   write(input: Record<string, unknown>): Promise<unknown> {
     return this.request("POST", "memory/write", input);
   }
 
   importResource(input: Record<string, unknown>): Promise<unknown> {
     return this.request("POST", "resources/import", input);
+  }
+
+  ingestResource(resourceId: string, input: Record<string, unknown>): Promise<unknown> {
+    return this.request(
+      "POST",
+      `resources/${encodeURIComponent(resourceId)}/ingest`,
+      input,
+    );
   }
 
   readResource(resourceId: string, revisionId?: string): Promise<unknown> {
@@ -99,6 +123,11 @@ export class TeamMemoryHttpClient {
     switch (toolName) {
       case "memory.importResource":
         return this.importResource(input);
+      case "memory.ingestResource":
+        return this.ingestResource(
+          this.requiredString(input, "resourceId"),
+          input,
+        );
       case "memory.readResource": {
         const resourceId = this.requiredString(input, "resourceId");
         return this.readResource(

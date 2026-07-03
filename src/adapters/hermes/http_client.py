@@ -38,6 +38,9 @@ class TeamMemoryHttpClient:
     def call_tool(self, tool_name: str, input_payload: dict[str, Any]) -> dict[str, Any]:
         if tool_name == "memory.importResource":
             return self._request("POST", "resources/import", input_payload)["value"]
+        if tool_name == "memory.ingestResource":
+            resource_id = self._required_string(input_payload, "resourceId")
+            return self._request("POST", f"resources/{resource_id}/ingest", input_payload)["value"]
         if tool_name == "memory.readResource":
             resource_id = self._required_string(input_payload, "resourceId")
             return self._request("GET", f"resources/{resource_id}")
@@ -54,6 +57,12 @@ class TeamMemoryHttpClient:
         if tool_name == "memory.syncPull":
             return self._request("POST", "sync/pull", input_payload)
         raise ValueError(f"unknown Team Memory tool: {tool_name}")
+
+    def recall_host_memory(self, host: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", f"host/{host}/recall", input_payload)["value"]
+
+    def capture_host_memory(self, host: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", f"host/{host}/capture", input_payload)["value"]
 
     def _request(
         self,
@@ -101,3 +110,86 @@ class HermesMemoryHttpAdapter(HermesMemoryAdapter):
             client.list_tools,
             client.call_tool,
         )
+
+
+class HermesTeamMemoryProvider:
+    """Hermes memory-provider adapter with a mem0-style recall/add shape."""
+
+    def __init__(self, client: TeamMemoryHttpClient) -> None:
+        self._client = client
+
+    @classmethod
+    def from_http(cls, base_url: str, token: str) -> "HermesTeamMemoryProvider":
+        return cls(TeamMemoryHttpClient(base_url, token))
+
+    def recall_context(
+        self,
+        user_message: str,
+        session_id: str = "hermes",
+        recent_messages: list[dict[str, str]] | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "sessionId": session_id,
+            "userPrompt": user_message,
+        }
+        if recent_messages is not None:
+            payload["recentMessages"] = recent_messages
+        if limit is not None:
+            payload["limit"] = limit
+        context = self._client.recall_host_memory("hermes", payload)
+        return {
+            "tag": "memory-context",
+            "content": context["text"],
+            "memoryIds": context["memoryIds"],
+            "provenance": context["provenance"],
+        }
+
+    def search(
+        self,
+        query: str,
+        user_id: str | None = None,
+        limit: int | None = None,
+        **metadata: Any,
+    ) -> dict[str, Any]:
+        session_id = str(metadata.get("session_id") or user_id or "hermes")
+        return self.recall_context(query, session_id=session_id, limit=limit)
+
+    def add(
+        self,
+        messages: str | list[dict[str, str]],
+        user_id: str | None = None,
+        outcome: str = "success",
+        **metadata: Any,
+    ) -> dict[str, Any]:
+        session_id = str(metadata.get("session_id") or user_id or "hermes")
+        if isinstance(messages, str):
+            final_message = messages
+            user_prompt = metadata.get("user_prompt")
+        else:
+            user_prompt = next(
+                (
+                    message.get("content")
+                    for message in messages
+                    if message.get("role") == "user"
+                ),
+                None,
+            )
+            final_message = next(
+                (
+                    message.get("content")
+                    for message in reversed(messages)
+                    if message.get("role") == "assistant"
+                ),
+                "",
+            )
+        payload: dict[str, Any] = {
+            "sessionId": session_id,
+            "outcome": outcome,
+            "finalAssistantMessage": final_message,
+        }
+        if isinstance(user_prompt, str):
+            payload["userPrompt"] = user_prompt
+        if "error_summary" in metadata:
+            payload["errorSummary"] = metadata["error_summary"]
+        return self._client.capture_host_memory("hermes", payload)

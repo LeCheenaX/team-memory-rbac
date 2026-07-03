@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   PermissionRouteResult,
   PermissionRouter,
@@ -22,6 +23,7 @@ import {
 import type {
   LocalAuthorizedViewStore,
 } from "./working-replica.ts";
+import type { ResourceCasObject } from "../memory/stores.ts";
 
 export type PendingOperationStatus =
   | "pending"
@@ -55,6 +57,7 @@ export interface PendingOperationRecord {
   conflictBranchRef?: string;
   remoteCommitIds: string[];
   baseFragment: PendingBaseFragment;
+  localCasObjects?: ResourceCasObject[];
 }
 
 export interface PendingOverlayState {
@@ -62,8 +65,24 @@ export interface PendingOverlayState {
   records: PendingOperationRecord[];
 }
 
+export interface StageResourceRevisionInput {
+  subject: CloudMemoryWriteCommand["subject"];
+  resourceId: string;
+  content: string | Uint8Array;
+  clientMutationId: string;
+  revisionId?: string;
+  commitId?: string;
+  branchRef?: string;
+  metadata?: Record<string, unknown>;
+  provenance: PendingOperationProvenance;
+}
+
 function clone<T>(value: T): T {
   return structuredClone(value);
+}
+
+function contentHash(content: string | Uint8Array): string {
+  return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
 function isOverlayActive(status: PendingOperationStatus): boolean {
@@ -286,6 +305,7 @@ export class InMemoryPendingOverlay {
   async stage(
     command: CloudMemoryWriteCommand,
     provenance: PendingOperationProvenance,
+    options: { localCasObjects?: ResourceCasObject[] } = {},
   ): Promise<PendingOperationRecord> {
     const current = await this.materialize();
     if (
@@ -322,6 +342,9 @@ export class InMemoryPendingOverlay {
         current,
         conflictKeysForOperation(command.operation),
       ),
+      ...(options.localCasObjects === undefined
+        ? {}
+        : { localCasObjects: clone(options.localCasObjects) }),
     };
     const candidate = {
       nextSequence: this.state.nextSequence + 1,
@@ -331,6 +354,55 @@ export class InMemoryPendingOverlay {
     this.state = candidate;
     this.localView.replacePendingOperations(this.state.records);
     return clone(record);
+  }
+
+  async stageResourceRevision(
+    input: StageResourceRevisionInput,
+  ): Promise<{
+    record: PendingOperationRecord;
+    revisionId: string;
+    contentHash: string;
+  }> {
+    const state = this.localView.inspect();
+    const identity = state.identity;
+    if (identity === undefined) {
+      throw new Error("cannot stage a resource revision without a local identity");
+    }
+    const branchRef = input.branchRef ?? identity.branchRef;
+    const revisionId =
+      input.revisionId ?? `revision:${input.clientMutationId}`;
+    const hash = contentHash(input.content);
+    const baseCommitId = state.historyRecords
+      .filter((record) => record.status === "accepted")
+      .at(-1)?.commit.id;
+    const record = await this.stage(
+      {
+        subject: input.subject,
+        rootEntityId: identity.rootEntityId,
+        branchRef,
+        ...(baseCommitId === undefined
+          ? {}
+          : { expectedHeadCommitId: baseCommitId }),
+        clientMutationId: input.clientMutationId,
+        action: "import_resource",
+        resourceKind: "resource",
+        commit: {
+          id: input.commitId ?? `commit:${input.clientMutationId}`,
+          message: "Revise resource locally",
+        },
+        operation: {
+          kind: "revise_resource",
+          id: `operation:${input.commitId ?? input.clientMutationId}`,
+          resourceId: input.resourceId,
+          revisionId,
+          contentHash: hash,
+          ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+        },
+      },
+      input.provenance,
+      { localCasObjects: [{ contentHash: hash, content: input.content }] },
+    );
+    return { record, revisionId, contentHash: hash };
   }
 
   async materialize(

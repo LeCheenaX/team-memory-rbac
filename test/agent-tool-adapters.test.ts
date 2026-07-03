@@ -447,8 +447,12 @@ test("OpenClaw, Claude Code, and Hermes expose host-specific memory integration 
     session.token,
     "parallel_native_team_memory",
   );
-  assert.equal(claudeParallel.connector, "mcp");
+  assert.equal(claudeParallel.connector, "claude_code_hooks");
   assert.equal(claudeParallel.nativeMemory.disposition, "preserved");
+  assert.equal(
+    claudeParallel.hostConfiguration.settings["hooks.UserPromptSubmit"],
+    "/host/claude_code/recall",
+  );
   const claudeReplacement = await claudeCode.createMemoryIntegrationPlan(
     session.token,
     "team_memory_replaces_native",
@@ -469,10 +473,10 @@ test("OpenClaw, Claude Code, and Hermes expose host-specific memory integration 
     session.token,
     "team_memory_replaces_native",
   );
-  assert.equal(hermesReplacement.connector, "python_adapter");
+  assert.equal(hermesReplacement.connector, "hermes_memory_provider");
   assert.equal(
     hermesReplacement.nativeMemory.disposition,
-    "not_applicable",
+    "replaced_by_team_memory",
   );
   assert.equal(hermesReplacement.teamMemory.canRead, true);
   assert.equal(hermesReplacement.teamMemory.canWrite, true);

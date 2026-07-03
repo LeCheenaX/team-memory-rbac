@@ -85,7 +85,7 @@ test("OpenClaw, Claude Code, Codex, and Hermes use real sessions for read, searc
       expiresAt: "2030-01-01T00:00:00.000Z",
       createdAt: now,
     });
-    const gateway = new TeamMemoryGateway(runtime, { retrieval: "active-view" });
+    const gateway = new TeamMemoryGateway(runtime);
     const adapters = [
       new OpenClawAgentAdapter(gateway),
       new ClaudeCodeAgentAdapter(gateway),

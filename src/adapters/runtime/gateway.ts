@@ -1,4 +1,5 @@
-import { ResourceNotFoundError } from "../../resources/service.ts";
+import { randomUUID } from "node:crypto";
+import { ResourceConflictError, ResourceNotFoundError } from "../../resources/service.ts";
 import {
   CloudAuthorizedViewAdapter,
   ConflictResolutionAdapter,
@@ -24,6 +25,15 @@ import type { AgentDelegation, UserRootRoleAssignment } from "../../contracts/rb
 import type { AgentType, Permission } from "../../contracts/rbac.ts";
 import type { AuthenticatedSession } from "../libsql/rbac-authority.ts";
 import type { CreatedSession } from "../libsql/rbac-authority.ts";
+import {
+  formatInjectedMemoryContext,
+  hostCaptureInput,
+  hostRecallInput,
+  type HostCaptureInput,
+  type HostRecallInput,
+  type InjectedMemoryContext,
+  type MemoryCaptureResult,
+} from "../lifecycle/host-memory.ts";
 import type { TeamMemoryRuntime } from "./development-stack.ts";
 
 export type GatewayErrorCode =
@@ -136,6 +146,43 @@ function branchRef(payload: Record<string, unknown>): string {
   return optionalString(payload, "branchRef") ?? "main";
 }
 
+function recallSearchText(input: HostRecallInput): string {
+  return [
+    input.userPrompt,
+    ...(input.recentMessages ?? []).slice(-6).map((message) =>
+      `${message.role}: ${message.content}`
+    ),
+    ...(input.resourceHints ?? []),
+  ].join("\n");
+}
+
+function captureTitle(input: HostCaptureInput): string {
+  const subject = input.userPrompt ?? input.finalAssistantMessage ?? input.errorSummary;
+  const trimmed = subject?.replace(/\s+/g, " ").trim();
+  const suffix = trimmed === undefined || trimmed.length === 0
+    ? input.sessionId
+    : trimmed.slice(0, 80);
+  return `${input.host} ${input.outcome} path: ${suffix}`;
+}
+
+function captureDescription(input: HostCaptureInput): string {
+  const lines = [
+    `Host: ${input.host}`,
+    `Session: ${input.sessionId}`,
+    `Outcome: ${input.outcome}`,
+    input.userPrompt === undefined ? "" : `User prompt: ${input.userPrompt}`,
+    input.finalAssistantMessage === undefined
+      ? ""
+      : `Final assistant message: ${input.finalAssistantMessage}`,
+    input.errorSummary === undefined ? "" : `Error summary: ${input.errorSummary}`,
+    input.transcriptPath === undefined ? "" : `Transcript: ${input.transcriptPath}`,
+    input.toolEvents === undefined
+      ? ""
+      : `Tool events: ${JSON.stringify(input.toolEvents)}`,
+  ];
+  return lines.filter((line) => line.length > 0).join("\n");
+}
+
 function numberValue(
   payload: Record<string, unknown>,
   key: string,
@@ -175,6 +222,7 @@ function defaultAgentPermissions(ownerPermissions: readonly Permission[]): Permi
 
 const agentToolCatalog = [
   { name: "memory.importResource", description: "Import a resource", action: "import_resource", resourceKind: "resource" },
+  { name: "memory.ingestResource", description: "Chunk and index a resource revision", action: "index_resource", resourceKind: "resource" },
   { name: "memory.readResource", description: "Read a resource", action: "read", resourceKind: "resource" },
   { name: "memory.write", description: "Write memory", action: "write_entity", resourceKind: "memory_entity" },
   { name: "memory.search", description: "Search memory", action: "search", resourceKind: "memory_entity" },
@@ -583,6 +631,18 @@ export class TeamMemoryGateway {
       ...(typeof payload.resourceId === "string"
         ? { resourceId: payload.resourceId }
         : {}),
+      ...(typeof payload.revisionId === "string"
+        ? { revisionId: payload.revisionId }
+        : {}),
+      ...(typeof payload.commitId === "string"
+        ? { commitId: payload.commitId }
+        : {}),
+      ...(typeof payload.branchRef === "string"
+        ? { branchRef: payload.branchRef }
+        : {}),
+      ...(typeof payload.expectedHeadCommitId === "string"
+        ? { expectedHeadCommitId: payload.expectedHeadCommitId }
+        : {}),
       title: stringValue(payload, "title"),
       sourceType: stringValue(payload, "sourceType") as ResourceSourceType,
       content,
@@ -608,6 +668,43 @@ export class TeamMemoryGateway {
       clientMutationId: stringValue(payload, "clientMutationId"),
       resourceId,
       content,
+      ...(typeof payload.revisionId === "string"
+        ? { revisionId: payload.revisionId }
+        : {}),
+      ...(typeof payload.commitId === "string"
+        ? { commitId: payload.commitId }
+        : {}),
+      ...(typeof payload.branchRef === "string"
+        ? { branchRef: payload.branchRef }
+        : {}),
+      ...(typeof payload.expectedHeadCommitId === "string"
+        ? { expectedHeadCommitId: payload.expectedHeadCommitId }
+        : {}),
+      ...(typeof payload.metadata === "object" && payload.metadata !== null
+        ? { metadata: payload.metadata as Record<string, unknown> }
+        : {}),
+    });
+  }
+
+  async ingestResource(
+    token: string | undefined,
+    resourceId: string,
+    payload: Record<string, unknown>,
+  ): Promise<unknown> {
+    assertNoIdentityOverride(payload);
+    const session = await this.authenticate(token);
+    return this.runtime.ingestion.ingest(session, {
+      resourceId,
+      clientMutationId: stringValue(payload, "clientMutationId"),
+      ...(typeof payload.revisionId === "string"
+        ? { revisionId: payload.revisionId }
+        : {}),
+      ...(typeof payload.branchRef === "string"
+        ? { branchRef: payload.branchRef }
+        : {}),
+      ...(typeof payload.maxChunkCharacters === "number"
+        ? { maxChunkCharacters: payload.maxChunkCharacters }
+        : {}),
     });
   }
 
@@ -635,11 +732,12 @@ export class TeamMemoryGateway {
   ): Promise<CloudMemoryWriteResult> {
     assertNoIdentityOverride(payload);
     const session = await this.authenticate(token);
+    const branch = branchRef(payload);
     const request: CloudMemoryWriteCommand = {
       subject: gatewaySubject(session),
       rootEntityId: session.rootEntityId,
       taskScope: session.taskScope,
-      branchRef: branchRef(payload),
+      branchRef: branch,
       action: stringValue(payload, "action") as MemoryAction,
       resourceKind: stringValue(payload, "resourceKind") as MemoryObjectKind,
       clientMutationId: stringValue(payload, "clientMutationId"),
@@ -664,6 +762,7 @@ export class TeamMemoryGateway {
         result.conflict.id,
       );
     }
+    await this.runtime.projectMemory(session.rootEntityId, branch);
     return result;
   }
 
@@ -684,6 +783,141 @@ export class TeamMemoryGateway {
       query: objectValue(payload, "query") as MemoryRetrievalRequest["query"],
     };
     return this.retrievalRouter.execute(request);
+  }
+
+  async recallHostMemory(
+    token: string | undefined,
+    payload: Record<string, unknown>,
+  ): Promise<InjectedMemoryContext> {
+    assertNoIdentityOverride(payload);
+    const input = hostRecallInput(payload);
+    const session = await this.authenticate(token);
+    const branch = input.branchRef ?? "main";
+    let result = unwrap(await this.retrievalRouter.execute({
+      subject: gatewaySubject(session),
+      rootEntityId: session.rootEntityId,
+      taskScope: session.taskScope,
+      branchRef: branch,
+      action: "search",
+      resourceKind: "memory_entity",
+      query: {
+        kind: "entity",
+        text: recallSearchText(input),
+        limit: input.limit ?? 8,
+      },
+    }));
+    if (result.items.length === 0) {
+      result = unwrap(await this.retrievalRouter.execute({
+        subject: gatewaySubject(session),
+        rootEntityId: session.rootEntityId,
+        taskScope: session.taskScope,
+        branchRef: branch,
+        action: "search",
+        resourceKind: "memory_entity",
+        query: {
+          kind: "entity",
+          limit: input.limit ?? 8,
+        },
+      }));
+    }
+    return formatInjectedMemoryContext(input.host, result);
+  }
+
+  async captureHostMemory(
+    token: string | undefined,
+    payload: Record<string, unknown>,
+  ): Promise<MemoryCaptureResult> {
+    assertNoIdentityOverride(payload);
+    const input = hostCaptureInput(payload);
+    const session = await this.authenticate(token);
+    const now = new Date().toISOString();
+    const branch = input.branchRef ?? "main";
+    const id = randomUUID();
+    const entityId = `host-capture:${id}`;
+    const branchId = `host-capture-branch:${id}`;
+    const entityCommitId = `host-capture-entity-commit:${id}`;
+    const branchCommitId = `host-capture-branch-commit:${id}`;
+    const entityResult = unwrap(await this.writeRouter.execute({
+      subject: gatewaySubject(session),
+      rootEntityId: session.rootEntityId,
+      taskScope: session.taskScope,
+      branchRef: branch,
+      action: "write_entity",
+      resourceKind: "memory_entity",
+      clientMutationId: `host-capture-entity:${id}`,
+      commit: {
+        id: entityCommitId,
+        message: `Capture ${input.host} ${input.outcome} path`,
+      },
+      operation: {
+        kind: "create_entity",
+        id: `host-capture-entity-operation:${id}`,
+        entity: {
+          id: entityId,
+          rootEntityId: session.rootEntityId,
+          currentBranchId: branchId,
+          status: "active",
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+    }));
+    if (entityResult.status === "conflict") {
+      throw new TeamMemoryGatewayError("conflict", entityResult.conflict.id);
+    }
+    const branchResult = unwrap(await this.writeRouter.execute({
+      subject: gatewaySubject(session),
+      rootEntityId: session.rootEntityId,
+      taskScope: session.taskScope,
+      branchRef: branch,
+      action: "write_entity_branch",
+      resourceKind: "memory_entity_branch",
+      clientMutationId: `host-capture-branch:${id}`,
+      commit: {
+        id: branchCommitId,
+        message: `Capture ${input.host} ${input.outcome} details`,
+      },
+      operation: {
+        kind: "create_entity_branch",
+        id: `host-capture-branch-operation:${id}`,
+        branch: {
+          id: branchId,
+          entityId,
+          rootEntityId: session.rootEntityId,
+          branchRef: branch,
+          title: input.title ?? captureTitle(input),
+          description: captureDescription(input),
+          tags: ["host-memory", input.host, input.outcome],
+          extraInfo: {
+            host: input.host,
+            sessionId: input.sessionId,
+            outcome: input.outcome,
+            ...(input.userPrompt === undefined ? {} : { userPrompt: input.userPrompt }),
+            ...(input.finalAssistantMessage === undefined
+              ? {}
+              : { finalAssistantMessage: input.finalAssistantMessage }),
+            ...(input.transcriptPath === undefined ? {} : { transcriptPath: input.transcriptPath }),
+            ...(input.errorSummary === undefined ? {} : { errorSummary: input.errorSummary }),
+            ...(input.toolEvents === undefined ? {} : { toolEvents: input.toolEvents }),
+          },
+          importance: input.outcome === "failure" ? 0.9 : 0.75,
+          confidence: 0.8,
+          status: "active",
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+    }));
+    if (branchResult.status === "conflict") {
+      throw new TeamMemoryGatewayError("conflict", branchResult.conflict.id);
+    }
+    await this.runtime.projectMemory(session.rootEntityId, branch);
+    return {
+      status: "captured",
+      entityId,
+      branchId,
+      commitIds: [entityCommitId, branchCommitId],
+    };
   }
 
   async listHistory(
@@ -755,11 +989,12 @@ export class TeamMemoryGateway {
   ): Promise<ConflictResolutionResult> {
     assertNoIdentityOverride(payload);
     const session = await this.authenticate(token);
+    const branch = branchRef(payload);
     const request: ConflictResolutionCommand = {
       subject: gatewaySubject(session),
       rootEntityId: session.rootEntityId,
       taskScope: session.taskScope,
-      branchRef: branchRef(payload),
+      branchRef: branch,
       action: "merge",
       resourceKind: "memory_entity",
       clientMutationId: stringValue(payload, "clientMutationId"),
@@ -778,7 +1013,9 @@ export class TeamMemoryGateway {
       request.manualAction = payload.manualAction as MemoryAction;
       request.manualResourceKind = payload.manualResourceKind as MemoryObjectKind;
     }
-    return unwrap(await this.resolutionRouter.execute(request));
+    const result = unwrap(await this.resolutionRouter.execute(request));
+    await this.runtime.projectMemory(session.rootEntityId, branch);
+    return result;
   }
 
   async pullSync(
@@ -826,6 +1063,9 @@ export function gatewayErrorFromUnknown(error: unknown): TeamMemoryGatewayError 
   if (error instanceof TeamMemoryGatewayError) return error;
   if (error instanceof ResourceNotFoundError) {
     return new TeamMemoryGatewayError("not_found", error.message);
+  }
+  if (error instanceof ResourceConflictError) {
+    return new TeamMemoryGatewayError("conflict", error.conflictId);
   }
   if (error instanceof SyntaxError) {
     return new TeamMemoryGatewayError("validation_failed", error.message);

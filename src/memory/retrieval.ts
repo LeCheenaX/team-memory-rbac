@@ -389,12 +389,21 @@ function pointId(point: VectorMemoryPoint): string {
 }
 
 function branchFromPoint(point: VectorMemoryPoint): MemoryEntityBranch {
+  const payload = point.payload as unknown as Partial<MemoryEntityBranch>;
   return {
     ...(point.payload as unknown as MemoryEntityBranch),
     id:
       (typeof point.payload.entityBranchId === "string"
         ? point.payload.entityBranchId
         : undefined) ?? pointId(point),
+    title: typeof payload.title === "string" ? payload.title : pointId(point),
+    description:
+      typeof payload.description === "string" ? payload.description : "",
+    tags: Array.isArray(payload.tags) ? payload.tags : [],
+    importance:
+      typeof payload.importance === "number" ? payload.importance : 0,
+    confidence:
+      typeof payload.confidence === "number" ? payload.confidence : 0,
   };
 }
 
@@ -751,7 +760,10 @@ function dotProduct(left: number[], right: number[]): number {
   return score;
 }
 
-function includesText(value: string, query: string): boolean {
+function includesText(value: unknown, query: string): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
   return value.toLocaleLowerCase().includes(query.toLocaleLowerCase());
 }
 

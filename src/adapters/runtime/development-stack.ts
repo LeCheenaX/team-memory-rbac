@@ -21,6 +21,8 @@ import {
 import { PermissionRouter } from "../../permission-router.ts";
 import { ResourceIngestionService } from "../../ingestion/service.ts";
 import type { ResourceCas } from "../../memory/stores.ts";
+import { StoreMemoryProjector } from "../../memory/projector.ts";
+import { HistoryMemoryProjectionWorker } from "../../memory/projection-worker.ts";
 
 export type CasBackendKind = "filesystem" | "object_store";
 
@@ -87,6 +89,7 @@ export class TeamMemoryRuntime {
   readonly relations: LibsqlMemoryRelationStore;
   readonly bm25: LibsqlBm25Index;
   readonly ingestion: ResourceIngestionService;
+  readonly projection: HistoryMemoryProjectionWorker;
   readonly retrieval: PermissionRouter<
     MemoryRetrievalResult,
     MemoryRetrievalRequest
@@ -105,9 +108,10 @@ export class TeamMemoryRuntime {
     relations: LibsqlMemoryRelationStore,
     bm25: LibsqlBm25Index,
     ingestion: ResourceIngestionService,
+    projection: HistoryMemoryProjectionWorker,
     retrieval: TeamMemoryRuntime["retrieval"],
     config: RuntimeConfig,
-  ) { this.client = client; this.rbac = rbac; this.history = history; this.policy = policy; this.cas = cas; this.resources = resources; this.admin = admin; this.vectors = vectors; this.relations = relations; this.bm25 = bm25; this.ingestion = ingestion; this.retrieval = retrieval; this.config = config; }
+  ) { this.client = client; this.rbac = rbac; this.history = history; this.policy = policy; this.cas = cas; this.resources = resources; this.admin = admin; this.vectors = vectors; this.relations = relations; this.bm25 = bm25; this.ingestion = ingestion; this.projection = projection; this.retrieval = retrieval; this.config = config; }
 
   static async create(config: RuntimeConfig): Promise<TeamMemoryRuntime> {
     const client = createLibsqlClient({ url: config.libsqlUrl, ...(config.libsqlAuthToken === undefined ? {} : { authToken: config.libsqlAuthToken }) });
@@ -122,8 +126,17 @@ export class TeamMemoryRuntime {
     const relations = await LibsqlMemoryRelationStore.create(client);
     const bm25 = await LibsqlBm25Index.create(client);
     const ingestion = new ResourceIngestionService(policy, history, cas, vectors, bm25);
+    const projection = new HistoryMemoryProjectionWorker(
+      history,
+      new StoreMemoryProjector(cas, vectors, relations),
+      { bm25 },
+    );
     const retrieval = new PermissionRouter(policy, new MemoryRetrievalAdapter(new StoreBackedAuthorizedQuerySource(vectors, relations, "cloud_active", bm25)));
-    return new TeamMemoryRuntime(client, rbac, history, policy, cas, resources, admin, vectors, relations, bm25, ingestion, retrieval, config);
+    return new TeamMemoryRuntime(client, rbac, history, policy, cas, resources, admin, vectors, relations, bm25, ingestion, projection, retrieval, config);
+  }
+
+  async projectMemory(rootEntityId: string, branchRef: string): Promise<void> {
+    await this.projection.project(rootEntityId, branchRef);
   }
 
   async ready(): Promise<void> {

@@ -262,6 +262,7 @@ export class QdrantVectorMemoryStore implements VectorMemoryStore {
             distance: this.distance,
           },
         },
+        conflictValue: {},
       });
     }
     this.initialized.set(collection, vectorSize);
@@ -298,6 +299,7 @@ export class QdrantVectorMemoryStore implements VectorMemoryStore {
       method: "GET" | "POST" | "PUT" | "DELETE";
       body?: unknown;
       notFoundValue?: unknown;
+      conflictValue?: unknown;
     },
   ): Promise<unknown> {
     const response = await fetch(new URL(path, this.baseUrl), {
@@ -312,6 +314,9 @@ export class QdrantVectorMemoryStore implements VectorMemoryStore {
     });
     if (response.status === 404 && "notFoundValue" in options) {
       return options.notFoundValue;
+    }
+    if (response.status === 409 && "conflictValue" in options) {
+      return options.conflictValue;
     }
     if (!response.ok) {
       throw new QdrantUnavailableError(

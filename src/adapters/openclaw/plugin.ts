@@ -35,6 +35,7 @@ export class OpenClawTeamMemoryPlugin {
       this.tool("team_memory.search", "Search RBAC-protected Team Memory"),
       this.tool("team_memory.write", "Write RBAC-protected Team Memory"),
       this.tool("team_memory.import_resource", "Import a resource into Team Memory"),
+      this.tool("team_memory.ingest_resource", "Chunk and index a Team Memory resource"),
       this.tool("team_memory.read_resource", "Read a Team Memory resource"),
     ];
     if (this.mode === "parallel_native_team_memory") return common;
@@ -43,6 +44,7 @@ export class OpenClawTeamMemoryPlugin {
       this.tool("memory_get", "OpenClaw active-memory resource lookup through Team Memory"),
       this.tool("memory_write", "OpenClaw active-memory write through Team Memory"),
       this.tool("memory_import", "OpenClaw active-memory import through Team Memory"),
+      this.tool("memory_ingest", "OpenClaw active-memory resource indexing through Team Memory"),
     ];
   }
 
@@ -57,6 +59,12 @@ export class OpenClawTeamMemoryPlugin {
       case "team_memory.import_resource":
       case "memory_import":
         return this.client.importResource(input);
+      case "team_memory.ingest_resource":
+      case "memory_ingest":
+        return this.client.ingestResource(
+          this.requiredString(input, "resourceId"),
+          input,
+        );
       case "team_memory.read_resource":
       case "memory_get":
         return this.client.readResource(
@@ -68,6 +76,26 @@ export class OpenClawTeamMemoryPlugin {
     }
   }
 
+  async recallContext(input: {
+    sessionId: string;
+    userPrompt: string;
+    recentMessages?: Array<{ role: "user" | "assistant" | "system" | "tool"; content: string }>;
+    limit?: number;
+  }): Promise<unknown> {
+    return this.client.recallHostMemory("openclaw", input);
+  }
+
+  async capturePath(input: {
+    sessionId: string;
+    outcome: "success" | "failure" | "unknown";
+    userPrompt?: string;
+    finalAssistantMessage?: string;
+    errorSummary?: string;
+    toolEvents?: Array<Record<string, unknown>>;
+  }): Promise<unknown> {
+    return this.client.captureHostMemory("openclaw", input);
+  }
+
   manifest(): Record<string, unknown> {
     return {
       id: this.id,
@@ -75,6 +103,10 @@ export class OpenClawTeamMemoryPlugin {
       mode: this.mode,
       slot: this.mode === "team_memory_replaces_native" ? "memory" : undefined,
       tools: this.tools(),
+      lifecycle: {
+        recall: "host/openclaw/recall",
+        capture: "host/openclaw/capture",
+      },
     };
   }
 
