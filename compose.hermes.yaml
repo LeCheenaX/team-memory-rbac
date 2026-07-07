@@ -33,7 +33,7 @@ services:
       dockerfile: docker/hermes/Dockerfile
     environment:
       TEAM_MEMORY_URL: http://service:3000
-      TEAM_MEMORY_TOKEN: ${HERMES_A_TOKEN:?Set HERMES_A_TOKEN before running hermes-a}
+      TEAM_MEMORY_TOKEN: ${HERMES_A_TOKEN:-}
       PYTHONPATH: /opt/team-memory-rbac
     working_dir: /workspace
     stdin_open: true
@@ -52,7 +52,7 @@ services:
       dockerfile: docker/hermes/Dockerfile
     environment:
       TEAM_MEMORY_URL: http://service:3000
-      TEAM_MEMORY_TOKEN: ${HERMES_B_TOKEN:?Set HERMES_B_TOKEN before running hermes-b}
+      TEAM_MEMORY_TOKEN: ${HERMES_B_TOKEN:-}
       PYTHONPATH: /opt/team-memory-rbac
     working_dir: /workspace
     stdin_open: true
