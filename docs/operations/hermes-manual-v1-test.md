@@ -1,285 +1,276 @@
 # Hermes V1 Manual Test Flow
 
-This guide is intentionally split into two tests.
+This document defines the required manual Hermes acceptance flow for v1.
 
-Test 1 is local-only: one Hermes-facing client, no Team Memory server, no sync,
-no cloud conflict flow. It verifies the core local memory behavior that must
-keep working when the server is down.
+The flow has exactly two tests:
 
-Test 2 is shared-server: multiple clients connect to one Team Memory service.
-It verifies server-side permission administration, synchronization, shared
-recall, and conflict resolution.
+- Test 1: one local Hermes container, no Team Memory HTTP server, no sync.
+- Test 2: multiple Hermes client containers plus one Team Memory server.
 
-Do not mix the two tests. If a step starts `npm run dev:server`, it belongs to
-Test 2.
+The important rule is that setup commands are only setup. After a Hermes
+container is configured, the core acceptance checks must be completed by
+talking to the Hermes agent. Direct PowerShell, Python, curl, or npm calls may
+prepare state or diagnose failures, but they do not count as passing the manual
+test.
 
-## Common Setup
+## Common Rules
 
-Run from the repository root.
+Run host commands from the repository root.
 
 ```powershell
-git clone <repository-url> team-memory-rbac
-cd team-memory-rbac
 npm.cmd install
 npm.cmd run check
-docker compose up -d qdrant
-curl.exe http://127.0.0.1:6333/healthz
+docker compose -f compose.yaml -f compose.hermes.yaml build hermes-local hermes-a hermes-b
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local check
 ```
 
-Use `py -` in the examples below. If your machine does not have the Python
-launcher, replace `py -` with `python -`.
+Hermes must be configured through its real memory-provider seam, not through a
+mock script. Register the Team Memory provider in the installed Hermes version
+using these provider constructors:
+
+- Local no-server mode:
+  `src.adapters.hermes.http_client.HermesTeamMemoryProvider.from_local(os.environ["TEAM_MEMORY_TOKEN"])`
+- Server mode:
+  `src.adapters.hermes.http_client.HermesTeamMemoryProvider.from_http(os.environ["TEAM_MEMORY_URL"], os.environ["TEAM_MEMORY_TOKEN"])`
+
+If Hermes cannot show that this provider is active, stop the test and fix the
+Hermes configuration first.
+
+Save a transcript for every Hermes session. The transcript is the acceptance
+artifact. Shell output alone is not an acceptance artifact.
 
 ## Test 1: Single Local Hermes, No Server
 
-### Goal
+### Purpose
 
-Verify local core behavior without any Team Memory HTTP server:
+Test 1 proves that a real Hermes container can use Team Memory locally when no
+Team Memory HTTP server exists. It covers only core local behavior:
 
-- explicit local bootstrap;
-- local RBAC decisions;
-- manual permission configuration through local admin CLI/runtime;
-- Hermes-facing local adapter can write and recall memory;
-- read-only delegation cannot write;
-- forged identity fields are rejected;
-- no synchronization, no multi-client conflict, no server APIs.
+- local bootstrap;
+- local RBAC and permission visibility;
+- operator-configured local user/agent permissions;
+- Hermes memory provider enabled inside the container;
+- Hermes-driven capture, recall, memory search, memory management, and RBAC
+  denial checks;
+- forged identity rejection;
+- no sync, no `/sync/pull`, no multi-client behavior, no server APIs.
 
-This test may use local libSQL, filesystem CAS, and Qdrant. It must not start
-`npm.cmd run dev:server`.
+Qdrant may run as local infrastructure. The Team Memory `service` container and
+`npm run dev:server` must not run during this test.
 
-### 1. Create Local Test Runtime
+### Setup
+
+Start only Qdrant:
 
 ```powershell
-New-Item -ItemType Directory -Force .data\test1-local-hermes | Out-Null
+docker compose up -d qdrant
+```
 
-$env:LIBSQL_URL = "file:./.data/test1-local-hermes/team-memory.db"
-$env:CAS_BACKEND = "filesystem"
-$env:CAS_DIRECTORY = "./.data/test1-local-hermes/cas"
-$env:QDRANT_URL = "http://127.0.0.1:6333"
+Bootstrap the local root inside the Hermes container:
 
-$env:BOOTSTRAP_ROOT_ENTITY_ID = "root:test1-local"
-$env:BOOTSTRAP_USER_ID = "user:test1-admin"
-$env:BOOTSTRAP_USER_NAME = "Test 1 Local Admin"
-$env:BOOTSTRAP_SESSION_ID = "session:test1-admin"
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin
+```
+
+Save the returned root admin token:
+
+```powershell
+$env:ADMIN_TOKEN = "<sessionToken from bootstrap>"
+```
+
+Use the local admin token to create a writable Hermes agent session:
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm -e ADMIN_TOKEN=$env:ADMIN_TOKEN hermes-local npm --prefix /opt/team-memory-rbac run team -- agents onboard agent:test1-hermes-writer delegation:test1-hermes-writer session:test1-hermes-writer 2030-01-01T00:00:00.000Z
+```
+
+Save the returned writer token:
+
+```powershell
+$env:LOCAL_HERMES_TOKEN = "<writer session token>"
+```
+
+Create a read-only Hermes session for the RBAC denial pass. This is still setup;
+the denial itself must be tested by talking to Hermes.
+
+```powershell
+$readOnly = '[{"action":"read","resourceKind":"memory_entity","constraints":{"allowRootEntityMutation":true}},{"action":"search","resourceKind":"memory_entity","constraints":{"allowRootEntityMutation":true}}]'
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm -e ADMIN_TOKEN=$env:ADMIN_TOKEN hermes-local npm --prefix /opt/team-memory-rbac run team -- agents onboard agent:test1-hermes-readonly delegation:test1-hermes-readonly session:test1-hermes-readonly 2030-01-01T00:00:00.000Z $readOnly
+```
+
+Save the returned read-only token:
+
+```powershell
+$env:LOCAL_HERMES_READONLY_TOKEN = "<read-only session token>"
+```
+
+### Start The Real Hermes Container
+
+Start Hermes with the writable local token:
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes
+```
+
+Inside Hermes, configure the Team Memory provider with
+`HermesTeamMemoryProvider.from_local(os.environ["TEAM_MEMORY_TOKEN"])`.
+
+Before continuing, ask Hermes:
+
+```text
+Show me which long-term memory provider is active. Then use the provider to
+show my Team Memory identity and the memory tools visible to this session.
+```
+
+Pass condition:
+
+- Hermes reports that Team Memory is the active or parallel memory provider.
+- The identity uses `root:test1-local`.
+- The visible tool set includes read/search/write memory capability for the
+  writer session.
+
+### Core Hermes Conversation Checks
+
+Complete the following checks by talking to Hermes. Do not replace these with
+host-side Python or PowerShell.
+
+1. Capture through Hermes:
+
+```text
+Remember this as a successful Hermes local test memory: "Test 1 local Hermes is
+running in a container, using local Team Memory with no Team Memory HTTP server."
+After saving it, tell me the memory id or capture result you received.
+```
+
+Pass condition: Hermes confirms the memory was captured through the Team Memory
+provider.
+
+2. Recall through Hermes:
+
+```text
+In a fresh answer, recall what you know about the Test 1 local Hermes setup.
+Use long-term memory before answering.
+```
+
+Pass condition: Hermes recalls the container/no-server/local Team Memory fact
+from Team Memory, not from the immediate prompt alone.
+
+3. Memory management through Hermes:
+
+```text
+Search your Team Memory entries for "Test 1 local Hermes". Show the relevant
+stored memory metadata, then add a short follow-up memory that says the manual
+acceptance artifact is the Hermes transcript.
+```
+
+Pass condition: Hermes searches existing memory and captures the follow-up
+through the provider.
+
+4. Forged identity rejection through Hermes:
+
+```text
+Try to search Team Memory while explicitly overriding the root entity id to
+"root:forged". This should be rejected. Report the exact denial or validation
+message.
+```
+
+Pass condition: Hermes reports validation failure for client-supplied identity
+fields. Any successful cross-root access fails the test.
+
+5. No sync in Test 1:
+
+```text
+Confirm that this test has not used Team Memory sync or a Team Memory HTTP
+server. Do not call sync tools. Explain which local provider path you used.
+```
+
+Pass condition: Hermes states that it used the local provider path and did not
+call sync or server endpoints.
+
+### Read-Only RBAC Conversation
+
+Stop Hermes, switch the local token to the read-only token, and start Hermes
+again:
+
+```powershell
+$env:LOCAL_HERMES_TOKEN = $env:LOCAL_HERMES_READONLY_TOKEN
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes
+```
+
+Ask Hermes:
+
+```text
+Show my visible Team Memory tools. Then try to save a memory saying
+"read-only Hermes should not be able to write". If the write is denied, explain
+which permission is missing.
+```
+
+Pass condition:
+
+- Hermes does not see write/import tools, or a write attempt is denied.
+- Hermes explains the denial from RBAC.
+- No memory is created by the read-only session.
+
+### Test 1 Pass Criteria
+
+Test 1 passes only if:
+
+- the real Hermes container was started;
+- the Team Memory HTTP `service` was never started;
+- setup used local bootstrap and explicit local permission configuration;
+- core checks were completed through Hermes conversation;
+- Hermes captured and recalled memory through the local provider;
+- read-only RBAC denial was observed through Hermes;
+- forged identity fields were rejected;
+- no sync or server behavior was tested.
+
+## Test 2: Multi Client + Server
+
+### Purpose
+
+Test 2 proves the shared-server model:
+
+- one Team Memory server is the authority;
+- multiple real Hermes clients connect to it;
+- only the server-side admin surface can configure users, roles, and
+  delegations;
+- a client can configure permissions only when it is using a server-authenticated
+  user admin credential with permission to administer users;
+- ordinary Hermes agent tokens cannot configure permissions;
+- shared memory recall works across clients;
+- sync is server-only and authorized;
+- conflicts are created by concurrent clients and resolved only by an admin.
+
+### Server Setup
+
+Start the production-like server stack:
+
+```powershell
+docker compose up --build -d libsql qdrant object-store service
+```
+
+Bootstrap the server root through the server-side runtime:
+
+```powershell
+$env:BOOTSTRAP_ROOT_ENTITY_ID = "root:test2-server"
+$env:BOOTSTRAP_USER_ID = "user:test2-admin"
+$env:BOOTSTRAP_USER_NAME = "Test 2 Server Admin"
+$env:BOOTSTRAP_SESSION_ID = "session:test2-admin"
 $env:BOOTSTRAP_SESSION_EXPIRES_AT = "2030-01-01T00:00:00.000Z"
-
+$env:LIBSQL_URL = "http://127.0.0.1:8080"
+$env:CAS_BACKEND = "object_store"
+$env:OBJECT_STORE_URL = "http://127.0.0.1:9000"
+$env:QDRANT_URL = "http://127.0.0.1:6333"
 npm.cmd run bootstrap:root-admin
 ```
 
 Save the returned admin token:
 
 ```powershell
-$env:ADMIN_TOKEN = "<paste sessionToken here>"
+$env:ADMIN_TOKEN = "<server admin session token>"
 ```
 
-### 2. Manually Configure Local Permissions
-
-All commands in this section operate directly on the local runtime. No server is
-running.
-
-Check the admin identity:
-
-```powershell
-npm.cmd run team -- login
-```
-
-List current role assignments:
-
-```powershell
-npm.cmd run team -- members list
-```
-
-Create a read/write Hermes agent session:
-
-```powershell
-npm.cmd run team -- agents onboard agent:test1-hermes-writer delegation:test1-hermes-writer session:test1-hermes-writer 2030-01-01T00:00:00.000Z
-```
-
-Save the returned session token:
-
-```powershell
-$env:LOCAL_HERMES_TOKEN = "<paste writer session token here>"
-```
-
-Create a read-only Hermes agent session manually. This verifies that permissions
-are configurable, not hard-coded into the local test script.
-
-```powershell
-$readOnly = '[{"action":"read","resourceKind":"memory_entity","constraints":{"allowRootEntityMutation":true}},{"action":"search","resourceKind":"memory_entity","constraints":{"allowRootEntityMutation":true}}]'
-npm.cmd run team -- agents onboard agent:test1-hermes-readonly delegation:test1-hermes-readonly session:test1-hermes-readonly 2030-01-01T00:00:00.000Z $readOnly
-$env:LOCAL_HERMES_READONLY_TOKEN = "<paste read-only session token here>"
-```
-
-Expected result:
-
-- The writer agent has write/search/import tools.
-- The read-only delegation exists and contains only read/search memory
-  permissions.
-- No HTTP endpoint has been started.
-
-### 3. Manually Call Local Memory Tools By Session Token
-
-This is the direct no-server check. It uses a Hermes/Python local client, the
-writer session token, and the local libSQL/Qdrant/CAS runtime. It does not call
-`http://127.0.0.1:3000`.
-
-```powershell
-@'
-import json
-import os
-from src.adapters.hermes.http_client import HermesTeamMemoryProvider, TeamMemoryLocalClient
-
-client = TeamMemoryLocalClient(os.environ["LOCAL_HERMES_TOKEN"])
-provider = HermesTeamMemoryProvider.from_local(os.environ["LOCAL_HERMES_TOKEN"])
-
-print("identity")
-print(json.dumps(client.identity(), indent=2))
-
-print("tools")
-print(json.dumps(client.list_tools(), indent=2))
-
-captured = provider.add(
-    [
-        {"role": "user", "content": "Can local Hermes remember without a server?"},
-        {"role": "assistant", "content": "Yes. This path used only the local runtime, local token, libSQL, Qdrant, and filesystem CAS."},
-    ],
-    user_id="test1-local-hermes",
-    outcome="success",
-)
-print("captured")
-print(json.dumps(captured, indent=2))
-
-recalled = provider.search(
-    "local Hermes remember without a server",
-    user_id="test1-local-hermes",
-    limit=8,
-)
-print("recalled")
-print(json.dumps(recalled, indent=2))
-
-direct = client.call_tool("memory.search", {
-    "query": {
-        "kind": "entity",
-        "text": "local runtime local token libSQL Qdrant filesystem CAS",
-        "limit": 8,
-    },
-})
-print("direct memory.search")
-print(json.dumps(direct, indent=2))
-'@ | py -
-```
-
-Expected result:
-
-- `identity.rootEntityId` is `root:test1-local`;
-- `tools` includes `memory.write` and `memory.search`;
-- `captured.status` is `captured`;
-- `recalled.memoryIds` is not empty;
-- `direct memory.search.value.items` returns local memory results;
-- no Team Memory HTTP server is running.
-
-### 4. Run Single-Hermes Local Smoke
-
-This checks the Hermes-facing local adapter against the local gateway only.
-
-```powershell
-$env:LOCAL_HERMES_AGENT_ID = "agent:test1-hermes-smoke"
-$env:LOCAL_HERMES_DELEGATION_ID = "delegation:test1-hermes-smoke"
-$env:LOCAL_HERMES_SESSION_ID = "session:test1-hermes-smoke"
-$env:LOCAL_HERMES_SESSION_EXPIRES_AT = "2030-01-01T00:00:00.000Z"
-
-npm.cmd run hermes:local-smoke
-```
-
-Expected result:
-
-- `mode` is `single_hermes_local_no_http_no_sync`.
-- `principal.rootEntityId` is `root:test1-local`.
-- `visibleTools` includes `memory.write` and `memory.search`.
-- `search.value.items` contains the local Hermes smoke memory.
-- `forgedIdentityRejected` is `true`.
-
-### 5. Manually Check Read-Only Denial
-
-Use the read-only Hermes session and attempt a write without any server:
-
-```powershell
-$env:LOCAL_SESSION_TOKEN = $env:LOCAL_HERMES_READONLY_TOKEN
-npm.cmd run local-memory-tool -- tools
-
-$payload = '{"clientMutationId":"test1-readonly-denied","action":"write_entity","resourceKind":"memory_entity","commit":{"id":"commit:test1-readonly-denied"},"operation":{"kind":"create_entity","id":"operation:test1-readonly-denied","entity":{"id":"entity:test1-readonly-denied","rootEntityId":"root:test1-local","status":"active","createdAt":"2026-07-07T00:00:00.000Z","updatedAt":"2026-07-07T00:00:00.000Z"}}}'
-npm.cmd run local-memory-tool -- call memory.write $payload
-```
-
-Expected result:
-
-- `tools` does not list `memory.write`.
-- the write returns a denied decision rather than creating memory.
-
-### Test 1 Pass Criteria
-
-Test 1 passes only if:
-
-- no Team Memory server was started;
-- local bootstrap used explicit operator-chosen IDs;
-- local admin CLI can list and change RBAC assignments/delegations;
-- a specific local session token can manually call memory tools and receive
-  local libSQL/Qdrant/CAS-backed results;
-- Hermes local smoke can write and recall memory;
-- forged identity fields are rejected;
-- no sync, `/sync/pull`, cloud conflict, or multi-client behavior is evaluated.
-
-## Test 2: Multi Client + Server
-
-### Goal
-
-Verify production v1 shared-server behavior:
-
-- one Team Memory service;
-- multiple clients using server-authenticated session tokens;
-- only server-side administrator credentials can configure users/roles/delegations;
-- ordinary client/agent tokens cannot configure permissions;
-- shared memory recall works across clients;
-- sync state is exposed by the server;
-- conflicting writes create an unresolved cloud conflict;
-- only an administrator can resolve the conflict.
-
-### 1. Create Server Runtime And Bootstrap Admin
-
-Use a separate database from Test 1.
-
-```powershell
-New-Item -ItemType Directory -Force .data\test2-server | Out-Null
-
-$env:LIBSQL_URL = "file:./.data/test2-server/team-memory.db"
-$env:CAS_BACKEND = "filesystem"
-$env:CAS_DIRECTORY = "./.data/test2-server/cas"
-$env:QDRANT_URL = "http://127.0.0.1:6333"
-$env:PORT = "3000"
-
-$env:BOOTSTRAP_ROOT_ENTITY_ID = "root:test2-server"
-$env:BOOTSTRAP_USER_ID = "user:test2-admin"
-$env:BOOTSTRAP_USER_NAME = "Test 2 Server Admin"
-$env:BOOTSTRAP_SESSION_ID = "session:test2-admin"
-$env:BOOTSTRAP_SESSION_EXPIRES_AT = "2030-01-01T00:00:00.000Z"
-
-npm.cmd run bootstrap:root-admin
-$env:ADMIN_TOKEN = "<paste sessionToken here>"
-```
-
-### 2. Start Server
-
-In a second terminal with the same runtime environment:
-
-```powershell
-$env:LIBSQL_URL = "file:./.data/test2-server/team-memory.db"
-$env:CAS_BACKEND = "filesystem"
-$env:CAS_DIRECTORY = "./.data/test2-server/cas"
-$env:QDRANT_URL = "http://127.0.0.1:6333"
-$env:PORT = "3000"
-npm.cmd run dev:server
-```
-
-Check server health:
+Health check:
 
 ```powershell
 curl.exe http://127.0.0.1:3000/live
@@ -287,330 +278,201 @@ curl.exe http://127.0.0.1:3000/ready
 curl.exe -H "Authorization: Bearer $env:ADMIN_TOKEN" http://127.0.0.1:3000/identity
 ```
 
-### 3. Configure Client Permissions Only From Server Admin
+### Server-Side Permission Setup
 
-This section must be run with `ADMIN_TOKEN`. Treat this as the server-side
-operator/admin surface.
-
-```powershell
-@'
-import json
-import os
-from urllib import request
-
-BASE = "http://127.0.0.1:3000"
-ADMIN_TOKEN = os.environ["ADMIN_TOKEN"]
-
-def post(path, payload, token):
-    req = request.Request(
-        BASE + path,
-        data=json.dumps(payload).encode("utf-8"),
-        method="POST",
-        headers={
-            "authorization": f"Bearer {token}",
-            "content-type": "application/json",
-        },
-    )
-    with request.urlopen(req, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))["value"]
-
-writer_permissions = [
-    {"action": "read", "resourceKind": "memory_entity", "constraints": {"allowRootEntityMutation": True}},
-    {"action": "search", "resourceKind": "memory_entity", "constraints": {"allowRootEntityMutation": True}},
-    {"action": "write_entity", "resourceKind": "memory_entity", "constraints": {"allowRootEntityMutation": True}},
-    {"action": "write_entity_branch", "resourceKind": "memory_entity_branch", "constraints": {"allowRootEntityMutation": True}},
-    {"action": "import_resource", "resourceKind": "resource", "constraints": {"allowRootEntityMutation": True}},
-    {"action": "index_resource", "resourceKind": "resource", "constraints": {"allowRootEntityMutation": True}},
-    {"action": "read", "resourceKind": "resource", "constraints": {"allowRootEntityMutation": True}},
-    {"action": "search", "resourceKind": "resource_chunk", "constraints": {"allowRootEntityMutation": True}},
-]
-
-read_only_permissions = [
-    {"action": "read", "resourceKind": "memory_entity", "constraints": {"allowRootEntityMutation": True}},
-    {"action": "search", "resourceKind": "memory_entity", "constraints": {"allowRootEntityMutation": True}},
-]
-
-sessions = {}
-for name, permissions in [
-    ("hermes-a", writer_permissions),
-    ("hermes-b", writer_permissions),
-    ("hermes-readonly", read_only_permissions),
-]:
-    result = post("/admin/agents/onboard", {
-        "agentId": f"agent:test2:{name}",
-        "delegationId": f"delegation:test2:{name}",
-        "sessionId": f"session:test2:{name}",
-        "sessionExpiresAt": "2030-01-01T00:00:00.000Z",
-        "displayName": name,
-        "permissions": permissions,
-    }, ADMIN_TOKEN)
-    sessions[name] = result["session"]["token"]
-
-print(json.dumps(sessions, indent=2))
-'@ | py -
-```
-
-Save tokens:
+Use only the server admin token to create Hermes client sessions. These setup
+commands are allowed because Test 2 requires server-side permission
+configuration.
 
 ```powershell
-$env:HERMES_A_TOKEN = "<paste hermes-a token>"
-$env:HERMES_B_TOKEN = "<paste hermes-b token>"
-$env:HERMES_READONLY_TOKEN = "<paste hermes-readonly token>"
+$env:TEAM_MEMORY_TOKEN = $env:ADMIN_TOKEN
+npm.cmd run team -- agents onboard agent:test2-hermes-a delegation:test2-hermes-a session:test2-hermes-a 2030-01-01T00:00:00.000Z
+npm.cmd run team -- agents onboard agent:test2-hermes-b delegation:test2-hermes-b session:test2-hermes-b 2030-01-01T00:00:00.000Z
 ```
 
-### 4. Verify Client Tokens Cannot Configure Permissions
-
-Try to configure RBAC using an ordinary client token:
+Save the returned tokens:
 
 ```powershell
-@'
-import json
-import os
-from urllib import request
-from urllib.error import HTTPError
-
-BASE = "http://127.0.0.1:3000"
-token = os.environ["HERMES_A_TOKEN"]
-
-payload = {
-    "agentId": "agent:test2:illegal",
-    "delegationId": "delegation:test2:illegal",
-    "sessionId": "session:test2:illegal",
-    "sessionExpiresAt": "2030-01-01T00:00:00.000Z",
-}
-
-req = request.Request(
-    BASE + "/admin/agents/onboard",
-    data=json.dumps(payload).encode("utf-8"),
-    method="POST",
-    headers={"authorization": f"Bearer {token}", "content-type": "application/json"},
-)
-
-try:
-    request.urlopen(req, timeout=30)
-    raise SystemExit("FAIL: client token configured permissions")
-except HTTPError as error:
-    print(error.code, error.read().decode("utf-8"))
-'@ | py -
+$env:HERMES_A_TOKEN = "<Hermes A agent token>"
+$env:HERMES_B_TOKEN = "<Hermes B agent token>"
 ```
 
-Expected result:
-
-- HTTP status is `403`.
-- Error explains that agents cannot perform administrator actions.
-
-This is the key Test 2 rule: clients can use memory according to their granted
-permissions, but permission configuration is server-admin only.
-
-### 5. Verify Client Tool Visibility
+Create a read-only client for denial testing:
 
 ```powershell
-@'
-import os
-from src.adapters.hermes.http_client import TeamMemoryHttpClient
-
-BASE = "http://127.0.0.1:3000"
-for name, token in [
-    ("hermes-a", os.environ["HERMES_A_TOKEN"]),
-    ("hermes-b", os.environ["HERMES_B_TOKEN"]),
-    ("hermes-readonly", os.environ["HERMES_READONLY_TOKEN"]),
-]:
-    client = TeamMemoryHttpClient(BASE, token)
-    print(name, client.identity())
-    print(name, [tool["name"] for tool in client.list_tools()])
-'@ | py -
+$readOnly = '[{"action":"read","resourceKind":"memory_entity","constraints":{"allowRootEntityMutation":true}},{"action":"search","resourceKind":"memory_entity","constraints":{"allowRootEntityMutation":true}}]'
+npm.cmd run team -- agents onboard agent:test2-hermes-readonly delegation:test2-hermes-readonly session:test2-hermes-readonly 2030-01-01T00:00:00.000Z $readOnly
+$env:HERMES_READONLY_TOKEN = "<Hermes read-only agent token>"
 ```
 
-Expected result:
+### Start Hermes A And Hermes B
 
-- writer clients see write/import/search tools;
-- read-only client does not see write/import tools.
-
-### 6. Shared Memory Recall
-
-Hermes A captures a success path:
+Terminal A:
 
 ```powershell
-@'
-import json
-import os
-from src.adapters.hermes.http_client import HermesTeamMemoryProvider
-
-provider = HermesTeamMemoryProvider.from_http("http://127.0.0.1:3000", os.environ["HERMES_A_TOKEN"])
-result = provider.add(
-    [
-        {"role": "user", "content": "How do we run Test 2?"},
-        {"role": "assistant", "content": "Successful path: server admin configures permissions, clients use memory, conflicts are resolved by admin."},
-    ],
-    user_id="hermes-a",
-    outcome="success",
-)
-print(json.dumps(result, indent=2))
-'@ | py -
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes
 ```
 
-Hermes B recalls it:
+Terminal B:
 
 ```powershell
-@'
-import json
-import os
-from src.adapters.hermes.http_client import HermesTeamMemoryProvider
-
-provider = HermesTeamMemoryProvider.from_http("http://127.0.0.1:3000", os.environ["HERMES_B_TOKEN"])
-context = provider.recall_context("How do we run Test 2?", session_id="hermes-b", limit=8)
-print(json.dumps(context, indent=2))
-'@ | py -
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes
 ```
 
-Expected result:
+Inside each Hermes container, configure the provider with
+`HermesTeamMemoryProvider.from_http(os.environ["TEAM_MEMORY_URL"], os.environ["TEAM_MEMORY_TOKEN"])`.
 
-- Hermes B sees memory captured by Hermes A.
+Ask both Hermes sessions:
 
-### 7. Server Sync State
+```text
+Show the active memory provider, my Team Memory identity, and the memory tools
+visible to this session.
+```
+
+Pass condition:
+
+- Hermes A and Hermes B both identify `root:test2-server`.
+- Both use the HTTP provider pointed at `http://service:3000`.
+- Both see only tools allowed by their server-issued session.
+
+### Permission Administration Checks
+
+Use Hermes A, which has an ordinary agent token:
+
+```text
+Try to configure a new Team Memory user or agent permission using my current
+client credential. This should fail unless this session is a server-authenticated
+human admin. Report the exact denial.
+```
+
+Pass condition: Hermes A cannot configure permissions and reports that agent
+sessions cannot perform administrator actions.
+
+Then use the server admin surface, not an ordinary client token, to create or
+change a permission. This may be a host-side server command or a Hermes session
+that is explicitly operating with the server-authenticated admin credential.
 
 ```powershell
-@'
-import json
-import os
-from src.adapters.hermes.http_client import TeamMemoryHttpClient
-
-client = TeamMemoryHttpClient("http://127.0.0.1:3000", os.environ["HERMES_A_TOKEN"])
-print(json.dumps(client.call_tool("memory.syncPull", {"knownCommitWatermark": 0}), indent=2))
-'@ | py -
+$env:TEAM_MEMORY_TOKEN = $env:ADMIN_TOKEN
+npm.cmd run team -- members list
+npm.cmd run team -- delegations list
 ```
 
-Expected result:
+Pass condition: permission administration succeeds only with the admin token.
 
-- server returns authorized sync events for `root:test2-server`;
-- no unrelated root data is included.
+### Shared Memory Conversation
 
-### 8. Conflict Creation And Admin Resolution
+In Hermes A:
 
-Hermes A and Hermes B create conflicting writes:
+```text
+Remember this as a server-backed shared memory: "Hermes A says Test 2 uses one
+Team Memory server, server-side permission setup, and multiple Hermes clients."
+After saving, report the capture result.
+```
+
+In Hermes B:
+
+```text
+Recall what Hermes A saved about Test 2. Use Team Memory before answering and
+include the memory evidence you found.
+```
+
+Pass condition: Hermes B recalls memory captured by Hermes A through the server
+provider.
+
+### Read-Only Client Conversation
+
+Start a Hermes session with `HERMES_READONLY_TOKEN` and ask:
+
+```text
+Show my visible Team Memory tools. Then try to save a new memory. The write
+should be denied. Explain the missing permission.
+```
+
+Pass condition: read-only Hermes cannot write.
+
+### Sync Conversation
+
+Use Hermes A:
+
+```text
+Check the server sync state for my authorized root. Do not include data from any
+other root. Tell me the commit watermark or head commit id you see.
+```
+
+Pass condition: Hermes A can retrieve authorized server sync state for
+`root:test2-server` only.
+
+### Conflict Conversation
+
+Use Hermes A and Hermes B to create concurrent edits to the same memory topic.
+The exact wording can vary, but the transcript must show both clients attempting
+to update the same logical memory item from the same starting point.
+
+Prompt Hermes A:
+
+```text
+Create a memory item named "Test 2 conflict candidate" with branch content
+"Hermes A keeps the target version." Keep the ids and head commit you used so
+Hermes B can attempt a stale concurrent update.
+```
+
+Prompt Hermes B:
+
+```text
+Using the stale head commit from Hermes A's first write, attempt to update the
+same memory item with branch content "Hermes B is the incoming version." Report
+whether Team Memory created a conflict.
+```
+
+Pass condition: the second stale write creates an unresolved conflict instead of
+silently overwriting the target.
+
+Resolve only with the server admin credential:
 
 ```powershell
-@'
-import json
-import os
-from src.adapters.hermes.http_client import TeamMemoryHttpClient, TeamMemoryHttpError
-
-BASE = "http://127.0.0.1:3000"
-NOW = "2026-07-07T00:00:00.000Z"
-a = TeamMemoryHttpClient(BASE, os.environ["HERMES_A_TOKEN"])
-b = TeamMemoryHttpClient(BASE, os.environ["HERMES_B_TOKEN"])
-
-entity = a.call_tool("memory.write", {
-    "clientMutationId": "test2-conflict-create-entity",
-    "action": "write_entity",
-    "resourceKind": "memory_entity",
-    "commit": {"id": "commit:test2-conflict-create-entity"},
-    "operation": {
-        "kind": "create_entity",
-        "id": "operation:test2-conflict-create-entity",
-        "entity": {
-            "id": "entity:test2-conflict",
-            "rootEntityId": "root:test2-server",
-            "currentBranchId": "branch:test2-conflict-a",
-            "status": "active",
-            "createdAt": NOW,
-            "updatedAt": NOW,
-        },
-    },
-})
-base_head = entity["write"]["commit"]["id"]
-
-a.call_tool("memory.write", {
-    "clientMutationId": "test2-conflict-a",
-    "expectedHeadCommitId": base_head,
-    "action": "write_entity_branch",
-    "resourceKind": "memory_entity_branch",
-    "commit": {"id": "commit:test2-conflict-a"},
-    "operation": {
-        "kind": "create_entity_branch",
-        "id": "operation:test2-conflict-a",
-        "branch": {
-            "id": "branch:test2-conflict-a",
-            "entityId": "entity:test2-conflict",
-            "rootEntityId": "root:test2-server",
-            "branchRef": "main",
-            "title": "Conflict candidate A",
-            "description": "A keeps the target branch.",
-            "tags": ["test2-conflict"],
-            "importance": 1,
-            "confidence": 0.8,
-            "status": "active",
-            "createdAt": NOW,
-            "updatedAt": NOW,
-        },
-    },
-})
-
-try:
-    b.call_tool("memory.write", {
-        "clientMutationId": "test2-conflict-b",
-        "expectedHeadCommitId": base_head,
-        "action": "write_entity_branch",
-        "resourceKind": "memory_entity_branch",
-        "commit": {"id": "commit:test2-conflict-b"},
-        "operation": {
-            "kind": "create_entity_branch",
-            "id": "operation:test2-conflict-b",
-            "branch": {
-                "id": "branch:test2-conflict-b",
-                "entityId": "entity:test2-conflict",
-                "rootEntityId": "root:test2-server",
-                "branchRef": "main",
-                "title": "Conflict candidate B",
-                "description": "B is incoming.",
-                "tags": ["test2-conflict"],
-                "importance": 1,
-                "confidence": 0.8,
-                "status": "active",
-                "createdAt": NOW,
-                "updatedAt": NOW,
-            },
-        },
-    })
-except TeamMemoryHttpError as error:
-    print("expected conflict", error.status, error.code)
-
-print(json.dumps(a.call_tool("memory.conflicts", {}), indent=2))
-'@ | py -
+$env:TEAM_MEMORY_TOKEN = $env:ADMIN_TOKEN
+npm.cmd run team -- conflicts list
+npm.cmd run team -- conflicts resolve <conflict-id> take_incoming
 ```
 
-Resolve with admin token only:
+Then ask Hermes A or Hermes B:
 
-```powershell
-@'
-import json
-import os
-from src.adapters.hermes.http_client import TeamMemoryHttpClient
-
-admin = TeamMemoryHttpClient("http://127.0.0.1:3000", os.environ["ADMIN_TOKEN"])
-conflicts = admin.call_tool("memory.conflicts", {})
-conflict_id = conflicts["conflicts"][0]["id"]
-result = admin.call_tool("memory.resolveConflict", {
-    "clientMutationId": "test2-conflict-resolution",
-    "commit": {"id": "commit:test2-conflict-resolution"},
-    "conflictIds": [conflict_id],
-    "resolutionKind": "take_incoming",
-})
-print(json.dumps(result, indent=2))
-'@ | py -
+```text
+Recall the final resolved memory for "Test 2 conflict candidate" and tell me
+which version is active after admin resolution.
 ```
 
-Expected result:
+Pass condition:
 
-- B's stale write creates a conflict;
-- active branch remains unchanged until resolution;
-- admin resolution creates an explicit resolution commit;
-- client tokens must not be used for permission configuration.
+- conflict resolution is an explicit admin action;
+- normal client tokens do not resolve permission/admin state;
+- Hermes recalls the resolved result after the admin resolution commit.
+
+### Test 2 Pass Criteria
+
+Test 2 passes only if:
+
+- the Team Memory server stack was running;
+- at least two real Hermes client containers connected to the server;
+- permission setup happened only through the server admin surface;
+- ordinary Hermes agent/client tokens could not configure permissions;
+- shared recall worked from Hermes A to Hermes B;
+- a read-only server-issued session could not write;
+- authorized sync state was visible only for the session root;
+- concurrent client writes produced a conflict;
+- conflict resolution required an admin action;
+- the final evidence is Hermes conversation transcripts, not standalone shell
+  snippets.
 
 ## Cleanup
 
 ```powershell
-docker compose stop qdrant
-Remove-Item -Recurse -Force .data\test1-local-hermes
-Remove-Item -Recurse -Force .data\test2-server
+docker compose -f compose.yaml -f compose.hermes.yaml down
+```
+
+Use `-v` only when you intentionally want to delete Docker volumes:
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml down -v
 ```

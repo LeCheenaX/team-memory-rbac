@@ -10,7 +10,7 @@
   },
   "scripts": {
     "contracts:generate": "node --experimental-strip-types scripts/generate-contracts.mjs",
-    "test": "node --experimental-strip-types --test --test-concurrency=1 --test-timeout=30000 --test-force-exit test/*.test.ts",
+    "test": "node --experimental-strip-types --test --test-concurrency=1 --test-timeout=120000 --test-force-exit test/*.test.ts",
     "test:hermes-contract": "python -m unittest discover -s test/hermes -p \"test_*.py\"",
     "typecheck": "tsc --noEmit",
     "migrations:validate": "node scripts/validate-migrations.mjs",

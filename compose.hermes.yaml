@@ -1,4 +1,31 @@
 services:
+  hermes-local:
+    profiles: ["hermes"]
+    build:
+      context: .
+      dockerfile: docker/hermes/Dockerfile
+    environment:
+      TEAM_MEMORY_TOKEN: ${LOCAL_HERMES_TOKEN:-}
+      PYTHONPATH: /opt/team-memory-rbac
+      LIBSQL_URL: file:/workspace/.data/test1-local-hermes/team-memory.db
+      CAS_BACKEND: filesystem
+      CAS_DIRECTORY: /workspace/.data/test1-local-hermes/cas
+      QDRANT_URL: http://qdrant:6333
+      BOOTSTRAP_ROOT_ENTITY_ID: root:test1-local
+      BOOTSTRAP_USER_ID: user:test1-admin
+      BOOTSTRAP_USER_NAME: Test 1 Local Admin
+      BOOTSTRAP_SESSION_ID: session:test1-admin
+      BOOTSTRAP_SESSION_EXPIRES_AT: "2030-01-01T00:00:00.000Z"
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    volumes:
+      - hermes-local-home:/root/.hermes
+      - hermes-local-workspace:/workspace
+
   hermes-a:
     profiles: ["hermes"]
     build:
@@ -38,6 +65,8 @@ services:
       - hermes-b-workspace:/workspace
 
 volumes:
+  hermes-local-home:
+  hermes-local-workspace:
   hermes-a-home:
   hermes-a-workspace:
   hermes-b-home:

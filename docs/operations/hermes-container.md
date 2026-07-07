@@ -36,7 +36,35 @@ Expected:
 - `hermes --version` runs if the CLI exposes a version command.
 - The Team Memory Hermes adapter import prints `adapter import ok`.
 
-## Run Real Hermes
+## Run Local No-Server Hermes
+
+For Test 1, start only local infrastructure and run Hermes through the
+`hermes-local` service. This service does not depend on the Team Memory HTTP
+`service`.
+
+```powershell
+docker compose up -d qdrant
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes
+```
+
+The local container receives:
+
+```txt
+TEAM_MEMORY_TOKEN=<LOCAL_HERMES_TOKEN from the host environment>
+LIBSQL_URL=file:/workspace/.data/test1-local-hermes/team-memory.db
+CAS_BACKEND=filesystem
+CAS_DIRECTORY=/workspace/.data/test1-local-hermes/cas
+QDRANT_URL=http://qdrant:6333
+PYTHONPATH=/opt/team-memory-rbac
+```
+
+Configure Hermes to use:
+
+```python
+HermesTeamMemoryProvider.from_local(os.environ["TEAM_MEMORY_TOKEN"])
+```
+
+## Run Real Hermes Against Server
 
 First start the Team Memory server stack:
 
@@ -75,8 +103,10 @@ PYTHONPATH=/opt/team-memory-rbac
 ## Notes
 
 - These are real Hermes containers, not Team Memory adapter mocks.
-- The Team Memory adapter is available inside the container, but Hermes still
-  has to be configured at its memory-provider seam to use
-  `HermesTeamMemoryProvider`.
+- The Team Memory adapter and npm dependencies are available inside the
+  container, but Hermes still has to be configured at its memory-provider seam
+  to use `HermesTeamMemoryProvider`.
 - `hermes-a` and `hermes-b` have separate Docker volumes for Hermes home and
   workspace state.
+- `hermes-local` has its own Hermes home and workspace volumes so Test 1 state
+  does not mix with Test 2 clients.

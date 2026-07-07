@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,30 @@ import {
 import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
 
 const now = "2026-06-30T00:00:00.000Z";
+
+test("team CLI reports a missing token before opening the runtime", () => {
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "scripts/team-memory.mjs", "login"],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        TEAM_MEMORY_TOKEN: "",
+        ADMIN_TOKEN: "",
+        LIBSQL_URL: "",
+        CAS_BACKEND: "",
+        CAS_DIRECTORY: "",
+        QDRANT_URL: "",
+      },
+      encoding: "utf8",
+    },
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /TEAM_MEMORY_TOKEN is required/);
+  assert.doesNotMatch(result.stderr, /missing bearer token/);
+});
 
 test("team management CLI routes identity, RBAC, delegation, conflict, sync, and health commands through the gateway", async () => {
   const directory = await mkdtemp(join(tmpdir(), "team-memory-rbac-"));
