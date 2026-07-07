@@ -16,7 +16,13 @@ const { TeamMemoryGateway } = await import("../src/adapters/runtime/gateway.ts")
 const { loadRuntimeConfig, TeamMemoryRuntime } = await import("../src/adapters/runtime/development-stack.ts");
 
 const command = parseTeamManagementCommand(process.argv.slice(2));
-const token = process.env.TEAM_MEMORY_TOKEN ?? process.env.ADMIN_TOKEN;
+
+function nonEmptyEnv(name) {
+  const value = process.env[name];
+  return value === undefined || value.length === 0 ? undefined : value;
+}
+
+const token = nonEmptyEnv("TEAM_MEMORY_TOKEN") ?? nonEmptyEnv("ADMIN_TOKEN");
 
 if (command[0] !== "health" && (token === undefined || token.length === 0)) {
   console.error(

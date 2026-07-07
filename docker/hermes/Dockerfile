@@ -33,7 +33,8 @@ ENV PYTHONPATH="/opt/team-memory-rbac:${PYTHONPATH}"
 ENV TEAM_MEMORY_URL="http://service:3000"
 
 COPY docker/hermes/entrypoint.sh /usr/local/bin/hermes-container-entrypoint
-RUN chmod +x /usr/local/bin/hermes-container-entrypoint
+RUN sed -i 's/\r$//' /usr/local/bin/hermes-container-entrypoint \
+  && chmod +x /usr/local/bin/hermes-container-entrypoint
 
 WORKDIR /workspace
 ENTRYPOINT ["hermes-container-entrypoint"]

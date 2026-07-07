@@ -24,6 +24,25 @@ docker compose -f compose.yaml -f compose.hermes.yaml build hermes-local hermes-
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local check
 ```
 
+The Test 1 setup runs before `HERMES_A_TOKEN` and `HERMES_B_TOKEN` exist. The
+Compose file must therefore allow `hermes-local` commands to parse and run
+without server-client tokens. `LOCAL_HERMES_TOKEN` is also empty during local
+bootstrap; it is set only after the writer session is onboarded.
+
+Most setup commands below use `docker compose run --rm`. Those commands create
+one-shot containers and Docker removes each container when its command exits.
+That is expected. The state that must survive is stored in named volumes:
+
+- `hermes-local-home` is mounted at `/root/.hermes` and keeps Hermes config,
+  API keys, sessions, logs, and gateway state.
+- `hermes-local-workspace` is mounted at `/workspace` and keeps the Test 1 local
+  Team Memory database and CAS files.
+
+Do not wait for `check`, `bootstrap:root-admin`, or `team -- agents onboard` to
+turn into a Hermes chat session. The conversation begins only after a command
+like `docker compose -f compose.yaml -f compose.hermes.yaml run --rm
+hermes-local hermes` opens the Hermes chat UI.
+
 Hermes must be configured through its real memory-provider seam, not through a
 mock script. Register the Team Memory provider in the installed Hermes version
 using these provider constructors:
@@ -64,7 +83,11 @@ Start only Qdrant:
 
 ```powershell
 docker compose up -d qdrant
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local check
 ```
+
+The `check` command exits after validating the Hermes binary and Team Memory
+adapter import. It is not the interactive Hermes session.
 
 Bootstrap the local root inside the Hermes container:
 
@@ -90,12 +113,15 @@ Save the returned writer token:
 $env:LOCAL_HERMES_TOKEN = "<writer session token>"
 ```
 
+Do not set `HERMES_A_TOKEN` or `HERMES_B_TOKEN` for Test 1. Those are Test 2
+server-client tokens and are created only after the Team Memory HTTP server is
+bootstrapped.
+
 Create a read-only Hermes session for the RBAC denial pass. This is still setup;
 the denial itself must be tested by talking to Hermes.
 
 ```powershell
-$readOnly = '[{"action":"read","resourceKind":"memory_entity","constraints":{"allowRootEntityMutation":true}},{"action":"search","resourceKind":"memory_entity","constraints":{"allowRootEntityMutation":true}}]'
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm -e ADMIN_TOKEN=$env:ADMIN_TOKEN hermes-local npm --prefix /opt/team-memory-rbac run team -- agents onboard agent:test1-hermes-readonly delegation:test1-hermes-readonly session:test1-hermes-readonly 2030-01-01T00:00:00.000Z $readOnly
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm -e ADMIN_TOKEN=$env:ADMIN_TOKEN hermes-local npm --prefix /opt/team-memory-rbac run team -- agents onboard agent:test1-hermes-readonly delegation:test1-hermes-readonly session:test1-hermes-readonly 2030-01-01T00:00:00.000Z read-only
 ```
 
 Save the returned read-only token:
@@ -104,9 +130,37 @@ Save the returned read-only token:
 $env:LOCAL_HERMES_READONLY_TOKEN = "<read-only session token>"
 ```
 
+### Configure Hermes Native Settings
+
+Before the first conversation, run Hermes' own setup flow once. This configures
+Hermes API keys, model settings, and any Hermes-native preferences under
+`/root/.hermes`, which persists in the `hermes-local-home` Docker volume even
+though the setup container is removed.
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes setup
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes config
+```
+
+If Hermes requires editing `config.yaml`, use the Hermes config command it
+provides:
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes config edit
+```
+
+Pass condition:
+
+- `hermes setup` completes without leaving missing API key or model settings.
+- `hermes config` shows a usable Hermes configuration under `/root/.hermes`.
+- The Team Memory provider can still be configured at Hermes' memory-provider
+  seam when the chat session starts.
+
 ### Start The Real Hermes Container
 
-Start Hermes with the writable local token:
+Start Hermes with the writable local token. This is the first command in Test 1
+where you should expect to talk to Hermes. Keep this terminal attached for the
+conversation transcript.
 
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes
@@ -114,6 +168,8 @@ docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local herm
 
 Inside Hermes, configure the Team Memory provider with
 `HermesTeamMemoryProvider.from_local(os.environ["TEAM_MEMORY_TOKEN"])`.
+If Hermes exits, rerun the same command; `/root/.hermes` and `/workspace` state
+remain in the named volumes.
 
 Before continuing, ask Hermes:
 
@@ -300,12 +356,29 @@ $env:HERMES_B_TOKEN = "<Hermes B agent token>"
 Create a read-only client for denial testing:
 
 ```powershell
-$readOnly = '[{"action":"read","resourceKind":"memory_entity","constraints":{"allowRootEntityMutation":true}},{"action":"search","resourceKind":"memory_entity","constraints":{"allowRootEntityMutation":true}}]'
-npm.cmd run team -- agents onboard agent:test2-hermes-readonly delegation:test2-hermes-readonly session:test2-hermes-readonly 2030-01-01T00:00:00.000Z $readOnly
+npm.cmd run team -- agents onboard agent:test2-hermes-readonly delegation:test2-hermes-readonly session:test2-hermes-readonly 2030-01-01T00:00:00.000Z read-only
 $env:HERMES_READONLY_TOKEN = "<Hermes read-only agent token>"
 ```
 
 ### Start Hermes A And Hermes B
+
+Run Hermes' native setup once for each server-mode client. Hermes A and Hermes B
+use separate `/root/.hermes` volumes, so each client needs its own API key/model
+configuration.
+
+Terminal A setup:
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes setup
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes config
+```
+
+Terminal B setup:
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes setup
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes config
+```
 
 Terminal A:
 

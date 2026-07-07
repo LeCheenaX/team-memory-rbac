@@ -1,0 +1,2 @@
+*.sh text eol=lf
+docker/hermes/Dockerfile text eol=lf

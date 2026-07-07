@@ -100,6 +100,20 @@ export class TeamManagementCli {
   }
 
   private parsePermissions(serialized: string): Permission[] {
+    if (serialized === "read-only") {
+      return [
+        {
+          action: "read",
+          resourceKind: "memory_entity",
+          constraints: { allowRootEntityMutation: true },
+        },
+        {
+          action: "search",
+          resourceKind: "memory_entity",
+          constraints: { allowRootEntityMutation: true },
+        },
+      ];
+    }
     const parsed = JSON.parse(serialized) as Permission[];
     if (!Array.isArray(parsed)) throw new Error("permissions must be a JSON array");
     return parsed;

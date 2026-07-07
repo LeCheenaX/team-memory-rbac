@@ -40,17 +40,30 @@ Expected:
 
 For Test 1, start only local infrastructure and run Hermes through the
 `hermes-local` service. This service does not depend on the Team Memory HTTP
-`service`.
+`service` and must run before `HERMES_A_TOKEN` or `HERMES_B_TOKEN` exist.
+
+`docker compose run --rm` creates a one-shot container and removes that
+container when the command exits. That is expected for setup commands. Persistent
+Hermes state is in the `hermes-local-home` volume mounted at `/root/.hermes`;
+local Team Memory state is in the `hermes-local-workspace` volume mounted at
+`/workspace`.
 
 ```powershell
 docker compose up -d qdrant
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local check
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes setup
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes config
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes
 ```
+
+The `check`, `setup`, and `config` commands exit after doing their setup work.
+The interactive conversation begins when `hermes-local hermes` opens the Hermes
+chat UI. Keep that terminal attached for the transcript.
 
 The local container receives:
 
 ```txt
-TEAM_MEMORY_TOKEN=<LOCAL_HERMES_TOKEN from the host environment>
+TEAM_MEMORY_TOKEN=<LOCAL_HERMES_TOKEN from the host environment, empty during bootstrap>
 LIBSQL_URL=file:/workspace/.data/test1-local-hermes/team-memory.db
 CAS_BACKEND=filesystem
 CAS_DIRECTORY=/workspace/.data/test1-local-hermes/cas
@@ -62,6 +75,13 @@ Configure Hermes to use:
 
 ```python
 HermesTeamMemoryProvider.from_local(os.environ["TEAM_MEMORY_TOKEN"])
+```
+
+Hermes' own setup flow writes API keys, model settings, and preferences under
+`/root/.hermes`. If it asks you to edit the config file, run:
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes config edit
 ```
 
 ## Run Real Hermes Against Server
@@ -80,15 +100,22 @@ $env:HERMES_A_TOKEN = "<agent session token for Hermes A>"
 $env:HERMES_B_TOKEN = "<agent session token for Hermes B>"
 ```
 
+These tokens are intentionally server-mode only. They are not needed for
+`hermes-local` bootstrap or the Test 1 local conversation.
+
 Start Hermes A:
 
 ```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes setup
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes config
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes
 ```
 
 Start Hermes B in another terminal:
 
 ```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes setup
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes config
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes
 ```
 

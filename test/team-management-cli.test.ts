@@ -41,6 +41,29 @@ test("team CLI reports a missing token before opening the runtime", () => {
   assert.doesNotMatch(result.stderr, /missing bearer token/);
 });
 
+test("team CLI falls back to ADMIN_TOKEN when TEAM_MEMORY_TOKEN is empty", () => {
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", "scripts/team-memory.mjs", "login"],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        TEAM_MEMORY_TOKEN: "",
+        ADMIN_TOKEN: "admin-token-from-compose-run",
+        LIBSQL_URL: "",
+        CAS_BACKEND: "",
+        CAS_DIRECTORY: "",
+        QDRANT_URL: "",
+      },
+      encoding: "utf8",
+    },
+  );
+
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stderr, /TEAM_MEMORY_TOKEN is required/);
+});
+
 test("team management CLI routes identity, RBAC, delegation, conflict, sync, and health commands through the gateway", async () => {
   const directory = await mkdtemp(join(tmpdir(), "team-memory-rbac-"));
   const runtime = await TeamMemoryRuntime.create({
@@ -110,6 +133,22 @@ test("team management CLI routes identity, RBAC, delegation, conflict, sync, and
     assert.equal(
       ((await cli.run(session.token, ["delegations", "list"])) as { delegations: unknown[] }).delegations.length,
       1,
+    );
+    await cli.run(
+      session.token,
+      parseTeamManagementCommand([
+        "agents",
+        "onboard",
+        "agent-cli-readonly",
+        "delegation-cli-readonly",
+        "session-cli-readonly",
+        "2030-01-01T00:00:00.000Z",
+        "read-only",
+      ]),
+    );
+    assert.equal(
+      ((await cli.run(session.token, ["delegations", "list"])) as { delegations: unknown[] }).delegations.length,
+      2,
     );
     assert.deepEqual(await cli.run(session.token, ["conflicts", "list"]), {
       conflicts: [],
