@@ -10,7 +10,7 @@ export type TeamManagementCommand =
   | ["delegations", "list"]
   | ["delegations", "create", string, string, string]
   | ["delegations", "revoke", string, string]
-  | ["agents", "onboard", string, string, string, string]
+  | ["agents", "onboard", string, string, string, string, string?]
   | ["resources", "ingest", string, string?]
   | ["conflicts", "list"]
   | ["conflicts", "resolve", string, "keep_target" | "take_incoming" | "manual_merge"]
@@ -41,6 +41,9 @@ export class TeamManagementCli {
           delegationId: command[3],
           sessionId: command[4],
           sessionExpiresAt: command[5],
+          ...(command[6] === undefined
+            ? {}
+            : { permissions: this.parsePermissions(command[6]) }),
         });
       case "resources":
         return this.gateway.ingestResource(token, command[2], {
@@ -129,7 +132,9 @@ export function parseTeamManagementCommand(args: string[]): TeamManagementComman
     third !== undefined &&
     args[5] !== undefined
   ) {
-    return ["agents", "onboard", first, second, third, args[5]];
+    return args[6] === undefined
+      ? ["agents", "onboard", first, second, third, args[5]]
+      : ["agents", "onboard", first, second, third, args[5], args[6]];
   }
   if (area === "resources" && action === "ingest" && first !== undefined) {
     return second === undefined

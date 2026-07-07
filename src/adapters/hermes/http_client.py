@@ -1,4 +1,8 @@
 import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
 from typing import Any, Callable
 from urllib import request
 from urllib.error import HTTPError
@@ -100,15 +104,117 @@ class TeamMemoryHttpClient:
         return value
 
 
+class TeamMemoryLocalError(RuntimeError):
+    def __init__(self, command: list[str], status: int, stderr: str) -> None:
+        self.command = command
+        self.status = status
+        self.stderr = stderr
+        super().__init__(
+            f"local Team Memory command failed with exit code {status}: {stderr.strip()}"
+        )
+
+
+class TeamMemoryLocalClient:
+    """Local no-server client for Hermes and Python hosts.
+
+    This client preserves the same Python-facing shape as TeamMemoryHttpClient,
+    but invokes the repository's local Team Memory runtime in-process through
+    the Node CLI bridge. The session token is still authoritative; there is no
+    HTTP server and no sync/cloud authority involved.
+    """
+
+    def __init__(
+        self,
+        token: str,
+        repo_root: str | Path | None = None,
+        command: list[str] | None = None,
+        env: dict[str, str] | None = None,
+    ) -> None:
+        self.token = token
+        self.repo_root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[3]
+        self.command = command
+        self.env = env
+
+    def identity(self) -> dict[str, Any]:
+        return self._run_json(["identity"])
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        return self._run_json(["tools"])
+
+    def call_tool(self, tool_name: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+        result = self._run_json(["call", tool_name, json.dumps(input_payload)])
+        if isinstance(result, dict) and set(result.keys()) == {"value"}:
+            value = result["value"]
+            if isinstance(value, dict):
+                return value
+        return result
+
+    def recall_host_memory(self, host: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+        return self._run_json(["host-recall", host, json.dumps(input_payload)])
+
+    def capture_host_memory(self, host: str, input_payload: dict[str, Any]) -> dict[str, Any]:
+        return self._run_json(["host-capture", host, json.dumps(input_payload)])
+
+    def _run_json(self, args: list[str]) -> Any:
+        env = {
+            **os.environ,
+            **(self.env or {}),
+            "LOCAL_SESSION_TOKEN": self.token,
+        }
+        command = self.command or self._default_command()
+        completed = subprocess.run(
+            [*command, *args],
+            cwd=self.repo_root,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise TeamMemoryLocalError(
+                [*command, *args],
+                completed.returncode,
+                completed.stderr,
+            )
+        return json.loads(completed.stdout)
+
+    def _default_command(self) -> list[str]:
+        npm = shutil.which("npm.cmd") or shutil.which("npm") or "npm"
+        return [npm, "run", "--silent", "local-memory-tool", "--"]
+
+
 class HermesMemoryHttpAdapter(HermesMemoryAdapter):
     """Hermes adapter that connects directly to a deployed Team Memory gateway."""
 
     def __init__(self, base_url: str, token: str) -> None:
         client = TeamMemoryHttpClient(base_url, token)
         super().__init__(
-            client.identity,
-            client.list_tools,
-            client.call_tool,
+            lambda _token: client.identity(),
+            lambda _token: client.list_tools(),
+            lambda _token, name, payload: client.call_tool(name, payload),
+        )
+
+
+class HermesMemoryLocalAdapter(HermesMemoryAdapter):
+    """Hermes adapter that connects to a local no-server Team Memory runtime."""
+
+    def __init__(
+        self,
+        token: str,
+        repo_root: str | Path | None = None,
+        command: list[str] | None = None,
+        env: dict[str, str] | None = None,
+    ) -> None:
+        client = TeamMemoryLocalClient(
+            token,
+            repo_root=repo_root,
+            command=command,
+            env=env,
+        )
+        super().__init__(
+            lambda _token: client.identity(),
+            lambda _token: client.list_tools(),
+            lambda _token, name, payload: client.call_tool(name, payload),
         )
 
 
@@ -121,6 +227,15 @@ class HermesTeamMemoryProvider:
     @classmethod
     def from_http(cls, base_url: str, token: str) -> "HermesTeamMemoryProvider":
         return cls(TeamMemoryHttpClient(base_url, token))
+
+    @classmethod
+    def from_local(
+        cls,
+        token: str,
+        repo_root: str | Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> "HermesTeamMemoryProvider":
+        return cls(TeamMemoryLocalClient(token, repo_root=repo_root, env=env))
 
     def recall_context(
         self,

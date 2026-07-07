@@ -1,4 +1,8 @@
 import unittest
+import sys
+import tempfile
+import textwrap
+from pathlib import Path
 
 from src.adapters.hermes.contract_schema import load_contract_schema
 from src.adapters.hermes.session_context import (
@@ -6,8 +10,10 @@ from src.adapters.hermes.session_context import (
     map_principal_context,
 )
 from src.adapters.hermes.http_client import (
+    HermesMemoryLocalAdapter,
     HermesTeamMemoryProvider,
     TeamMemoryHttpClient,
+    TeamMemoryLocalClient,
 )
 
 
@@ -227,6 +233,86 @@ class ContractSchemaTest(unittest.TestCase):
         self.assertEqual(captured["status"], "captured")
         self.assertEqual(calls[1][1], "host/hermes/capture")
         self.assertEqual(calls[1][2]["finalAssistantMessage"], "done")
+
+    def test_local_client_backs_hermes_without_an_http_server(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bridge = Path(directory) / "local_bridge.py"
+            bridge.write_text(
+                textwrap.dedent(
+                    """
+                    import json
+                    import os
+                    import sys
+
+                    assert os.environ["LOCAL_SESSION_TOKEN"] == "local-token"
+                    args = sys.argv[1:]
+                    if args[0] == "identity":
+                        print(json.dumps({
+                            "sessionId": "session-local",
+                            "userId": "user-local",
+                            "agentId": "agent-local",
+                            "rootEntityId": "root-local",
+                            "taskScope": {"rootEntityId": "root-local"},
+                        }))
+                    elif args[0] == "tools":
+                        print(json.dumps([
+                            {"name": "memory.search"},
+                            {"name": "memory.write"},
+                        ]))
+                    elif args[0] == "call":
+                        print(json.dumps({
+                            "decision": {"allowed": True},
+                            "value": {"tool": args[1], "payload": json.loads(args[2])},
+                        }))
+                    elif args[0] == "host-recall":
+                        print(json.dumps({
+                            "text": "<team-memory-context>local Hermes memory</team-memory-context>",
+                            "memoryIds": ["memory-local"],
+                            "provenance": [],
+                        }))
+                    elif args[0] == "host-capture":
+                        print(json.dumps({
+                            "status": "captured",
+                            "entityId": "entity-local",
+                            "branchId": "branch-local",
+                            "commitIds": ["commit-local"],
+                        }))
+                    else:
+                        raise AssertionError(args)
+                    """
+                ),
+                encoding="utf-8",
+            )
+
+            client = TeamMemoryLocalClient(
+                "local-token",
+                repo_root=directory,
+                command=[sys.executable, str(bridge)],
+            )
+            self.assertEqual(client.identity()["rootEntityId"], "root-local")
+            self.assertEqual(client.list_tools()[1]["name"], "memory.write")
+            self.assertEqual(
+                client.call_tool("memory.search", {"query": {"text": "local"}})["value"]["tool"],
+                "memory.search",
+            )
+
+            adapter = HermesMemoryLocalAdapter(
+                "local-token",
+                repo_root=directory,
+                command=[sys.executable, str(bridge)],
+                env={},
+            )
+            adapter_client = adapter.resolve_principal("local-token")
+            self.assertEqual(adapter_client.root_entity_id, "root-local")
+
+            provider = HermesTeamMemoryProvider(client)
+            recalled = provider.search("local", user_id="hermes-local")
+            self.assertEqual(recalled["memoryIds"], ["memory-local"])
+            captured = provider.add(
+                [{"role": "assistant", "content": "done locally"}],
+                user_id="hermes-local",
+            )
+            self.assertEqual(captured["status"], "captured")
 
 
 if __name__ == "__main__":

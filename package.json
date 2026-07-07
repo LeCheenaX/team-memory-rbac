@@ -10,7 +10,7 @@
   },
   "scripts": {
     "contracts:generate": "node --experimental-strip-types scripts/generate-contracts.mjs",
-    "test": "node --experimental-strip-types --test --test-concurrency=1 test/*.test.ts",
+    "test": "node --experimental-strip-types --test --test-concurrency=1 --test-timeout=30000 --test-force-exit test/*.test.ts",
     "test:hermes-contract": "python -m unittest discover -s test/hermes -p \"test_*.py\"",
     "typecheck": "tsc --noEmit",
     "migrations:validate": "node scripts/validate-migrations.mjs",
@@ -19,6 +19,7 @@
     "bootstrap:root-admin": "node --experimental-strip-types scripts/bootstrap-root-admin.mjs",
     "dev:server": "node --experimental-strip-types scripts/dev-server.mjs",
     "local-host-smoke": "node --experimental-strip-types scripts/local-host-smoke.mjs",
+    "local-memory-tool": "node --experimental-strip-types scripts/local-memory-tool.mjs",
     "hermes:local-smoke": "node --experimental-strip-types scripts/hermes-local-smoke.mjs",
     "mcp:stdio": "node --experimental-strip-types scripts/team-memory-mcp.mjs",
     "openclaw": "node --experimental-strip-types scripts/openclaw-team-memory.mjs",
