@@ -13,6 +13,7 @@
     "test": "node --experimental-strip-types --test --test-concurrency=1 --test-timeout=120000 --test-force-exit test/*.test.ts",
     "test:hermes-contract": "python -m unittest discover -s test/hermes -p \"test_*.py\"",
     "typecheck": "tsc --noEmit",
+    "check:deps": "node scripts/check-dependencies.mjs",
     "migrations:validate": "node scripts/validate-migrations.mjs",
     "smoke:dev": "node --experimental-strip-types scripts/smoke-dev.mjs",
     "dev:init": "node --experimental-strip-types scripts/dev-init.mjs",
@@ -24,7 +25,7 @@
     "mcp:stdio": "node --experimental-strip-types scripts/team-memory-mcp.mjs",
     "openclaw": "node --experimental-strip-types scripts/openclaw-team-memory.mjs",
     "team": "node --experimental-strip-types scripts/team-memory.mjs",
-    "check": "npm run typecheck && npm test && npm run test:hermes-contract"
+    "check": "npm run check:deps && npm run typecheck && npm test && npm run test:hermes-contract"
   },
   "engines": {
     "node": ">=22.13"
