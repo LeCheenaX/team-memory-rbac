@@ -146,7 +146,8 @@ test("OpenClaw, Claude Code, Codex, and Hermes use real sessions for read, searc
     }
   } finally {
     runtime.close();
-    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
@@ -212,6 +213,7 @@ test("read-only runtime agents cannot see or bypass write tools, and revoked del
     );
   } finally {
     runtime.close();
-    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });

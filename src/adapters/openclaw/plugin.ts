@@ -1,14 +1,35 @@
 import { TeamMemoryHttpClient } from "../http/client.ts";
+import { LocalTeamMemoryClient } from "../local/client.ts";
+import type { TeamMemoryGateway } from "../runtime/gateway.ts";
 import type {
   AgentMemoryIntegrationMode,
 } from "../agent/transports.ts";
 
-export interface OpenClawTeamMemoryPluginOptions {
+export interface OpenClawTeamMemoryClient {
+  search(input: Record<string, unknown>): Promise<unknown>;
+  write(input: Record<string, unknown>): Promise<unknown>;
+  importResource(input: Record<string, unknown>): Promise<unknown>;
+  ingestResource(resourceId: string, input: Record<string, unknown>): Promise<unknown>;
+  readResource(resourceId: string, revisionId?: string): Promise<unknown>;
+  recallHostMemory(host: string, input: Record<string, unknown>): Promise<unknown>;
+  captureHostMemory(host: string, input: Record<string, unknown>): Promise<unknown>;
+}
+
+export interface OpenClawTeamMemoryHttpOptions {
   baseUrl: string;
   token: string;
   mode: AgentMemoryIntegrationMode;
   fetch?: typeof fetch;
 }
+
+export interface OpenClawTeamMemoryLocalOptions {
+  mode: AgentMemoryIntegrationMode;
+  client: OpenClawTeamMemoryClient;
+}
+
+export type OpenClawTeamMemoryPluginOptions =
+  | OpenClawTeamMemoryHttpOptions
+  | OpenClawTeamMemoryLocalOptions;
 
 export interface OpenClawToolDefinition {
   name: string;
@@ -23,11 +44,24 @@ export interface OpenClawToolDefinition {
 export class OpenClawTeamMemoryPlugin {
   readonly id = "team-memory-rbac";
   readonly mode: AgentMemoryIntegrationMode;
-  private readonly client: TeamMemoryHttpClient;
+  private readonly client: OpenClawTeamMemoryClient;
 
   constructor(options: OpenClawTeamMemoryPluginOptions) {
     this.mode = options.mode;
-    this.client = new TeamMemoryHttpClient(options);
+    this.client = "client" in options
+      ? options.client
+      : new TeamMemoryHttpClient(options);
+  }
+
+  static fromGateway(options: {
+    gateway: TeamMemoryGateway;
+    token: string;
+    mode: AgentMemoryIntegrationMode;
+  }): OpenClawTeamMemoryPlugin {
+    return new OpenClawTeamMemoryPlugin({
+      mode: options.mode,
+      client: new LocalTeamMemoryClient(options.gateway, options.token),
+    });
   }
 
   tools(): OpenClawToolDefinition[] {

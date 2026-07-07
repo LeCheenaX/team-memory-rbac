@@ -1,4 +1,6 @@
 import { TeamMemoryHttpClient } from "../http/client.ts";
+import { LocalTeamMemoryClient } from "../local/client.ts";
+import type { TeamMemoryGateway } from "../runtime/gateway.ts";
 
 export interface ClaudeCodeHookPayload {
   hook_event_name?: string;
@@ -34,6 +36,15 @@ export class ClaudeCodeTeamMemoryHooks {
     fetch?: typeof fetch;
   }): ClaudeCodeTeamMemoryHooks {
     return new ClaudeCodeTeamMemoryHooks(new TeamMemoryHttpClient(options));
+  }
+
+  static fromGateway(options: {
+    gateway: TeamMemoryGateway;
+    token: string;
+  }): ClaudeCodeTeamMemoryHooks {
+    return new ClaudeCodeTeamMemoryHooks(
+      new LocalTeamMemoryClient(options.gateway, options.token),
+    );
   }
 
   async userPromptSubmit(

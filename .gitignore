@@ -1,6 +1,7 @@
 node_modules/
 coverage/
 dist/
+.data/
 *.tsbuildinfo
 __pycache__/
 *.pyc
