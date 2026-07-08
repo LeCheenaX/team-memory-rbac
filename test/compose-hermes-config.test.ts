@@ -11,9 +11,11 @@ test("Hermes local compose setup and manual flow do not require server client to
     /\$\{HERMES_[AB]_TOKEN:\?/,
     "Test 1 runs hermes-local before HERMES_A_TOKEN or HERMES_B_TOKEN exist, so compose parsing must not require them.",
   );
-  assert.match(compose, /TEAM_MEMORY_TOKEN: \$\{LOCAL_HERMES_TOKEN:-\}/);
+  assert.match(compose, /TEAM_MEMORY_TOKEN: \$\{TEAM_MEMORY_TOKEN:-\}/);
   assert.match(compose, /TEAM_MEMORY_MODE: local/);
   assert.match(compose, /TEAM_MEMORY_MODE: http/);
+  assert.match(compose, /TEAM_MEMORY_SESSION_FILE: \/root\/\.hermes\/team-memory-session\.json/);
+  assert.match(compose, /BOOTSTRAP_USER_PASSWORD: \$\{BOOTSTRAP_USER_PASSWORD:-\}/);
   assert.match(
     manualFlow,
     /Test 1 setup runs before `HERMES_A_TOKEN` and `HERMES_B_TOKEN` exist/,
@@ -32,8 +34,12 @@ test("Hermes local compose setup and manual flow do not require server client to
   assert.match(manualFlow, /hermes-b hermes setup/);
   assert.match(manualFlow, /hermes memory setup team_memory/);
   assert.match(manualFlow, /Provider: team_memory/);
+  assert.match(manualFlow, /\$env:BOOTSTRAP_USER_PASSWORD = "<test local admin password>"/);
+  assert.match(manualFlow, /team-memory-session\.json/);
   assert.doesNotMatch(manualFlow, /Inside Hermes, configure the Team Memory provider with/);
-  assert.match(manualFlow, /session:test1-hermes-readonly 2030-01-01T00:00:00\.000Z read-only/);
+  assert.match(manualFlow, /team -- members create user:test1-readonly Test1ReadOnly/);
+  assert.match(manualFlow, /team -- logout/);
+  assert.match(manualFlow, /team -- login user:test1-readonly/);
   assert.doesNotMatch(manualFlow, /\$readOnly =/);
   assert.match(
     manualFlow,

@@ -3,8 +3,11 @@ import type { TeamMemoryGateway } from "../runtime/gateway.ts";
 
 export type TeamManagementCommand =
   | ["login"]
+  | ["login", string, string]
+  | ["logout"]
   | ["roots", "list"]
   | ["members", "list"]
+  | ["members", "create", string, string, string, string?]
   | ["members", "assign", string, string, string]
   | ["members", "revoke", string, string]
   | ["delegations", "list"]
@@ -18,6 +21,12 @@ export type TeamManagementCommand =
   | ["sync", "status"]
   | ["health"];
 
+type TeamManagementMembersCommand =
+  | ["members", "list"]
+  | ["members", "create", string, string, string, string?]
+  | ["members", "assign", string, string, string]
+  | ["members", "revoke", string, string];
+
 export class TeamManagementCli {
   private readonly gateway: TeamMemoryGateway;
 
@@ -29,6 +38,8 @@ export class TeamManagementCli {
     switch (command[0]) {
       case "login":
         return this.gateway.identity(token);
+      case "logout":
+        return { status: "logged_out" };
       case "roots":
         return this.gateway.listRoots(token);
       case "members":
@@ -59,8 +70,16 @@ export class TeamManagementCli {
     }
   }
 
-  private members(token: string | undefined, command: Extract<TeamManagementCommand, ["members", ...string[]]>): Promise<unknown> {
+  private members(token: string | undefined, command: TeamManagementMembersCommand): Promise<unknown> {
     if (command[1] === "list") return this.gateway.listMembers(token);
+    if (command[1] === "create") {
+      return this.gateway.createMember(token, {
+        userId: command[2],
+        displayName: command[3],
+        password: command[4],
+        ...(command[5] === undefined ? {} : { roleId: command[5] }),
+      });
+    }
     if (command[1] === "assign") {
       return this.gateway.assignRole(token, {
         assignmentId: command[2],
@@ -122,9 +141,16 @@ export class TeamManagementCli {
 
 export function parseTeamManagementCommand(args: string[]): TeamManagementCommand {
   const [area, action, first, second, third] = args;
+  if (area === "login" && action !== undefined && first !== undefined) return ["login", action, first];
   if (area === "login") return ["login"];
+  if (area === "logout") return ["logout"];
   if (area === "roots" && action === "list") return ["roots", "list"];
   if (area === "members" && action === "list") return ["members", "list"];
+  if (area === "members" && action === "create" && first !== undefined && second !== undefined && third !== undefined) {
+    return args[5] === undefined
+      ? ["members", "create", first, second, third]
+      : ["members", "create", first, second, third, args[5]];
+  }
   if (area === "members" && action === "assign" && first !== undefined && second !== undefined && third !== undefined) {
     return ["members", "assign", first, second, third];
   }

@@ -14,15 +14,16 @@ if (!process.execArgv.includes("--experimental-strip-types")) {
 const { HermesAgentAdapter } = await import("../src/adapters/agent/transports.ts");
 const { TeamMemoryRuntime, loadRuntimeConfig } = await import("../src/adapters/runtime/development-stack.ts");
 const { TeamMemoryGateway } = await import("../src/adapters/runtime/gateway.ts");
-
-function required(name) {
-  const value = process.env[name];
-  if (value === undefined || value.length === 0) throw new Error(`${name} must be configured explicitly`);
-  return value;
-}
+const { readStoredSession } = await import("../src/adapters/local/session-store.ts");
 
 const [command, toolName, rawPayload] = process.argv.slice(2);
-const token = required("LOCAL_SESSION_TOKEN");
+const storedSession = await readStoredSession(process.env);
+const token = process.env.LOCAL_SESSION_TOKEN === undefined || process.env.LOCAL_SESSION_TOKEN.length === 0
+  ? storedSession?.sessionToken
+  : process.env.LOCAL_SESSION_TOKEN;
+if (token === undefined || token.length === 0) {
+  throw new Error("Team Memory is not logged in. Run `team-memory login <userId> <password>` first.");
+}
 const runtime = await TeamMemoryRuntime.create(loadRuntimeConfig(process.env));
 try {
   const gateway = new TeamMemoryGateway(runtime);

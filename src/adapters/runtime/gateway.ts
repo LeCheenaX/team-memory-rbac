@@ -21,7 +21,7 @@ import {
   type PermissionRouteResult,
   type ResourceSourceType,
 } from "../../index.ts";
-import type { AgentDelegation, UserRootRoleAssignment } from "../../contracts/rbac.ts";
+import type { AgentDelegation, User, UserRootRoleAssignment } from "../../contracts/rbac.ts";
 import type { AgentType, Permission } from "../../contracts/rbac.ts";
 import type { AuthenticatedSession } from "../libsql/rbac-authority.ts";
 import type { CreatedSession } from "../libsql/rbac-authority.ts";
@@ -392,6 +392,24 @@ export class TeamMemoryGateway {
         session.rootEntityId,
       ),
     };
+  }
+
+  async createMember(
+    token: string | undefined,
+    payload: Record<string, unknown>,
+  ): Promise<{
+    user: User;
+    assignment?: UserRootRoleAssignment;
+  }> {
+    const session = await this.authenticate(token);
+    return this.runtime.admin.createUser(session, {
+      userId: stringValue(payload, "userId"),
+      displayName: stringValue(payload, "displayName"),
+      password: stringValue(payload, "password"),
+      ...(optionalString(payload, "roleId") === undefined
+        ? {}
+        : { roleId: optionalString(payload, "roleId") as string }),
+    });
   }
 
   async assignRole(

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { Client, InValue } from "@libsql/client";
 import type {
   AgentDelegation,
@@ -22,6 +22,7 @@ create index if not exists rbac_assignments_subject_root on rbac_assignments(use
 create table if not exists rbac_delegations (delegation_id text primary key, agent_id text not null, owner_user_id text not null, root_entity_id text not null, payload_json text not null);
 create index if not exists rbac_delegations_agent_root on rbac_delegations(agent_id, root_entity_id);
 create table if not exists rbac_sessions (session_id text primary key, token_hash text not null unique, user_id text not null, agent_id text, root_entity_id text not null, task_scope_json text not null, delegation_id text, parent_agent_id text, expires_at text not null, revoked_at text, created_at text not null);
+create table if not exists rbac_user_credentials (user_id text primary key, password_hash text not null, created_at text not null, updated_at text not null);
 create table if not exists rbac_audit_log (audit_id text primary key, root_entity_id text not null, actor_user_id text not null, action text not null, payload_json text not null, created_at text not null);
 create index if not exists rbac_audit_log_root_created on rbac_audit_log(root_entity_id, created_at);
 create table if not exists rbac_permission_watermarks (subject_id text not null, root_entity_id text not null, watermark integer not null, updated_at text not null, primary key(subject_id, root_entity_id));
@@ -58,6 +59,22 @@ export interface CreatedSession {
   token: string;
 }
 
+export interface PasswordCredentialInput {
+  userId: string;
+  password: string;
+  now: string;
+}
+
+export interface CreateUserSessionWithPasswordInput {
+  id: string;
+  userId: string;
+  password: string;
+  rootEntityId: string;
+  taskScope: TaskScope;
+  expiresAt: string;
+  createdAt: string;
+}
+
 export interface RbacAuditRecord {
   id: string;
   rootEntityId: string;
@@ -82,6 +99,20 @@ function parse<T>(row: Record<string, unknown>, key = "payload_json"): T {
 
 function tokenHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+function passwordHash(password: string): string {
+  const salt = randomBytes(16).toString("base64url");
+  const hash = scryptSync(password, salt, 64).toString("base64url");
+  return `scrypt:${salt}:${hash}`;
+}
+
+function verifyPassword(password: string, serialized: string): boolean {
+  const [kind, salt, expected] = serialized.split(":");
+  if (kind !== "scrypt" || salt === undefined || expected === undefined) return false;
+  const actual = scryptSync(password, salt, 64);
+  const expectedBuffer = Buffer.from(expected, "base64url");
+  return actual.length === expectedBuffer.length && timingSafeEqual(actual, expectedBuffer);
 }
 
 function isActive(record: { status: "active" | "revoked"; expiresAt?: string }): boolean {
@@ -230,6 +261,60 @@ export class LibsqlRbacAuthority implements RbacAuthority {
         input.createdAt,
       ],
     });
+    return { id: input.id, token };
+  }
+
+  async setUserPassword(input: PasswordCredentialInput): Promise<void> {
+    if (input.password.length === 0) throw new Error("password must not be empty");
+    const user = await this.getUser(input.userId);
+    if (user?.status !== "active") throw new Error("credential user is inactive");
+    await this.client.execute({
+      sql: "insert into rbac_user_credentials(user_id, password_hash, created_at, updated_at) values (?, ?, ?, ?) on conflict(user_id) do update set password_hash = excluded.password_hash, updated_at = excluded.updated_at",
+      args: [input.userId, passwordHash(input.password), input.now, input.now],
+    });
+  }
+
+  async createUserSessionWithPassword(input: CreateUserSessionWithPasswordInput): Promise<CreatedSession> {
+    if (input.taskScope.rootEntityId !== input.rootEntityId) {
+      throw new Error("session task scope must match rootEntityId");
+    }
+    const user = await this.getUser(input.userId);
+    if (user?.status !== "active") throw new Error("session user is inactive");
+    const credential = await this.client.execute({
+      sql: "select password_hash from rbac_user_credentials where user_id = ?",
+      args: [input.userId],
+    });
+    const credentialRow = credential.rows[0] as Record<string, unknown> | undefined;
+    const serialized = credentialRow === undefined ? null : value(credentialRow, "password_hash");
+    if (serialized === null || !verifyPassword(input.password, serialized)) {
+      throw new Error("invalid user credentials");
+    }
+    const existing = await this.client.execute({
+      sql: "select user_id, agent_id from rbac_sessions where session_id = ?",
+      args: [input.id],
+    });
+    const existingRow = existing.rows[0] as Record<string, unknown> | undefined;
+    if (existingRow !== undefined) {
+      const existingUserId = value(existingRow, "user_id");
+      const existingAgentId = value(existingRow, "agent_id");
+      if (existingUserId !== input.userId || existingAgentId !== null) {
+        throw new Error("password login cannot replace a different principal session");
+      }
+    }
+    const token = randomBytes(32).toString("base64url");
+    await this.client.execute({
+      sql: "insert into rbac_sessions(session_id, token_hash, user_id, agent_id, root_entity_id, task_scope_json, delegation_id, parent_agent_id, expires_at, revoked_at, created_at) values (?, ?, ?, null, ?, ?, null, null, ?, null, ?) on conflict(session_id) do update set token_hash = excluded.token_hash, user_id = excluded.user_id, agent_id = null, root_entity_id = excluded.root_entity_id, task_scope_json = excluded.task_scope_json, delegation_id = null, parent_agent_id = null, expires_at = excluded.expires_at, revoked_at = null, created_at = excluded.created_at",
+      args: [
+        input.id,
+        tokenHash(token),
+        input.userId,
+        input.rootEntityId,
+        JSON.stringify(input.taskScope),
+        input.expiresAt,
+        input.createdAt,
+      ],
+    });
+    await this.advancePermissionWatermark(input.userId, input.rootEntityId, input.createdAt);
     return { id: input.id, token };
   }
 

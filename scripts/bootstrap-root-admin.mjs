@@ -13,6 +13,7 @@ if (!process.execArgv.includes("--experimental-strip-types")) {
 
 const { TeamMemoryRuntime, loadRuntimeConfig } = await import("../src/adapters/runtime/development-stack.ts");
 const { BUILT_IN_ROLES } = await import("../src/rbac/catalog.ts");
+const { writeStoredSession } = await import("../src/adapters/local/session-store.ts");
 
 function required(name) {
   const value = process.env[name];
@@ -28,6 +29,9 @@ const displayName = required("BOOTSTRAP_USER_NAME");
 const sessionId = required("BOOTSTRAP_SESSION_ID");
 const sessionExpiresAt = required("BOOTSTRAP_SESSION_EXPIRES_AT");
 const now = process.env.BOOTSTRAP_NOW ?? new Date().toISOString();
+const userPassword = process.env.BOOTSTRAP_USER_PASSWORD === undefined || process.env.BOOTSTRAP_USER_PASSWORD.length === 0
+  ? undefined
+  : process.env.BOOTSTRAP_USER_PASSWORD;
 
 const runtime = await TeamMemoryRuntime.create(loadRuntimeConfig(process.env));
 try {
@@ -88,21 +92,62 @@ try {
     status: "active",
   });
 
-  const session = await runtime.rbac.createSession({
-    id: sessionId,
-    userId,
-    rootEntityId,
-    taskScope: { rootEntityId },
-    expiresAt: sessionExpiresAt,
-    createdAt: now,
-  });
+  if (userPassword !== undefined && userPassword.length > 0) {
+    await runtime.rbac.setUserPassword({ userId, password: userPassword, now });
+  }
 
-  console.log(JSON.stringify({
-    rootEntityId,
-    userId,
-    sessionId,
-    sessionToken: session.token,
-  }, null, 2));
+  let session;
+  let duplicateOneShotMessage;
+  try {
+    session = userPassword !== undefined && userPassword.length > 0
+      ? await runtime.rbac.createUserSessionWithPassword({
+        id: sessionId,
+        userId,
+        password: userPassword,
+        rootEntityId,
+        taskScope: { rootEntityId },
+        expiresAt: sessionExpiresAt,
+        createdAt: now,
+      })
+      : await runtime.rbac.createSession({
+        id: sessionId,
+        userId,
+        rootEntityId,
+        taskScope: { rootEntityId },
+        expiresAt: sessionExpiresAt,
+        createdAt: now,
+      });
+  } catch (error) {
+    if (
+      userPassword === undefined &&
+      error instanceof Error &&
+      error.message.includes("UNIQUE constraint failed: rbac_sessions.session_id")
+    ) {
+      duplicateOneShotMessage = "root admin session already exists. Re-run with BOOTSTRAP_USER_PASSWORD set to issue a fresh token for the same bootstrap session, or use the ADMIN_TOKEN you saved earlier.";
+    } else {
+      throw error;
+    }
+  }
+
+  if (duplicateOneShotMessage !== undefined) {
+    console.error(duplicateOneShotMessage);
+    process.exitCode = 1;
+  } else {
+    const sessionFile = await writeStoredSession({
+      sessionToken: session.token,
+      sessionId,
+      userId,
+      rootEntityId,
+      savedAt: new Date().toISOString(),
+    }, process.env);
+    console.log(JSON.stringify({
+      status: "logged_in",
+      rootEntityId,
+      userId,
+      sessionId,
+      sessionFile,
+    }, null, 2));
+  }
 } finally {
   runtime.close();
 }

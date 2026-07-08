@@ -26,8 +26,9 @@ docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local chec
 
 The Test 1 setup runs before `HERMES_A_TOKEN` and `HERMES_B_TOKEN` exist. The
 Compose file must therefore allow `hermes-local` commands to parse and run
-without server-client tokens. `LOCAL_HERMES_TOKEN` is also empty during local
-bootstrap; it is set only after the writer session is onboarded.
+without server-client tokens. Test 1 uses the active session file at
+`/root/.hermes/team-memory-session.json`; `TEAM_MEMORY_TOKEN` is only a
+low-level override.
 
 Most setup commands below use `docker compose run --rm`. Those commands create
 one-shot containers and Docker removes each container when its command exits.
@@ -93,45 +94,46 @@ docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local chec
 The `check` command exits after validating the Hermes binary and Team Memory
 adapter import. It is not the interactive Hermes session.
 
+Choose a local root admin password for this test run. Keep it for the duration
+of the manual test. Team Memory stores the active session under
+`/root/.hermes/team-memory-session.json`, so closing PowerShell does not require
+copying or saving a token.
+
+```powershell
+$env:BOOTSTRAP_USER_PASSWORD = "<test local admin password>"
+```
+
 Bootstrap the local root inside the Hermes container:
 
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin
 ```
 
-Save the returned root admin token:
+The bootstrap command logs in `user:test1-admin` automatically. To verify the
+stored identity:
 
 ```powershell
-$env:ADMIN_TOKEN = "<sessionToken from bootstrap>"
-```
-
-Use the local admin token to create a writable Hermes agent session:
-
-```powershell
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm -e ADMIN_TOKEN=$env:ADMIN_TOKEN hermes-local npm --prefix /opt/team-memory-rbac run team -- agents onboard agent:test1-hermes-writer delegation:test1-hermes-writer session:test1-hermes-writer 2030-01-01T00:00:00.000Z
-```
-
-Save the returned writer token:
-
-```powershell
-$env:LOCAL_HERMES_TOKEN = "<writer session token>"
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- login
 ```
 
 Do not set `HERMES_A_TOKEN` or `HERMES_B_TOKEN` for Test 1. Those are Test 2
 server-client tokens and are created only after the Team Memory HTTP server is
 bootstrapped.
 
-Create a read-only Hermes session for the RBAC denial pass. This is still setup;
-the denial itself must be tested by talking to Hermes.
+Create a read-only user for the RBAC denial pass. This is still setup; the
+denial itself must be tested by logging out, logging in as this user, and
+talking to Hermes.
 
 ```powershell
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm -e ADMIN_TOKEN=$env:ADMIN_TOKEN hermes-local npm --prefix /opt/team-memory-rbac run team -- agents onboard agent:test1-hermes-readonly delegation:test1-hermes-readonly session:test1-hermes-readonly 2030-01-01T00:00:00.000Z read-only
+$env:TEST1_READONLY_PASSWORD = "<test read-only password>"
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- members create user:test1-readonly Test1ReadOnly $env:TEST1_READONLY_PASSWORD role-researcher
 ```
 
-Save the returned read-only token:
+To switch identities later:
 
 ```powershell
-$env:LOCAL_HERMES_READONLY_TOKEN = "<read-only session token>"
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- logout
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- login user:test1-admin $env:BOOTSTRAP_USER_PASSWORD
 ```
 
 ### Configure Hermes Native Settings
@@ -164,7 +166,7 @@ Pass condition:
 
 ### Start The Real Hermes Container
 
-Start Hermes with the writable local token. This is the first command in Test 1
+Start Hermes while logged in as `user:test1-admin`. This is the first command in Test 1
 where you should expect to talk to Hermes. Keep this terminal attached for the
 conversation transcript.
 
@@ -189,7 +191,7 @@ Pass condition:
 - Hermes reports `team_memory` as the active external long-term memory provider.
 - The identity uses `root:test1-local`.
 - The visible tool set includes read/search/write memory capability for the
-  writer session.
+  active admin session.
 
 ### Core Hermes Conversation Checks
 
@@ -251,11 +253,12 @@ call sync or server endpoints.
 
 ### Read-Only RBAC Conversation
 
-Stop Hermes, switch the local token to the read-only token, and start Hermes
-again:
+Stop Hermes, switch the stored local account to the read-only user, and start
+Hermes again:
 
 ```powershell
-$env:LOCAL_HERMES_TOKEN = $env:LOCAL_HERMES_READONLY_TOKEN
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- logout
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- login user:test1-readonly $env:TEST1_READONLY_PASSWORD
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes
 ```
 
@@ -319,6 +322,7 @@ $env:BOOTSTRAP_USER_ID = "user:test2-admin"
 $env:BOOTSTRAP_USER_NAME = "Test 2 Server Admin"
 $env:BOOTSTRAP_SESSION_ID = "session:test2-admin"
 $env:BOOTSTRAP_SESSION_EXPIRES_AT = "2030-01-01T00:00:00.000Z"
+$env:BOOTSTRAP_USER_PASSWORD = "<test server admin password>"
 $env:LIBSQL_URL = "http://127.0.0.1:8080"
 $env:CAS_BACKEND = "object_store"
 $env:OBJECT_STORE_URL = "http://127.0.0.1:9000"
@@ -326,7 +330,10 @@ $env:QDRANT_URL = "http://127.0.0.1:6333"
 npm.cmd run bootstrap:root-admin
 ```
 
-Save the returned admin token:
+Save the returned admin token for this PowerShell session. If the env var is
+lost later, rerun the same bootstrap command with the same
+`BOOTSTRAP_USER_PASSWORD`; it will issue a fresh token for
+`session:test2-admin`.
 
 ```powershell
 $env:ADMIN_TOKEN = "<server admin session token>"

@@ -52,6 +52,9 @@ local Team Memory state is in the `hermes-local-workspace` volume mounted at
 ```powershell
 docker compose up -d qdrant
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local check
+$env:BOOTSTRAP_USER_PASSWORD = "<test local admin password>"
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- login
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes setup
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes config
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes memory setup team_memory
@@ -66,13 +69,21 @@ chat UI. Keep that terminal attached for the transcript.
 The local container receives:
 
 ```txt
-TEAM_MEMORY_TOKEN=<LOCAL_HERMES_TOKEN from the host environment, empty during bootstrap>
+TEAM_MEMORY_TOKEN=<optional low-level override; normally empty for local account login>
+TEAM_MEMORY_SESSION_FILE=/root/.hermes/team-memory-session.json
+BOOTSTRAP_USER_PASSWORD=<test local admin password from the host environment>
 LIBSQL_URL=file:/workspace/.data/test1-local-hermes/team-memory.db
 CAS_BACKEND=filesystem
 CAS_DIRECTORY=/workspace/.data/test1-local-hermes/cas
 QDRANT_URL=http://qdrant:6333
 PYTHONPATH=/opt/team-memory-rbac
 ```
+
+The bootstrap command writes the active Team Memory session to
+`/root/.hermes/team-memory-session.json`, which persists in the
+`hermes-local-home` volume. Use `team -- logout` and `team -- login <userId>
+<password>` to switch accounts. `TEAM_MEMORY_TOKEN` remains a low-level
+one-command override, but the normal Hermes flow should use the session file.
 
 Activate the Team Memory external memory plugin with:
 

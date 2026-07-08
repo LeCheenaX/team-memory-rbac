@@ -19,6 +19,43 @@ export class PersistentRbacAdminService {
     clock: () => string = now,
   ) { this.authority = authority; this.policy = policy; this.clock = clock; }
 
+  async createUser(
+    session: AuthenticatedSession,
+    input: { userId: string; displayName: string; password?: string; roleId?: string },
+  ): Promise<{ user: User; assignment?: UserRootRoleAssignment }> {
+    await this.requireHumanAdmin(session, "assign_user_role");
+    const timestamp = this.clock();
+    const existing = await this.authority.getUser(input.userId);
+    const user: User = {
+      id: input.userId,
+      displayName: input.displayName,
+      status: "active",
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+    };
+    await this.authority.saveUser(user);
+    if (input.password !== undefined) {
+      await this.authority.setUserPassword({
+        userId: input.userId,
+        password: input.password,
+        now: timestamp,
+      });
+    }
+    const assignment = input.roleId === undefined
+      ? undefined
+      : await this.assignRole(session, {
+        id: `assignment:${input.userId}:${session.rootEntityId}:${input.roleId}`,
+        userId: input.userId,
+        rootEntityId: session.rootEntityId,
+        roleId: input.roleId,
+      });
+    await this.audit(session, "create_user", { userId: input.userId, roleId: input.roleId ?? null });
+    return {
+      user,
+      ...(assignment === undefined ? {} : { assignment }),
+    };
+  }
+
   async assignRole(session: AuthenticatedSession, input: Omit<UserRootRoleAssignment, "assignedBy" | "assignedAt" | "status">): Promise<UserRootRoleAssignment> {
     await this.requireHumanAdmin(session, "assign_user_role");
     if (input.rootEntityId !== session.rootEntityId) throw new Error("cross-root role assignment is forbidden");

@@ -14,16 +14,41 @@ if _REPO_ROOT not in sys.path:
 from src.adapters.hermes.http_client import HermesTeamMemoryProvider
 
 
+def _session_file() -> str:
+    explicit = os.environ.get("TEAM_MEMORY_SESSION_FILE")
+    if explicit:
+        return explicit
+    hermes_home = os.environ.get("HERMES_HOME")
+    if hermes_home:
+        return os.path.join(hermes_home, "team-memory-session.json")
+    return os.path.join(os.path.expanduser("~"), ".team-memory", "session.json")
+
+
+def _session_token() -> str:
+    token = os.environ.get("TEAM_MEMORY_TOKEN", "")
+    if token:
+        return token
+    try:
+        with open(_session_file(), encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except FileNotFoundError:
+        return ""
+    except json.JSONDecodeError:
+        return ""
+    value = payload.get("sessionToken")
+    return value if isinstance(value, str) else ""
+
+
 class TeamMemoryHermesProvider(MemoryProvider):
     @property
     def name(self) -> str:
         return "team_memory"
 
     def is_available(self) -> bool:
-        return bool(os.environ.get("TEAM_MEMORY_TOKEN"))
+        return bool(_session_token())
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
-        token = os.environ.get("TEAM_MEMORY_TOKEN", "")
+        token = _session_token()
         mode = os.environ.get("TEAM_MEMORY_MODE", "http").strip().lower()
         if mode == "local":
             self._provider = HermesTeamMemoryProvider.from_local(

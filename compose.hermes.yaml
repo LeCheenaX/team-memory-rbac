@@ -5,9 +5,10 @@ services:
       context: .
       dockerfile: docker/hermes/Dockerfile
     environment:
-      TEAM_MEMORY_TOKEN: ${LOCAL_HERMES_TOKEN:-}
+      TEAM_MEMORY_TOKEN: ${TEAM_MEMORY_TOKEN:-}
       TEAM_MEMORY_MODE: local
       TEAM_MEMORY_REPO_ROOT: /opt/team-memory-rbac
+      TEAM_MEMORY_SESSION_FILE: /root/.hermes/team-memory-session.json
       PYTHONPATH: /opt/team-memory-rbac
       LIBSQL_URL: file:/workspace/.data/test1-local-hermes/team-memory.db
       CAS_BACKEND: filesystem
@@ -18,6 +19,7 @@ services:
       BOOTSTRAP_USER_NAME: Test 1 Local Admin
       BOOTSTRAP_SESSION_ID: session:test1-admin
       BOOTSTRAP_SESSION_EXPIRES_AT: "2030-01-01T00:00:00.000Z"
+      BOOTSTRAP_USER_PASSWORD: ${BOOTSTRAP_USER_PASSWORD:-}
     working_dir: /workspace
     stdin_open: true
     tty: true
