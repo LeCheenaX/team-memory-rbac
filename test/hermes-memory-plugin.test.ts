@@ -1,0 +1,18 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+test("Team Memory ships as a real Hermes memory plugin", async () => {
+  const [plugin, metadata] = await Promise.all([
+    readFile("adapters/hermes/team_memory_plugin/__init__.py", "utf8"),
+    readFile("adapters/hermes/team_memory_plugin/plugin.yaml", "utf8"),
+  ]);
+
+  assert.match(plugin, /from agent\.memory_provider import MemoryProvider/);
+  assert.match(plugin, /sys\.path\.insert\(0, _REPO_ROOT\)/);
+  assert.match(plugin, /class TeamMemoryHermesProvider\(MemoryProvider\)/);
+  assert.match(plugin, /def register\(ctx/);
+  assert.match(plugin, /ctx\.register_memory_provider\(TeamMemoryHermesProvider\(\)\)/);
+  assert.match(plugin, /TEAM_MEMORY_MODE/);
+  assert.match(metadata, /name: team_memory/);
+});

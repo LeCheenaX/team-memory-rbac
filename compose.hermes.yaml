@@ -6,6 +6,8 @@ services:
       dockerfile: docker/hermes/Dockerfile
     environment:
       TEAM_MEMORY_TOKEN: ${LOCAL_HERMES_TOKEN:-}
+      TEAM_MEMORY_MODE: local
+      TEAM_MEMORY_REPO_ROOT: /opt/team-memory-rbac
       PYTHONPATH: /opt/team-memory-rbac
       LIBSQL_URL: file:/workspace/.data/test1-local-hermes/team-memory.db
       CAS_BACKEND: filesystem
@@ -34,6 +36,7 @@ services:
     environment:
       TEAM_MEMORY_URL: http://service:3000
       TEAM_MEMORY_TOKEN: ${HERMES_A_TOKEN:-}
+      TEAM_MEMORY_MODE: http
       PYTHONPATH: /opt/team-memory-rbac
     working_dir: /workspace
     stdin_open: true
@@ -53,6 +56,7 @@ services:
     environment:
       TEAM_MEMORY_URL: http://service:3000
       TEAM_MEMORY_TOKEN: ${HERMES_B_TOKEN:-}
+      TEAM_MEMORY_MODE: http
       PYTHONPATH: /opt/team-memory-rbac
     working_dir: /workspace
     stdin_open: true

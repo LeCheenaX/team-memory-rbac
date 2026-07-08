@@ -44,13 +44,17 @@ like `docker compose -f compose.yaml -f compose.hermes.yaml run --rm
 hermes-local hermes` opens the Hermes chat UI.
 
 Hermes must be configured through its real memory-provider seam, not through a
-mock script. Register the Team Memory provider in the installed Hermes version
-using these provider constructors:
+mock script. The Hermes container installs a real user memory plugin named
+`team_memory` into `/root/.hermes/plugins/team_memory/`. Activate that plugin
+with `hermes memory setup team_memory`; do not ask the chatting agent to import
+or execute `HermesTeamMemoryProvider` directly.
 
-- Local no-server mode:
-  `src.adapters.hermes.http_client.HermesTeamMemoryProvider.from_local(os.environ["TEAM_MEMORY_TOKEN"])`
-- Server mode:
-  `src.adapters.hermes.http_client.HermesTeamMemoryProvider.from_http(os.environ["TEAM_MEMORY_URL"], os.environ["TEAM_MEMORY_TOKEN"])`
+The plugin chooses its backend from container environment:
+
+- `TEAM_MEMORY_MODE=local` uses the local no-server runtime through
+  `HermesTeamMemoryProvider.from_local(...)`.
+- `TEAM_MEMORY_MODE=http` uses the Team Memory HTTP service through
+  `HermesTeamMemoryProvider.from_http(...)`.
 
 If Hermes cannot show that this provider is active, stop the test and fix the
 Hermes configuration first.
@@ -140,6 +144,8 @@ though the setup container is removed.
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes setup
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes config
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes memory setup team_memory
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes memory status
 ```
 
 If Hermes requires editing `config.yaml`, use the Hermes config command it
@@ -153,8 +159,8 @@ Pass condition:
 
 - `hermes setup` completes without leaving missing API key or model settings.
 - `hermes config` shows a usable Hermes configuration under `/root/.hermes`.
-- The Team Memory provider can still be configured at Hermes' memory-provider
-  seam when the chat session starts.
+- `hermes memory status` shows `Provider: team_memory` and reports the plugin
+  as installed and available.
 
 ### Start The Real Hermes Container
 
@@ -166,10 +172,10 @@ conversation transcript.
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes
 ```
 
-Inside Hermes, configure the Team Memory provider with
-`HermesTeamMemoryProvider.from_local(os.environ["TEAM_MEMORY_TOKEN"])`.
-If Hermes exits, rerun the same command; `/root/.hermes` and `/workspace` state
-remain in the named volumes.
+Do not configure Team Memory from inside the chat by asking Hermes to import a
+Python class. Team Memory must already be active through `hermes memory setup
+team_memory` before this command starts. If Hermes exits, rerun the same
+command; `/root/.hermes` and `/workspace` state remain in the named volumes.
 
 Before continuing, ask Hermes:
 
@@ -180,7 +186,7 @@ show my Team Memory identity and the memory tools visible to this session.
 
 Pass condition:
 
-- Hermes reports that Team Memory is the active or parallel memory provider.
+- Hermes reports `team_memory` as the active external long-term memory provider.
 - The identity uses `root:test1-local`.
 - The visible tool set includes read/search/write memory capability for the
   writer session.
@@ -371,6 +377,8 @@ Terminal A setup:
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes setup
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes config
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes memory setup team_memory
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes memory status
 ```
 
 Terminal B setup:
@@ -378,6 +386,8 @@ Terminal B setup:
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes setup
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes config
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes memory setup team_memory
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes memory status
 ```
 
 Terminal A:
@@ -392,8 +402,8 @@ Terminal B:
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes
 ```
 
-Inside each Hermes container, configure the provider with
-`HermesTeamMemoryProvider.from_http(os.environ["TEAM_MEMORY_URL"], os.environ["TEAM_MEMORY_TOKEN"])`.
+Before starting each chat session, confirm `hermes memory status` shows
+`Provider: team_memory`.
 
 Ask both Hermes sessions:
 
@@ -405,7 +415,7 @@ visible to this session.
 Pass condition:
 
 - Hermes A and Hermes B both identify `root:test2-server`.
-- Both use the HTTP provider pointed at `http://service:3000`.
+- Both use the `team_memory` external provider pointed at `http://service:3000`.
 - Both see only tools allowed by their server-issued session.
 
 ### Permission Administration Checks

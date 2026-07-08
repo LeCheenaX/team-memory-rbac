@@ -10,7 +10,8 @@ curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ```
 
 It also vendors this repository at `/opt/team-memory-rbac` so Hermes can import
-the Team Memory adapter:
+the Team Memory adapter and installs a Hermes user memory plugin named
+`team_memory` under `/root/.hermes/plugins/team_memory/`:
 
 ```python
 from src.adapters.hermes.http_client import HermesTeamMemoryProvider
@@ -53,6 +54,8 @@ docker compose up -d qdrant
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local check
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes setup
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes config
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes memory setup team_memory
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes memory status
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes
 ```
 
@@ -71,11 +74,16 @@ QDRANT_URL=http://qdrant:6333
 PYTHONPATH=/opt/team-memory-rbac
 ```
 
-Configure Hermes to use:
+Activate the Team Memory external memory plugin with:
 
-```python
-HermesTeamMemoryProvider.from_local(os.environ["TEAM_MEMORY_TOKEN"])
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes memory setup team_memory
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes memory status
 ```
+
+The status command must show `Provider: team_memory`. Do not ask the chat agent
+to import `HermesTeamMemoryProvider`; the chat process only uses providers
+selected through Hermes' memory plugin system.
 
 Hermes' own setup flow writes API keys, model settings, and preferences under
 `/root/.hermes`. If it asks you to edit the config file, run:
@@ -108,6 +116,8 @@ Start Hermes A:
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes setup
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes config
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes memory setup team_memory
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes memory status
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-a hermes
 ```
 
@@ -116,6 +126,8 @@ Start Hermes B in another terminal:
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes setup
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes config
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes memory setup team_memory
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes memory status
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-b hermes
 ```
 
