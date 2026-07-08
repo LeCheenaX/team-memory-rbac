@@ -690,6 +690,7 @@ export class InMemoryMemoryAuthority
           input.relation.sourceKind,
           input.relation.sourceId,
           entities,
+          entityBranches,
           resources,
           resourceChunks,
         );
@@ -697,6 +698,7 @@ export class InMemoryMemoryAuthority
           input.relation.targetKind,
           input.relation.targetId,
           entities,
+          entityBranches,
           resources,
           resourceChunks,
         );
@@ -829,12 +831,15 @@ export class InMemoryMemoryAuthority
     kind: MemoryRelation["sourceKind"],
     id: string,
     entities: Map<string, MemoryEntity>,
+    entityBranches: Map<string, MemoryEntityBranch>,
     resources: Map<string, Resource>,
     resourceChunks: Map<string, ResourceChunk>,
   ): void {
     const exists =
       kind === "memory_entity"
         ? entities.has(id)
+        : kind === "memory_entity_branch"
+          ? entityBranches.has(id)
         : kind === "resource"
           ? resources.has(id)
           : resourceChunks.has(id);

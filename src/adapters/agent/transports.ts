@@ -467,6 +467,7 @@ export class McpTeamMemoryAdapter {
       "memory.importResource",
       "memory.ingestResource",
       "memory.readResource",
+      "memory.catalog",
       "memory.write",
       "memory.search",
       "memory.history",
@@ -499,6 +500,8 @@ export class McpTeamMemoryAdapter {
           this.requiredString(input, "resourceId"),
           typeof input.revisionId === "string" ? input.revisionId : undefined,
         );
+      case "memory.catalog":
+        return this.gateway.memoryCatalog(sessionToken, input);
       case "memory.write":
         return this.gateway.writeMemory(sessionToken, input);
       case "memory.search":

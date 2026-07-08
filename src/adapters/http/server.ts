@@ -39,6 +39,7 @@ interface GatewayLike {
   reviseResource(token: string | undefined, resourceId: string, payload: Record<string, unknown>): Promise<unknown>;
   ingestResource(token: string | undefined, resourceId: string, payload: Record<string, unknown>): Promise<unknown>;
   readResource(token: string | undefined, resourceId: string, revisionId?: string): Promise<unknown>;
+  memoryCatalog(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   writeMemory(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   searchMemory(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   recallHostMemory(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
@@ -271,6 +272,9 @@ async function handleRequest(
   }
   if (request.method === "POST" && url.pathname === "/memory/search") {
     return { status: 200, payload: await gateway.searchMemory(bearer, await body(request, bodyLimitBytes)) };
+  }
+  if (request.method === "GET" && url.pathname === "/memory/catalog") {
+    return responseValue(200, await gateway.memoryCatalog(bearer, queryPayload(url)));
   }
   const hostRecallMatch = /^\/host\/([^/]+)\/recall$/.exec(url.pathname);
   if (request.method === "POST" && hostRecallMatch?.[1] !== undefined) {

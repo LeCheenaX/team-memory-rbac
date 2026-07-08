@@ -143,7 +143,11 @@ test("runtime agent integrations", async (t) => {
           },
         });
         const result = await adapter.invokeTool(session.token, "memory.search", {
-          query: { kind: "entity", text: `Runtime Note ${index}` },
+          query: {
+            kind: "entity",
+            text: `Runtime Note ${index}`,
+            tagsAny: ["runtime"],
+          },
         }) as { value: { items: unknown[] } };
         assert.equal(result.value.items.length, 1);
       }

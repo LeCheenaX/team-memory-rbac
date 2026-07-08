@@ -53,6 +53,7 @@ export interface MemoryCaptureResult {
   entityId: string;
   branchId: string;
   commitIds: string[];
+  extra?: Record<string, unknown>;
 }
 
 export function hostRecallInput(payload: Record<string, unknown>): HostRecallInput {
@@ -172,6 +173,9 @@ function memoryItemText(item: MemoryRetrievalItem): string {
       `Title: ${branch.title}`,
       `Description: ${branch.description}`,
       branch.tags.length === 0 ? "" : `Tags: ${branch.tags.join(", ")}`,
+      branch.extraInfo === undefined
+        ? ""
+        : `Extra: ${JSON.stringify(branch.extraInfo)}`,
     ].filter((line) => line.length > 0).join("\n");
   }
   if (item.kind === "resource_chunk") {

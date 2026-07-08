@@ -224,6 +224,7 @@ const agentToolCatalog = [
   { name: "memory.importResource", description: "Import a resource", action: "import_resource", resourceKind: "resource" },
   { name: "memory.ingestResource", description: "Chunk and index a resource revision", action: "index_resource", resourceKind: "resource" },
   { name: "memory.readResource", description: "Read a resource", action: "read", resourceKind: "resource" },
+  { name: "memory.catalog", description: "List visible memory entities and tags", action: "read", resourceKind: "memory_entity" },
   { name: "memory.write", description: "Write memory", action: "write_entity", resourceKind: "memory_entity" },
   { name: "memory.search", description: "Search memory", action: "search", resourceKind: "memory_entity" },
   { name: "memory.history", description: "List memory history", action: "read", resourceKind: "memory_entity" },
@@ -744,6 +745,116 @@ export class TeamMemoryGateway {
     };
   }
 
+  async memoryCatalog(
+    token: string | undefined,
+    payload: Record<string, unknown> = {},
+  ): Promise<{
+    rootEntityId: string;
+    branchRef: string;
+    entities: Array<{
+      id: string;
+      status: string;
+      currentBranchId?: string;
+      currentBranch?: {
+        id: string;
+        title: string;
+        description: string;
+        tags: string[];
+        status: string;
+        extra?: Record<string, unknown>;
+      };
+    }>;
+    tags: Array<{
+      tag: string;
+      count: number;
+      entityIds: string[];
+    }>;
+  }> {
+    assertNoIdentityOverride(payload);
+    const session = await this.authenticate(token);
+    const branch = branchRef(payload);
+    const decision = await this.runtime.policy.decide({
+      subject: gatewaySubject(session),
+      rootEntityId: session.rootEntityId,
+      taskScope: session.taskScope,
+      branchRef: branch,
+      action: "read",
+      resourceKind: "memory_entity",
+    });
+    if (!decision.allowed) {
+      throw new TeamMemoryGatewayError(
+        "permission_denied",
+        decision.reason,
+        decision as PermissionDecision & { allowed: false },
+      );
+    }
+
+    const view = this.runtime.history.readActiveView(session.rootEntityId, branch);
+    const branchById = new Map(view.entityBranches.map((candidate) => [
+      candidate.id,
+      candidate,
+    ]));
+    const visibleEntities = view.entities
+      .filter((entity) => entity.rootEntityId !== null)
+      .filter((entity) =>
+        session.taskScope.allowedEntityIds === undefined ||
+        session.taskScope.allowedEntityIds.includes(entity.id)
+      )
+      .filter((entity) =>
+        session.taskScope.deniedEntityIds?.includes(entity.id) !== true
+      )
+      .map((entity) => ({
+        entity,
+        branch: entity.currentBranchId === undefined
+          ? undefined
+          : branchById.get(entity.currentBranchId),
+      }))
+      .filter(({ branch }) => {
+        const tags = branch?.tags ?? [];
+        return (
+          (session.taskScope.allowedTags === undefined ||
+            tags.some((tag) => session.taskScope.allowedTags?.includes(tag))) &&
+          !tags.some((tag) => session.taskScope.deniedTags?.includes(tag))
+        );
+      });
+    const tagMap = new Map<string, Set<string>>();
+    for (const { entity, branch } of visibleEntities) {
+      for (const tag of branch?.tags ?? []) {
+        const entityIds = tagMap.get(tag) ?? new Set<string>();
+        entityIds.add(entity.id);
+        tagMap.set(tag, entityIds);
+      }
+    }
+    return {
+      rootEntityId: session.rootEntityId,
+      branchRef: branch,
+      entities: visibleEntities.map(({ entity, branch }) => ({
+        id: entity.id,
+        status: entity.status,
+        ...(entity.currentBranchId === undefined ? {} : { currentBranchId: entity.currentBranchId }),
+        ...(branch === undefined
+          ? {}
+          : {
+              currentBranch: {
+                id: branch.id,
+                title: branch.title,
+                description: branch.description,
+                tags: [...branch.tags],
+                status: branch.status,
+                ...(branch.extraInfo === undefined ? {} : { extra: branch.extraInfo }),
+              },
+            }),
+      })),
+      tags: [...tagMap.entries()]
+        .map(([tag, entityIds]) => ({
+          tag,
+          count: entityIds.size,
+          entityIds: [...entityIds].sort(),
+        }))
+        .sort((left, right) => left.tag.localeCompare(right.tag)),
+    };
+  }
+
   async writeMemory(
     token: string | undefined,
     payload: Record<string, unknown>,
@@ -855,6 +966,18 @@ export class TeamMemoryGateway {
     const branchId = `host-capture-branch:${id}`;
     const entityCommitId = `host-capture-entity-commit:${id}`;
     const branchCommitId = `host-capture-branch-commit:${id}`;
+    const branchExtraInfo = {
+      host: input.host,
+      sessionId: input.sessionId,
+      outcome: input.outcome,
+      ...(input.userPrompt === undefined ? {} : { userPrompt: input.userPrompt }),
+      ...(input.finalAssistantMessage === undefined
+        ? {}
+        : { finalAssistantMessage: input.finalAssistantMessage }),
+      ...(input.transcriptPath === undefined ? {} : { transcriptPath: input.transcriptPath }),
+      ...(input.errorSummary === undefined ? {} : { errorSummary: input.errorSummary }),
+      ...(input.toolEvents === undefined ? {} : { toolEvents: input.toolEvents }),
+    };
     const entityResult = unwrap(await this.writeRouter.execute({
       subject: gatewaySubject(session),
       rootEntityId: session.rootEntityId,
@@ -906,18 +1029,7 @@ export class TeamMemoryGateway {
           title: input.title ?? captureTitle(input),
           description: captureDescription(input),
           tags: ["host-memory", input.host, input.outcome],
-          extraInfo: {
-            host: input.host,
-            sessionId: input.sessionId,
-            outcome: input.outcome,
-            ...(input.userPrompt === undefined ? {} : { userPrompt: input.userPrompt }),
-            ...(input.finalAssistantMessage === undefined
-              ? {}
-              : { finalAssistantMessage: input.finalAssistantMessage }),
-            ...(input.transcriptPath === undefined ? {} : { transcriptPath: input.transcriptPath }),
-            ...(input.errorSummary === undefined ? {} : { errorSummary: input.errorSummary }),
-            ...(input.toolEvents === undefined ? {} : { toolEvents: input.toolEvents }),
-          },
+          extraInfo: branchExtraInfo,
           importance: input.outcome === "failure" ? 0.9 : 0.75,
           confidence: 0.8,
           status: "active",
@@ -935,6 +1047,7 @@ export class TeamMemoryGateway {
       entityId,
       branchId,
       commitIds: [entityCommitId, branchCommitId],
+      extra: branchExtraInfo,
     };
   }
 

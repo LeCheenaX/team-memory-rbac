@@ -183,7 +183,8 @@ Before continuing, ask Hermes:
 
 ```text
 Show me which long-term memory provider is active. Then use the provider to
-show my Team Memory identity and the memory tools visible to this session.
+show my Team Memory identity, the memory tools visible to this session, and the
+available Team Memory entity/tag catalog if a catalog tool is exposed.
 ```
 
 Pass condition:
@@ -192,6 +193,9 @@ Pass condition:
 - The identity uses `root:test1-local`.
 - The visible tool set includes read/search/write memory capability for the
   active admin session.
+- If `memory.catalog` or an equivalent Team Memory catalog command is visible,
+  Hermes can list current entity identities and tags before narrowing later
+  searches by `entityIds`, `tagsAny`, or `tagsNone`.
 
 ### Core Hermes Conversation Checks
 
@@ -211,13 +215,26 @@ provider.
 
 2. Recall through Hermes:
 
+Reset the Hermes conversation before testing recall. This must start a new
+Hermes session so the answer cannot be satisfied from the model's short-term
+conversation context.
+
 ```text
-In a fresh answer, recall what you know about the Test 1 local Hermes setup.
-Use long-term memory before answering.
+/reset
+```
+
+After Hermes confirms the new session, ask:
+
+```text
+How does Test 1 set up? Use long-term memory before answering.
 ```
 
 Pass condition: Hermes recalls the container/no-server/local Team Memory fact
-from Team Memory, not from the immediate prompt alone.
+from Team Memory, not from the previous chat context. A passing answer must be
+grounded in the provider-injected Team Memory context or an explicit
+Team Memory tool result and must include a stored memory id or provenance. If
+Hermes answers only from the earlier conversation without a reset, the recall
+check has not been performed.
 
 3. Memory management through Hermes:
 
@@ -228,7 +245,21 @@ acceptance artifact is the Hermes transcript.
 ```
 
 Pass condition: Hermes searches existing memory and captures the follow-up
-through the provider.
+through the provider. Any `team_memory_search` error such as a missing
+`userPrompt`/query parameter fails this step; fix the provider/tool schema
+before continuing. A successful raw search response should include
+`"tag": "memory-context"` or a `<team-memory-context ...>` block, and it must
+include at least one stored memory id for the original Test 1 container/local
+Team Memory fact. It is acceptable for the results to also include later
+self-referential recall or inspection turns, but those follow-up records alone
+do not prove the original memory was retrieved. Tool responses must keep a
+stable top-level shape; any variable entity or branch metadata should appear
+under `extra`, not as ad hoc fields invented by the model.
+
+Do not use `team_memory_capture` as a raw file import path. Conversation
+memories are captured from the Hermes dialogue. Raw files or documents must be
+imported through the Resource/CAS path and then indexed by automatic or
+explicit resource ingestion.
 
 4. Forged identity rejection through Hermes:
 

@@ -52,6 +52,8 @@ class TeamMemoryHttpClient:
             return self._request("POST", "memory/write", input_payload)["value"]
         if tool_name == "memory.search":
             return self._request("POST", "memory/search", input_payload)
+        if tool_name == "memory.catalog":
+            return self._request("GET", "memory/catalog")["value"]
         if tool_name == "memory.history":
             return self._request("GET", "history")["value"]
         if tool_name == "memory.conflicts":
@@ -268,7 +270,26 @@ class HermesTeamMemoryProvider:
         **metadata: Any,
     ) -> dict[str, Any]:
         session_id = str(metadata.get("session_id") or user_id or "hermes")
+        entity_ids = metadata.get("entityIds")
+        tags_any = metadata.get("tagsAny")
+        tags_none = metadata.get("tagsNone")
+        if isinstance(entity_ids, list) or isinstance(tags_any, list) or isinstance(tags_none, list):
+            memory_query: dict[str, Any] = {"kind": "entity", "text": query}
+            if limit is not None:
+                memory_query["limit"] = limit
+            if isinstance(entity_ids, list):
+                memory_query["entityIds"] = entity_ids
+            if isinstance(tags_any, list):
+                memory_query["tagsAny"] = tags_any
+            if isinstance(tags_none, list):
+                memory_query["tagsNone"] = tags_none
+            return self._client.call_tool("memory.search", {"query": memory_query})
         return self.recall_context(query, session_id=session_id, limit=limit)
+
+    def catalog(self) -> dict[str, Any]:
+        result = self._client.call_tool("memory.catalog", {})
+        value = result.get("value") if isinstance(result, dict) else None
+        return value if isinstance(value, dict) else result
 
     def add(
         self,

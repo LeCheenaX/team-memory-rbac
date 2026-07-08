@@ -67,7 +67,9 @@ class TeamMemoryHermesProvider(MemoryProvider):
         return (
             "# Team Memory\n"
             f"Active Hermes external memory provider in {mode} mode. "
-            "Use Team Memory recall before answering and capture durable memories after useful turns."
+            "Use Team Memory recall before answering and capture durable conversation memories after useful turns. "
+            "Do not pass identity fields, history toggles, conflict claims, or relationship arguments; "
+            "Team Memory derives merges, conflicts, relations, and extra metadata internally."
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -99,19 +101,42 @@ class TeamMemoryHermesProvider(MemoryProvider):
         return [
             {
                 "name": "team_memory_search",
-                "description": "Search Team Memory for durable context relevant to the current task.",
+                "description": (
+                    "Search Team Memory for durable context relevant to the current task. "
+                    "Use the natural-language query, optional limit, and stable entity/tag filters; the query determines whether history, "
+                    "facts, resources, or relations are recalled. Variable metadata appears under extra when returned."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string"},
                         "limit": {"type": "integer"},
+                        "entityIds": {"type": "array", "items": {"type": "string"}},
+                        "tagsAny": {"type": "array", "items": {"type": "string"}},
+                        "tagsNone": {"type": "array", "items": {"type": "string"}},
                     },
                     "required": ["query"],
                 },
             },
             {
+                "name": "team_memory_catalog",
+                "description": (
+                    "List the current Team Memory root, visible MemoryEntity identities, their current branch summaries, "
+                    "and available tags. Use this before follow-up searches that should narrow by entity or tags."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
+            {
                 "name": "team_memory_capture",
-                "description": "Capture a durable Team Memory note from the current conversation.",
+                "description": (
+                    "Capture durable conversation memory with stable arguments only. "
+                    "Pass content and optional outcome; Team Memory decides whether to create, merge, conflict, "
+                    "supersede, or relate memory branches, and any variable metadata is returned under extra. "
+                    "For raw files or documents, import the resource into Team Memory/CAS and trigger resource ingestion instead of using this tool."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -130,8 +155,13 @@ class TeamMemoryHermesProvider(MemoryProvider):
                 str(args.get("query", "")),
                 session_id=session_id,
                 limit=args.get("limit"),
+                entityIds=args.get("entityIds"),
+                tagsAny=args.get("tagsAny"),
+                tagsNone=args.get("tagsNone"),
             )
             return json.dumps(result)
+        if tool_name == "team_memory_catalog":
+            return json.dumps(self._provider.catalog())
         if tool_name == "team_memory_capture":
             result = self._provider.add(
                 str(args.get("content", "")),

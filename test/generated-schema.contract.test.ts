@@ -34,6 +34,24 @@ test("checked-in JSON Schema matches the TypeScript runtime contract", async () 
     false,
   );
   assert.deepEqual(
+    generated.$defs.MemoryRelation.properties.sourceKind.enum,
+    [
+      "memory_entity",
+      "memory_entity_branch",
+      "resource",
+      "resource_chunk",
+    ],
+  );
+  assert.deepEqual(
+    generated.$defs.MemoryRelation.properties.targetKind.enum,
+    [
+      "memory_entity",
+      "memory_entity_branch",
+      "resource",
+      "resource_chunk",
+    ],
+  );
+  assert.deepEqual(
     generated.$defs.AdminMemoryAction.enum,
     [
       "assign_user_role",

@@ -216,6 +216,23 @@ test("TaskScope filters entity tags, resources, relation type, and depth", async
     ["workflow"],
   );
 
+  const tagged = await router.execute(
+    request({ kind: "entity", tagsAny: ["workflow"] }),
+  );
+  if (!("value" in tagged)) assert.fail("expected tagged value");
+  assert.deepEqual(
+    tagged.value.items.map((item) =>
+      item.kind === "entity" ? item.entity.id : item.kind,
+    ),
+    ["workflow"],
+  );
+
+  const excluded = await router.execute(
+    request({ kind: "entity", tagsNone: ["workflow"] }),
+  );
+  if (!("value" in excluded)) assert.fail("expected excluded value");
+  assert.deepEqual(excluded.value.items, []);
+
   const relations = await router.execute(
     request({
       kind: "relations",

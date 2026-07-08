@@ -62,6 +62,10 @@ export class TeamMemoryHttpClient {
     return this.request("POST", "memory/search", input, false);
   }
 
+  catalog(input: Record<string, unknown> = {}): Promise<unknown> {
+    return this.request("GET", `memory/catalog${query(input)}`);
+  }
+
   recallHostMemory(host: string, input: Record<string, unknown>): Promise<unknown> {
     return this.request(
       "POST",
@@ -135,6 +139,8 @@ export class TeamMemoryHttpClient {
           typeof input.revisionId === "string" ? input.revisionId : undefined,
         );
       }
+      case "memory.catalog":
+        return this.catalog(input);
       case "memory.write":
         return this.write(input);
       case "memory.search":

@@ -63,17 +63,23 @@ export type MemoryRetrievalQuery =
       kind: "keyword";
       text: string;
       limit?: number;
+      tagsAny?: string[];
+      tagsNone?: string[];
     }
   | {
       kind: "semantic";
       embedding: number[];
       limit?: number;
+      tagsAny?: string[];
+      tagsNone?: string[];
     }
   | {
       kind: "entity";
       text?: string;
       entityIds?: string[];
       limit?: number;
+      tagsAny?: string[];
+      tagsNone?: string[];
     }
   | {
       kind: "relations";
@@ -85,6 +91,8 @@ export type MemoryRetrievalQuery =
       kind: "workflow";
       text: string;
       maxDepth: number;
+      tagsAny?: string[];
+      tagsNone?: string[];
     };
 
 export interface MemoryRetrievalRequest extends PermissionRequest {
@@ -185,6 +193,25 @@ function withinTaskScope(
   );
 }
 
+function withinQueryTags(
+  item: MemoryRetrievalItem,
+  query: MemoryRetrievalQuery,
+): boolean {
+  if (!("tagsAny" in query) && !("tagsNone" in query)) {
+    return true;
+  }
+  if (item.kind !== "entity") {
+    return false;
+  }
+  const tags = item.branch?.tags ?? [];
+  const tagsAny = "tagsAny" in query ? query.tagsAny : undefined;
+  const tagsNone = "tagsNone" in query ? query.tagsNone : undefined;
+  return (
+    (tagsAny === undefined || tagsAny.some((tag) => tags.includes(tag))) &&
+    (tagsNone === undefined || !tagsNone.some((tag) => tags.includes(tag)))
+  );
+}
+
 function assertRetrievalRequest(request: MemoryRetrievalRequest): void {
   if (request.rootEntityId.length === 0) {
     throw new Error("retrieval rootEntityId must be non-empty");
@@ -271,7 +298,8 @@ export class MemoryRetrievalAdapter
     }
 
     const scoped = items.filter((item) =>
-      withinTaskScope(item, request.taskScope),
+      withinTaskScope(item, request.taskScope) &&
+      withinQueryTags(item, request.query),
     );
     const entityItems = scoped.filter(
       (item): item is EntityRetrievalItem => item.kind === "entity",

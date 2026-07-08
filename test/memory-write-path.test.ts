@@ -265,6 +265,56 @@ test("structured memory is created explicitly and traces back to L1 evidence", a
       },
     },
   });
+  await router.execute({
+    ...baseCommand(),
+    commit: { id: "commit-create-conflicting-branch" },
+    action: "write_entity_branch",
+    resourceKind: "memory_entity_branch",
+    operation: {
+      kind: "create_entity_branch",
+      id: "operation-create-conflicting-branch",
+      branch: {
+        id: "entity-branch-architecture-v2",
+        entityId: "entity-architecture",
+        rootEntityId,
+        branchRef: "main",
+        parentBranchId: "entity-branch-architecture-v1",
+        title: "Architecture correction",
+        description: "RBAC and Memory remain separate but share gateway routing.",
+        tags: ["architecture", "correction"],
+        importance: 0.9,
+        confidence: 0.85,
+        status: "conflicted",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    },
+  });
+  await router.execute({
+    ...baseCommand(),
+    commit: { id: "commit-create-branch-conflict-relation" },
+    action: "write_relation",
+    resourceKind: "memory_relation",
+    operation: {
+      kind: "create_relation",
+      id: "operation-create-branch-conflict-relation",
+      relation: {
+        id: "relation-architecture-branch-conflict",
+        rootEntityId,
+        sourceId: "entity-branch-architecture-v2",
+        sourceKind: "memory_entity_branch",
+        targetId: "entity-branch-architecture-v1",
+        targetKind: "memory_entity_branch",
+        relationType: "contradicts",
+        weight: 1,
+        confidence: 0.85,
+        branchRef: "main",
+        status: "active",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    },
+  });
 
   const view = authority.readActiveView(rootEntityId, "main");
   const entity = view.entities.find(
@@ -272,7 +322,17 @@ test("structured memory is created explicitly and traces back to L1 evidence", a
   );
   assert.equal(
     entity?.currentBranchId,
-    "entity-branch-architecture-v1",
+    "entity-branch-architecture-v2",
+  );
+  assert.ok(
+    view.entityBranches.some((branch) =>
+      branch.id === "entity-branch-architecture-v1"
+    ),
+  );
+  assert.ok(
+    view.entityBranches.some((branch) =>
+      branch.id === "entity-branch-architecture-v2"
+    ),
   );
   assert.equal(
     authority
@@ -282,6 +342,13 @@ test("structured memory is created explicitly and traces back to L1 evidence", a
   );
   assert.equal(view.relations[0]?.relationType, "refers_to");
   assert.equal(view.relations[0]?.targetId, "chunk-architecture-source");
+  assert.ok(
+    view.relations.some((relation) =>
+      relation.sourceKind === "memory_entity_branch" &&
+      relation.targetKind === "memory_entity_branch" &&
+      relation.relationType === "contradicts"
+    ),
+  );
 });
 
 test("resource updates append revisions without overwriting history", async () => {

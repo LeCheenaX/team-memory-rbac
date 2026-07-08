@@ -148,8 +148,15 @@ test("host lifecycle recall injects trusted-boundary context and capture writes 
       outcome: "failure",
       userPrompt: "Implement Hermes mem0 provider",
       errorSummary: "Provider callback payload was missing",
-    }) as { status: string; branchId: string };
+    }) as { status: string; branchId: string; extra: Record<string, unknown> };
     assert.equal(captured.status, "captured");
+    assert.deepEqual(captured.extra, {
+      host: "hermes",
+      sessionId: "hermes-session",
+      outcome: "failure",
+      userPrompt: "Implement Hermes mem0 provider",
+      errorSummary: "Provider callback payload was missing",
+    });
 
     const rerecalled = await client.recallHostMemory("hermes", {
       sessionId: "hermes-session",
@@ -157,6 +164,8 @@ test("host lifecycle recall injects trusted-boundary context and capture writes 
     }) as { text: string; memoryIds: string[] };
     assert.ok(rerecalled.memoryIds.includes(captured.branchId));
     assert.match(rerecalled.text, /failure/);
+    assert.match(rerecalled.text, /Extra:/);
+    assert.match(rerecalled.text, /Provider callback payload was missing/);
   } finally {
     await close(fixture);
   }

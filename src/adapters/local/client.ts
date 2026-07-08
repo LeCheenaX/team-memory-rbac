@@ -41,6 +41,10 @@ export class LocalTeamMemoryClient {
     return this.gateway.searchMemory(this.token, input);
   }
 
+  catalog(input: Record<string, unknown> = {}): Promise<unknown> {
+    return this.gateway.memoryCatalog(this.token, input);
+  }
+
   recallHostMemory(host: string, input: Record<string, unknown>): Promise<unknown> {
     return this.gateway.recallHostMemory(this.token, { ...input, host });
   }
@@ -92,6 +96,8 @@ export class LocalTeamMemoryClient {
           this.requiredString(input, "resourceId"),
           typeof input.revisionId === "string" ? input.revisionId : undefined,
         );
+      case "memory.catalog":
+        return this.catalog(input);
       case "memory.write":
         return this.write(input);
       case "memory.search":

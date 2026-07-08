@@ -24,6 +24,13 @@ For parallel memory, use `TEAM_MEMORY_MODE=parallel_native_team_memory` and inst
 
 For full replacement, use `TEAM_MEMORY_MODE=team_memory_replaces_native`, set `plugins.slots.memory` to `team-memory-rbac`, and install the same plugin as the active memory implementation. It exposes OpenClaw-compatible `memory_search`, `memory_get`, `memory_write`, `memory_import`, and `memory_ingest`. The plugin manifest also advertises lifecycle recall and capture through `/host/openclaw/recall` and `/host/openclaw/capture`.
 
+Agents can list the current visible memory directory with `memory.catalog` or
+the CLI command `npm run team -- memory catalog`. The catalog returns the
+trusted session root, visible `MemoryEntity` identities, current branch
+summaries, and available tags. Follow-up retrieval can narrow with stable
+filters such as `entityIds`, `tagsAny`, and `tagsNone`; agents must not supply
+root identity fields in tool payloads.
+
 ## Hermes
 
 Install the Python adapter package or vendor `src.adapters.hermes`. For tool-style calls, construct:

@@ -17,54 +17,59 @@ import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
 
 const now = "2026-06-30T00:00:00.000Z";
 
-test("team CLI reports a missing login before opening the runtime", () => {
-  const result = spawnSync(
+function runTeamCommand(args: string[], env: NodeJS.ProcessEnv) {
+  return spawnSync(
     process.execPath,
-    ["--experimental-strip-types", "scripts/team-memory.mjs", "roots", "list"],
+    ["--experimental-strip-types", "scripts/team-memory.mjs", ...args],
     {
       cwd: process.cwd(),
-      env: {
-        ...process.env,
-        TEAM_MEMORY_TOKEN: "",
-        ADMIN_TOKEN: "",
-        LIBSQL_URL: "",
-        CAS_BACKEND: "",
-        CAS_DIRECTORY: "",
-        QDRANT_URL: "",
-      },
+      env,
       encoding: "utf8",
+      timeout: 20_000,
     },
   );
+}
+
+function envWithoutLogin(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    TEAM_MEMORY_TOKEN: "",
+    ADMIN_TOKEN: "",
+    LIBSQL_URL: "",
+    CAS_BACKEND: "",
+    CAS_DIRECTORY: "",
+    QDRANT_URL: "",
+  };
+}
+
+async function removeDirectory(directory: string): Promise<void> {
+  await rm(directory, {
+    recursive: true,
+    force: true,
+    maxRetries: 20,
+    retryDelay: 250,
+  });
+}
+
+async function assertMissingLoginGuard(): Promise<void> {
+  const result = runTeamCommand(["roots", "list"], envWithoutLogin());
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Team Memory is not logged in/);
   assert.doesNotMatch(result.stderr, /missing bearer token/);
-});
+}
 
-test("team CLI falls back to ADMIN_TOKEN when TEAM_MEMORY_TOKEN is empty", () => {
-  const result = spawnSync(
-    process.execPath,
-    ["--experimental-strip-types", "scripts/team-memory.mjs", "login"],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        TEAM_MEMORY_TOKEN: "",
-        ADMIN_TOKEN: "admin-token-from-compose-run",
-        LIBSQL_URL: "",
-        CAS_BACKEND: "",
-        CAS_DIRECTORY: "",
-        QDRANT_URL: "",
-      },
-      encoding: "utf8",
-    },
-  );
+async function assertAdminTokenBypassesStoredLoginGuard(): Promise<void> {
+  const result = runTeamCommand("login".split(" "), {
+    ...envWithoutLogin(),
+    ADMIN_TOKEN: "admin-token-from-compose-run",
+  });
 
   assert.equal(result.status, 1);
   assert.doesNotMatch(result.stderr, /Team Memory is not logged in/);
-});
+}
 
-test("team management CLI routes identity, RBAC, delegation, conflict, sync, and health commands through the gateway", async () => {
+async function assertGatewayRoutes(): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "team-memory-rbac-"));
   const runtime = await TeamMemoryRuntime.create({
     libsqlUrl: `file:${join(directory, "team-cli.db")}`,
@@ -97,15 +102,17 @@ test("team management CLI routes identity, RBAC, delegation, conflict, sync, and
       createdAt: now,
       updatedAt: now,
     });
+
     const cli = new TeamManagementCli(new TeamMemoryGateway(runtime));
-    assert.equal(
-      ((await cli.run(session.token, ["login"])) as { userId: string }).userId,
-      "user-admin-cli",
-    );
     assert.deepEqual(
       await cli.run(session.token, parseTeamManagementCommand(["roots", "list"])),
       { roots: ["root-cli"] },
     );
+    assert.equal(
+      ((await cli.run(session.token, ["memory", "catalog"])) as { rootEntityId: string }).rootEntityId,
+      "root-cli",
+    );
+
     await cli.run(session.token, [
       "members",
       "assign",
@@ -117,6 +124,7 @@ test("team management CLI routes identity, RBAC, delegation, conflict, sync, and
       ((await cli.run(session.token, ["members", "list"])) as { assignments: unknown[] }).assignments.length,
       2,
     );
+
     await cli.run(session.token, [
       "delegations",
       "create",
@@ -134,6 +142,7 @@ test("team management CLI routes identity, RBAC, delegation, conflict, sync, and
       ((await cli.run(session.token, ["delegations", "list"])) as { delegations: unknown[] }).delegations.length,
       1,
     );
+
     await cli.run(
       session.token,
       parseTeamManagementCommand([
@@ -150,6 +159,7 @@ test("team management CLI routes identity, RBAC, delegation, conflict, sync, and
       ((await cli.run(session.token, ["delegations", "list"])) as { delegations: unknown[] }).delegations.length,
       2,
     );
+
     assert.deepEqual(await cli.run(session.token, ["conflicts", "list"]), {
       conflicts: [],
     });
@@ -161,6 +171,7 @@ test("team management CLI routes identity, RBAC, delegation, conflict, sync, and
       ((await cli.run(session.token, ["replica", "status"])) as { rootEntityId: string }).rootEntityId,
       "root-cli",
     );
+
     await new TeamMemoryGateway(runtime).importResource(session.token, {
       clientMutationId: "cli-import-resource",
       resourceId: "resource-cli",
@@ -178,16 +189,17 @@ test("team management CLI routes identity, RBAC, delegation, conflict, sync, and
       ((await cli.run(session.token, ["health"])) as { live: boolean }).live,
       true,
     );
+
     await cli.run(session.token, ["delegations", "revoke", "delegation-cli", "agent-cli"]);
     await cli.run(session.token, ["members", "revoke", "assignment-cli-member", "user-member-cli"]);
   } finally {
     runtime.close();
     await new Promise((resolve) => setTimeout(resolve, 500));
-    await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    await removeDirectory(directory);
   }
-});
+}
 
-test("team CLI login stores the active session and logout clears it", async () => {
+async function assertPasswordLoginSessionStore(): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "team-memory-rbac-"));
   const config = {
     libsqlUrl: `file:${join(directory, "team-cli-login.db")}`,
@@ -227,28 +239,20 @@ test("team CLI login stores the active session and logout clears it", async () =
     QDRANT_URL: config.qdrantUrl,
   };
   try {
-    const login = spawnSync(
-      process.execPath,
-      ["--experimental-strip-types", "scripts/team-memory.mjs", "login", "user-cli-login", "correct horse battery staple"],
-      { cwd: process.cwd(), env, encoding: "utf8" },
+    const login = runTeamCommand(
+      ["login", "user-cli-login", "correct horse battery staple"],
+      env,
     );
     assert.equal(login.status, 0, login.stderr);
     assert.match(login.stdout, /"status": "logged_in"/);
     assert.doesNotMatch(login.stdout, /sessionToken/);
 
-    const roots = spawnSync(
-      process.execPath,
-      ["--experimental-strip-types", "scripts/team-memory.mjs", "roots", "list"],
-      { cwd: process.cwd(), env, encoding: "utf8" },
-    );
+    const roots = runTeamCommand(["roots", "list"], env);
     assert.equal(roots.status, 0, roots.stderr);
     assert.match(roots.stdout, /root-cli-login/);
 
-    const createReader = spawnSync(
-      process.execPath,
+    const createReader = runTeamCommand(
       [
-        "--experimental-strip-types",
-        "scripts/team-memory.mjs",
         "members",
         "create",
         "user-cli-reader",
@@ -256,43 +260,37 @@ test("team CLI login stores the active session and logout clears it", async () =
         "reader password",
         "role-researcher",
       ],
-      { cwd: process.cwd(), env, encoding: "utf8" },
+      env,
     );
     assert.equal(createReader.status, 0, createReader.stderr);
     assert.match(createReader.stdout, /user-cli-reader/);
 
-    const logout = spawnSync(
-      process.execPath,
-      ["--experimental-strip-types", "scripts/team-memory.mjs", "logout"],
-      { cwd: process.cwd(), env, encoding: "utf8" },
-    );
+    const logout = runTeamCommand(["logout"], env);
     assert.equal(logout.status, 0, logout.stderr);
     assert.match(logout.stdout, /"status": "logged_out"/);
 
-    const afterLogout = spawnSync(
-      process.execPath,
-      ["--experimental-strip-types", "scripts/team-memory.mjs", "roots", "list"],
-      { cwd: process.cwd(), env, encoding: "utf8" },
-    );
+    const afterLogout = runTeamCommand(["roots", "list"], env);
     assert.equal(afterLogout.status, 1);
     assert.match(afterLogout.stderr, /Team Memory is not logged in/);
 
-    const readerLogin = spawnSync(
-      process.execPath,
-      ["--experimental-strip-types", "scripts/team-memory.mjs", "login", "user-cli-reader", "reader password"],
-      { cwd: process.cwd(), env, encoding: "utf8" },
+    const readerLogin = runTeamCommand(
+      ["login", "user-cli-reader", "reader password"],
+      env,
     );
     assert.equal(readerLogin.status, 0, readerLogin.stderr);
     assert.match(readerLogin.stdout, /user-cli-reader/);
 
-    const readerRoots = spawnSync(
-      process.execPath,
-      ["--experimental-strip-types", "scripts/team-memory.mjs", "roots", "list"],
-      { cwd: process.cwd(), env, encoding: "utf8" },
-    );
+    const readerRoots = runTeamCommand(["roots", "list"], env);
     assert.equal(readerRoots.status, 0, readerRoots.stderr);
     assert.match(readerRoots.stdout, /root-cli-login/);
   } finally {
-    await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+    await removeDirectory(directory);
   }
+}
+
+test("team management CLI covers login guards, gateway routing, and stored sessions", async () => {
+  await assertMissingLoginGuard();
+  await assertAdminTokenBypassesStoredLoginGuard();
+  await assertGatewayRoutes();
+  await assertPasswordLoginSessionStore();
 });

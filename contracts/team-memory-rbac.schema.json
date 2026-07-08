@@ -841,6 +841,7 @@
         "sourceKind": {
           "enum": [
             "memory_entity",
+            "memory_entity_branch",
             "resource",
             "resource_chunk"
           ]
@@ -852,6 +853,7 @@
         "targetKind": {
           "enum": [
             "memory_entity",
+            "memory_entity_branch",
             "resource",
             "resource_chunk"
           ]

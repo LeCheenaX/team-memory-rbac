@@ -256,6 +256,7 @@ export interface InjectedMemoryContext {
     source: "history" | "resource" | "relation";
     score: number;
   }>;
+  extra?: Record<string, unknown>;
 }
 
 export interface HostCaptureInput {
@@ -269,6 +270,14 @@ export interface HostCaptureInput {
   toolEvents?: HostToolEvent[];
   errorSummary?: string;
 }
+
+export interface MemoryCaptureResult {
+  status: "captured";
+  entityId: string;
+  branchId: string;
+  commitIds: string[];
+  extra?: Record<string, unknown>;
+}
 ```
 
 Recommended HTTP facade:
@@ -281,10 +290,19 @@ logic:
 
 - recall uses `memory.search`, relation lookup, BM25/vector retrieval, resource
   chunk retrieval, and provenance formatting;
-- capture writes structured success or failure path memories through
-  `memory.write`;
-- capture may import the transcript as a resource and call the manual
-  incremental ingestion endpoint when configured;
+- capture writes structured conversation success or failure path memories
+  through `memory.write`;
+- capture uses a stable top-level result shape. Variable entity or
+  entity-branch metadata is nested under `extra`, not returned as ad hoc
+  top-level fields;
+- capture is allowed to summarize conversation history into durable facts, merge
+  semantically compatible branches, or create conflict/supersedes relations. The
+  agent does not pass special `oldClaim`, `newClaim`, `intent`,
+  `includeHistory`, or relationship arguments to request those outcomes;
+- raw files and documents are imported through the Resource/CAS path. After CAS
+  bytes and SQL/History metadata are visible, resource ingestion can run
+  automatically or through an explicit ingestion command. Do not use host
+  conversation capture as the file-import path;
 - sync and conflict behavior remain the existing History and local pending
   overlay model.
 

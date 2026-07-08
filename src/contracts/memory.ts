@@ -70,10 +70,7 @@ export interface MemoryEntityBranch {
   updatedAt: string;
 }
 
-export type RelationEndpointKind =
-  | "memory_entity"
-  | "resource"
-  | "resource_chunk";
+export type RelationEndpointKind = Exclude<MemoryObjectKind, "memory_relation">;
 
 export interface MemoryRelation {
   id: string;

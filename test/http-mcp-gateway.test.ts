@@ -148,6 +148,16 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     if (address === null || typeof address === "string") return;
     const base = `http://127.0.0.1:${address.port}`;
 
+    const toolsResponse = await fetch(`${base}/agent/tools`, {
+      headers: { authorization: `Bearer ${readSession.token}` },
+    });
+    const toolsText = await toolsResponse.text();
+    assert.equal(toolsResponse.status, 200, toolsText);
+    assert.ok(
+      (JSON.parse(toolsText) as { value: Array<{ name: string }> }).value
+        .some((tool) => tool.name === "memory.catalog"),
+    );
+
     assert.equal(
       (
         await post(base, "/memory/write", writeSession.token, {
@@ -233,7 +243,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
 
     const httpSearch = await post(base, "/memory/search", readSession.token, {
       branchRef: "main",
-      query: { kind: "entity", text: "Gateway" },
+      query: { kind: "entity", text: "Gateway", tagsAny: ["guide"] },
     });
     const httpSearchText = await httpSearch.text();
     assert.equal(httpSearch.status, 200, httpSearchText);
@@ -242,6 +252,24 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
         .items.length,
       1,
     );
+    const httpCatalog = await fetch(`${base}/memory/catalog?branchRef=main`, {
+      headers: { authorization: `Bearer ${readSession.token}` },
+    });
+    const httpCatalogText = await httpCatalog.text();
+    assert.equal(httpCatalog.status, 200, httpCatalogText);
+    const catalog = JSON.parse(httpCatalogText) as {
+      value: {
+        entities: Array<{ id: string; currentBranch?: { title: string; tags: string[] } }>;
+        tags: Array<{ tag: string; count: number }>;
+      };
+    };
+    assert.ok(catalog.value.entities.some((entity) =>
+      entity.id === "entity-guide" &&
+      entity.currentBranch?.title === "Gateway Guide"
+    ));
+    assert.deepEqual(catalog.value.tags, [
+      { tag: "guide", count: 1, entityIds: ["entity-guide"] },
+    ]);
     const keywordSearch = await post(base, "/memory/search", readSession.token, {
       branchRef: "main",
       resourceKind: "resource_chunk",
@@ -261,10 +289,17 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       "memory.search",
       {
         branchRef: "main",
-        query: { kind: "entity", text: "Gateway" },
+        query: { kind: "entity", text: "Gateway", tagsAny: ["guide"] },
       },
     ) as { value: { items: unknown[] } };
     assert.equal(mcpSearch.value.items.length, 1);
+    const mcpCatalog = await mcp.callTool(
+      readSession.token,
+      "memory.catalog",
+      { branchRef: "main" },
+    ) as { entities: Array<{ id: string }> } | { value: { entities: Array<{ id: string }> } };
+    const mcpCatalogValue = "value" in mcpCatalog ? mcpCatalog.value : mcpCatalog;
+    assert.ok(mcpCatalogValue.entities.some((entity) => entity.id === "entity-guide"));
     await assert.rejects(
       () =>
         mcp.callTool(readSession.token, "memory.write", {

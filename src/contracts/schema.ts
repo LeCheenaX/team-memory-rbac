@@ -26,6 +26,10 @@ const stringArray = {
   uniqueItems: true,
 } as const;
 
+const relationEndpointKinds = MEMORY_OBJECT_KINDS.filter(
+  (kind) => kind !== "memory_relation",
+);
+
 export const CONTRACT_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: "https://team-memory-rbac.dev/contracts/v1/schema.json",
@@ -411,11 +415,11 @@ export const CONTRACT_SCHEMA = {
         rootEntityId: nonEmptyString,
         sourceId: nonEmptyString,
         sourceKind: {
-          enum: ["memory_entity", "resource", "resource_chunk"],
+          enum: relationEndpointKinds,
         },
         targetId: nonEmptyString,
         targetKind: {
-          enum: ["memory_entity", "resource", "resource_chunk"],
+          enum: relationEndpointKinds,
         },
         relationType: { $ref: "#/$defs/MemoryRelationType" },
         role: nonEmptyString,

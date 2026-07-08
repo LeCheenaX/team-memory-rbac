@@ -81,9 +81,40 @@ authorized recall before each user instruction and record success or failure
 paths after task completion, including enough provenance to recall both the
 successful path and failed attempts on a later similar task.
 
+Conversation capture and resource ingestion are separate flows. Conversation
+history is captured by the host lifecycle seam after a useful turn, success, or
+failure. The host can call the capture interface with stable arguments such as
+content/outcome/session details; Team Memory decides whether that produces a new
+branch, modifies an existing branch, creates conflict/supersedes relations, or
+only stores L1 conversation evidence. Temporary workflow execution state remains
+in the agent/model context and must not be persisted as durable memory unless a
+later capture summarizes it as a durable fact.
+
+Raw user files and documents are not captured through the conversation capture
+tool. The host or agent first imports the file bytes through the Resource/CAS
+path. After the CAS object is durable and SQL/History metadata is visible,
+resource ingestion may run automatically or through an explicit memory command
+to chunk, embed, index, and derive facts/relations from that resource.
+
+Stable agent-facing memory tool results may expose fixed top-level fields, but
+any variable entity or entity-branch metadata must be nested under `extra`.
+Agents should not invent top-level parameters such as `oldClaim`, `newClaim`,
+`intent`, `includeHistory`, `answeredFacts`, or `suppressedFacts`; query/content
+should carry the semantic request and the memory system owns merge, conflict,
+relation, and retrieval expansion decisions.
+
+`MemoryEntity` is the stable identity for a memory object or a collection of
+related atomic facts. It says that the thing exists; the concrete atomic fact
+versions live in `MemoryEntityBranch`. Agent-visible catalog tooling should
+therefore list entity identities separately from their current branch summaries
+and available tags. Follow-up search may narrow by stable filters such as
+`entityIds`, `tagsAny`, and `tagsNone`; root identity continues to come from the
+trusted session rather than from model-supplied payload fields.
+
 ## Resource Ingestion Requirement
 
-Production v1 does not automatically run ingestion after every resource import
-or revision. Instead, HTTP, MCP/agent tools, and CLI must expose an explicit
-incremental ingestion command so an agent can chunk and index a chosen resource
-revision when the host workflow decides the raw resource is ready.
+Production v1 must expose an explicit incremental ingestion command for
+Resource/CAS revisions. Deployments may also run ingestion automatically after a
+resource import or revision becomes CAS-first visible, but automatic ingestion
+must still use the same authorized resource ingestion pipeline and must not be
+implemented as a conversation capture side effect.

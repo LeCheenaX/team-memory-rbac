@@ -150,11 +150,20 @@ class ContractSchemaTest(unittest.TestCase):
                 return {
                     "value": [
                         {"name": "memory.search"},
+                        {"name": "memory.catalog"},
                         {"name": "memory.write"},
                     ]
                 }
             if path == "memory/search":
                 return {"value": {"items": [{"id": "entity-http"}]}}
+            if path == "memory/catalog":
+                return {
+                    "value": {
+                        "rootEntityId": "root-http",
+                        "entities": [{"id": "entity-http"}],
+                        "tags": [{"tag": "guide", "count": 1}],
+                    }
+                }
             raise AssertionError(path)
 
         client = TeamMemoryHttpClient(
@@ -169,6 +178,10 @@ class ContractSchemaTest(unittest.TestCase):
                 "memory.search",
                 {"query": {"kind": "entity", "text": "http"}},
             )["value"]["items"][0]["id"],
+            "entity-http",
+        )
+        self.assertEqual(
+            client.call_tool("memory.catalog", {})["entities"][0]["id"],
             "entity-http",
         )
         self.assertEqual(calls[0], ("GET", "identity", None))
@@ -202,6 +215,16 @@ class ContractSchemaTest(unittest.TestCase):
                         "commitIds": ["commit-1"],
                     }
                 }
+            if path == "memory/search":
+                return {"value": {"items": [{"id": "entity-filtered"}]}}
+            if path == "memory/catalog":
+                return {
+                    "value": {
+                        "rootEntityId": "root-hermes",
+                        "entities": [{"id": "entity-filtered"}],
+                        "tags": [{"tag": "hermes", "count": 1}],
+                    }
+                }
             raise AssertionError(path)
 
         provider = HermesTeamMemoryProvider(
@@ -222,6 +245,17 @@ class ContractSchemaTest(unittest.TestCase):
         self.assertEqual(calls[0][1], "host/hermes/recall")
         self.assertEqual(calls[0][2]["sessionId"], "hermes-user")
 
+        filtered = provider.search(
+            "Hermes memory",
+            user_id="hermes-user",
+            entityIds=["entity-filtered"],
+            tagsAny=["hermes"],
+        )
+        self.assertEqual(filtered["value"]["items"][0]["id"], "entity-filtered")
+        self.assertEqual(calls[1][1], "memory/search")
+        self.assertEqual(calls[1][2]["query"]["entityIds"], ["entity-filtered"])
+        self.assertEqual(calls[1][2]["query"]["tagsAny"], ["hermes"])
+
         captured = provider.add(
             [
                 {"role": "user", "content": "do the work"},
@@ -231,8 +265,11 @@ class ContractSchemaTest(unittest.TestCase):
             outcome="success",
         )
         self.assertEqual(captured["status"], "captured")
-        self.assertEqual(calls[1][1], "host/hermes/capture")
-        self.assertEqual(calls[1][2]["finalAssistantMessage"], "done")
+        self.assertEqual(calls[2][1], "host/hermes/capture")
+        self.assertEqual(calls[2][2]["finalAssistantMessage"], "done")
+
+        catalog = provider.catalog()
+        self.assertEqual(catalog["tags"][0]["tag"], "hermes")
 
     def test_local_client_backs_hermes_without_an_http_server(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
