@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,17 +17,49 @@ import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
 
 const now = "2026-06-30T00:00:00.000Z";
 
-function runTeamCommand(args: string[], env: NodeJS.ProcessEnv) {
-  return spawnSync(
-    process.execPath,
-    ["--experimental-strip-types", "scripts/team-memory.mjs", ...args],
-    {
-      cwd: process.cwd(),
-      env,
-      encoding: "utf8",
-      timeout: 20_000,
-    },
-  );
+interface CommandResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+function runTeamCommand(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<CommandResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      ["--experimental-strip-types", "scripts/team-memory.mjs", ...args],
+      {
+        cwd: process.cwd(),
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`team-memory ${args.join(" ")} timed out after 20000ms`));
+    }, 20_000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on("close", (status) => {
+      clearTimeout(timeout);
+      resolve({ status, stdout, stderr });
+    });
+  });
 }
 
 function envWithoutLogin(): NodeJS.ProcessEnv {
@@ -43,6 +75,11 @@ function envWithoutLogin(): NodeJS.ProcessEnv {
 }
 
 async function removeDirectory(directory: string): Promise<void> {
+  if (process.platform === "win32") {
+    // Fresh libsql/sqlite files can remain locked briefly after CLI subprocesses
+    // exit on Windows; recursive deletion can hang the test process.
+    return;
+  }
   await rm(directory, {
     recursive: true,
     force: true,
@@ -52,7 +89,7 @@ async function removeDirectory(directory: string): Promise<void> {
 }
 
 async function assertMissingLoginGuard(): Promise<void> {
-  const result = runTeamCommand(["roots", "list"], envWithoutLogin());
+  const result = await runTeamCommand(["roots", "list"], envWithoutLogin());
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Team Memory is not logged in/);
@@ -60,7 +97,7 @@ async function assertMissingLoginGuard(): Promise<void> {
 }
 
 async function assertAdminTokenBypassesStoredLoginGuard(): Promise<void> {
-  const result = runTeamCommand("login".split(" "), {
+  const result = await runTeamCommand("login".split(" "), {
     ...envWithoutLogin(),
     ADMIN_TOKEN: "admin-token-from-compose-run",
   });
@@ -239,7 +276,7 @@ async function assertPasswordLoginSessionStore(): Promise<void> {
     QDRANT_URL: config.qdrantUrl,
   };
   try {
-    const login = runTeamCommand(
+    const login = await runTeamCommand(
       ["login", "user-cli-login", "correct horse battery staple"],
       env,
     );
@@ -247,11 +284,11 @@ async function assertPasswordLoginSessionStore(): Promise<void> {
     assert.match(login.stdout, /"status": "logged_in"/);
     assert.doesNotMatch(login.stdout, /sessionToken/);
 
-    const roots = runTeamCommand(["roots", "list"], env);
+    const roots = await runTeamCommand(["roots", "list"], env);
     assert.equal(roots.status, 0, roots.stderr);
     assert.match(roots.stdout, /root-cli-login/);
 
-    const createReader = runTeamCommand(
+    const createReader = await runTeamCommand(
       [
         "members",
         "create",
@@ -265,32 +302,37 @@ async function assertPasswordLoginSessionStore(): Promise<void> {
     assert.equal(createReader.status, 0, createReader.stderr);
     assert.match(createReader.stdout, /user-cli-reader/);
 
-    const logout = runTeamCommand(["logout"], env);
+    const logout = await runTeamCommand(["logout"], env);
     assert.equal(logout.status, 0, logout.stderr);
     assert.match(logout.stdout, /"status": "logged_out"/);
 
-    const afterLogout = runTeamCommand(["roots", "list"], env);
+    const afterLogout = await runTeamCommand(["roots", "list"], env);
     assert.equal(afterLogout.status, 1);
     assert.match(afterLogout.stderr, /Team Memory is not logged in/);
 
-    const readerLogin = runTeamCommand(
+    const readerLogin = await runTeamCommand(
       ["login", "user-cli-reader", "reader password"],
       env,
     );
     assert.equal(readerLogin.status, 0, readerLogin.stderr);
     assert.match(readerLogin.stdout, /user-cli-reader/);
 
-    const readerRoots = runTeamCommand(["roots", "list"], env);
+    const readerRoots = await runTeamCommand(["roots", "list"], env);
     assert.equal(readerRoots.status, 0, readerRoots.stderr);
     assert.match(readerRoots.stdout, /root-cli-login/);
   } finally {
+    await new Promise((resolve) => setTimeout(resolve, 500));
     await removeDirectory(directory);
   }
 }
 
-test("team management CLI covers login guards, gateway routing, and stored sessions", async () => {
+test("team management CLI covers login guards, gateway routing, and stored sessions", async (t) => {
+  t.diagnostic("scenario: missing stored login guard");
   await assertMissingLoginGuard();
+  t.diagnostic("scenario: ADMIN_TOKEN override reaches runtime config validation");
   await assertAdminTokenBypassesStoredLoginGuard();
+  t.diagnostic("scenario: in-process gateway routes management commands");
   await assertGatewayRoutes();
+  t.diagnostic("scenario: password login writes and switches stored sessions");
   await assertPasswordLoginSessionStore();
 });
