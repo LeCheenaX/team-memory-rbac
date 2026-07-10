@@ -58,6 +58,16 @@ export interface RuntimeConfigDocument {
     name?: string;
     dimensions?: number;
   };
+  activation?: {
+    status: "active";
+    embedding: {
+      provider: EmbeddingProviderKind;
+      url: string;
+      model?: string;
+      name?: string;
+    };
+    validatedAt: string;
+  };
 }
 
 export interface RuntimeConfig {
@@ -71,6 +81,10 @@ export interface RuntimeConfig {
   qdrantApiKey?: string;
   embeddings: EmbeddingProvider;
   embeddingProviderUrl: string;
+  embeddingProviderKind: EmbeddingProviderKind;
+  embeddingProviderModel?: string;
+  embeddingProviderName?: string;
+  activation?: RuntimeConfigDocument["activation"];
 }
 
 export async function loadRuntimeConfigFile(path: string): Promise<RuntimeConfig> {
@@ -93,6 +107,10 @@ export function loadRuntimeConfig(document: RuntimeConfigDocument): RuntimeConfi
     ...(optionalString(document.qdrant?.apiKey) === undefined ? {} : { qdrantApiKey: document.qdrant.apiKey }),
     embeddings,
     embeddingProviderUrl: requiredString(document.embedding?.url, "embedding.url"),
+    embeddingProviderKind: document.embedding.provider,
+    ...(optionalString(document.embedding.model) === undefined ? {} : { embeddingProviderModel: document.embedding.model }),
+    ...(optionalString(document.embedding.name) === undefined ? {} : { embeddingProviderName: document.embedding.name }),
+    ...(document.activation === undefined ? {} : { activation: document.activation }),
   };
 }
 
@@ -129,8 +147,8 @@ function embeddingsFromDocument(
   const provider = requiredString(embedding.provider, "embedding.provider");
   const url = requiredString(embedding.url, "embedding.url");
   if (provider === "deterministic") {
-    if (runtimeMode === "Production") {
-      throw new Error("deterministic embeddings are not allowed in Production");
+    if (runtimeMode !== "unitTest") {
+      throw new Error("deterministic embeddings are only allowed in unitTest");
     }
     return new DeterministicEmbeddingProvider(embedding.dimensions);
   }
@@ -179,15 +197,31 @@ function configuredEmbeddings(config: RuntimeConfig): EmbeddingProvider {
   return config.embeddings;
 }
 
-function assertProductionEmbeddings(
+function assertRuntimeEmbeddings(
   config: RuntimeConfig,
   embeddings: EmbeddingProvider,
 ): void {
   if (
-    runtimeMode(config) === "Production" &&
+    runtimeMode(config) !== "unitTest" &&
     embeddings.productionSafe !== true
   ) {
-    throw new Error("production embedding provider must be configured");
+    throw new Error("Dev and Production require a real embedding provider");
+  }
+}
+
+function assertMemoryActivated(config: RuntimeConfig): void {
+  if (runtimeMode(config) === "unitTest") return;
+  const activation = config.activation;
+  if (activation?.status !== "active") {
+    throw new Error("memory module is not active. Run `team-memory setup --config <path>` and complete embedding validation first.");
+  }
+  if (
+    activation.embedding.provider !== config.embeddingProviderKind ||
+    activation.embedding.url !== config.embeddingProviderUrl ||
+    activation.embedding.model !== config.embeddingProviderModel ||
+    activation.embedding.name !== config.embeddingProviderName
+  ) {
+    throw new Error("memory module setup is stale. Re-run `team-memory setup --config <path>` after changing embedding configuration.");
   }
 }
 
@@ -231,7 +265,9 @@ export class TeamMemoryRuntime {
 
   static async create(config: RuntimeConfig): Promise<TeamMemoryRuntime> {
     const embeddings = configuredEmbeddings(config);
-    assertProductionEmbeddings(config, embeddings);
+    assertRuntimeEmbeddings(config, embeddings);
+    assertMemoryActivated(config);
+    await embeddings.ready?.();
     await readyLibsqlFileDirectory(config.libsqlUrl);
     const client = createLibsqlClient({ url: config.libsqlUrl, ...(config.libsqlAuthToken === undefined ? {} : { authToken: config.libsqlAuthToken }) });
     const rbac = await LibsqlRbacAuthority.create(client);
@@ -259,7 +295,8 @@ export class TeamMemoryRuntime {
   }
 
   async ready(): Promise<void> {
-    assertProductionEmbeddings(this.config, this.embeddings);
+    assertRuntimeEmbeddings(this.config, this.embeddings);
+    assertMemoryActivated(this.config);
     await this.client.execute("select 1");
     await readyCas(this.cas);
     await this.embeddings.ready?.();

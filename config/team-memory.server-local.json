@@ -11,7 +11,8 @@
     "url": "http://127.0.0.1:6333"
   },
   "embedding": {
-    "provider": "deterministic",
-    "url": "deterministic://server-local"
+    "provider": "http",
+    "url": "http://127.0.0.1:11434/api/embeddings",
+    "model": "nomic-embed-text"
   }
 }

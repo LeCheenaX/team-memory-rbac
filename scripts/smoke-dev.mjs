@@ -2,7 +2,7 @@ import { loadRuntimeConfig } from "../src/adapters/runtime/development-stack.ts"
 import { requiredCiChecks } from "../src/adapters/runtime/operations.ts";
 
 const config = loadRuntimeConfig({
-  runtimeMode: "Dev",
+  runtimeMode: "unitTest",
   libsql: { url: "file:smoke.db" },
   cas: { backend: "filesystem", directory: ".scratch/smoke-cas" },
   qdrant: { url: "http://127.0.0.1:6333" },

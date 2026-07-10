@@ -60,9 +60,16 @@ The plugin chooses only the connector path from container environment:
 
 Do not configure the memory runtime with environment variables. Runtime mode,
 libSQL, CAS, Qdrant, and embedding provider settings must live in a Team Memory
-config JSON file. The local Hermes test uses `runtimeMode: "Dev"` with an
-explicit deterministic embedding provider URL in
-`config/team-memory.hermes-local.json`.
+config JSON file. `unitTest` is the only mode that may use deterministic fake
+embeddings. `Dev` and `Production` must use a real HTTP embedding provider.
+
+Before any `Dev` or `Production` runtime can bootstrap, login, serve requests,
+or answer Hermes memory calls, run `team-memory setup --config <config-path>`.
+The setup flow must prompt the operator for runtime mode, embedding provider,
+embedding URL, libSQL, CAS, Qdrant, and optional settings. Team Memory validates
+the configured embedding model during setup and writes an `activation` record
+only after validation succeeds. A config file without a current activation
+record is intentionally inactive.
 
 If Hermes cannot show that this provider is active, stop the test and fix the
 Hermes configuration first.
@@ -100,6 +107,23 @@ docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local chec
 
 The `check` command exits after validating the Hermes binary and Team Memory
 adapter import. It is not the interactive Hermes session.
+
+Start or choose a real HTTP embedding service that the container can reach.
+The checked-in local Hermes template points to Ollama-style embeddings on the
+host:
+
+```text
+http://host.docker.internal:11434/api/embeddings
+```
+
+Run Team Memory setup inside the Hermes container before bootstrap. Answer the
+prompts with `Dev`, provider `http`, the reachable embedding URL and model, and
+the local libSQL/CAS/Qdrant values for this test. Setup validates the embedding
+model and activates the memory module only after validation passes.
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config config/team-memory.hermes-local.json setup
+```
 
 Choose a local root admin password for this test run. Keep it for the duration
 of the manual test. Team Memory stores the active session under
@@ -367,7 +391,23 @@ Test 2 proves the shared-server model:
 Start the production-like server stack:
 
 ```powershell
-docker compose up --build -d libsql qdrant object-store service
+docker compose up --build -d libsql qdrant object-store
+```
+
+Start or choose a real HTTP embedding service reachable from the server
+runtime. Then run setup for the server-local config before starting the service:
+
+```powershell
+npm.cmd run team -- --config config/team-memory.server-local.json setup
+```
+
+Answer the setup prompts with `Dev` or `Production`, provider `http`, the
+reachable embedding URL/model, and the server libSQL/CAS/Qdrant values. The
+service remains intentionally unusable until setup validates the embedding
+model and writes activation. After setup passes, start the Team Memory service:
+
+```powershell
+docker compose up --build -d service
 ```
 
 Bootstrap the server root through the server-side runtime:

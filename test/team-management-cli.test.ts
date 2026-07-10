@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage } from "node:http";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,6 +12,7 @@ import {
 } from "../src/adapters/cli/team-management.ts";
 import {
   bootstrapDevelopment,
+  loadRuntimeConfig,
   TeamMemoryRuntime,
 } from "../src/adapters/runtime/development-stack.ts";
 import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
@@ -92,6 +94,33 @@ async function removeDirectory(directory: string): Promise<void> {
     maxRetries: 20,
     retryDelay: 250,
   });
+}
+
+async function readRequest(request: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+async function embeddingFixture(): Promise<{
+  url: string;
+  requests: unknown[];
+  close(): Promise<void>;
+}> {
+  const requests: unknown[] = [];
+  const server = createServer(async (request, response) => {
+    requests.push(JSON.parse((await readRequest(request)).toString()));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ embedding: [1, 0, 0] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address !== null && typeof address !== "string");
+  return {
+    url: `http://127.0.0.1:${address.port}/embed`,
+    requests,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
 }
 
 async function assertMissingLoginGuard(): Promise<void> {
@@ -365,6 +394,59 @@ async function assertPasswordLoginSessionStore(): Promise<void> {
   }
 }
 
+async function assertSetupActivatesMemoryModule(): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), "team-memory-rbac-setup-"));
+  const embeddings = await embeddingFixture();
+  const configPath = join(directory, "team-memory.config.json");
+  const inactiveDocument: Parameters<typeof loadRuntimeConfig>[0] = {
+    runtimeMode: "Dev",
+    libsql: { url: `file:${join(directory, "setup.db")}` },
+    cas: { backend: "filesystem", directory: join(directory, "cas") },
+    qdrant: { url: "http://127.0.0.1:6333" },
+    embedding: { provider: "http", url: embeddings.url, model: "test-embed" },
+  };
+  await assert.rejects(
+    () => TeamMemoryRuntime.create(loadRuntimeConfig(inactiveDocument)),
+    /memory module is not active/,
+  );
+
+  const setupInput = [
+    "Dev",
+    "http",
+    embeddings.url,
+    "test-embed",
+    "test-provider",
+    "",
+    `file:${join(directory, "setup.db")}`,
+    "filesystem",
+    join(directory, "cas"),
+    "http://127.0.0.1:6333",
+    "",
+  ].join("\n");
+  try {
+    const setup = await runTeamCommand(["--config", configPath, "setup"], envWithoutLogin(), `${setupInput}\n`);
+    assert.equal(setup.status, 0, setup.stderr);
+    assert.match(setup.stdout, /Validating embedding model/);
+    assert.match(setup.stdout, /Memory module activated/);
+    assert.equal(embeddings.requests.length, 1);
+    const activated = JSON.parse(await readFile(configPath, "utf8")) as Parameters<typeof loadRuntimeConfig>[0];
+    assert.equal(activated.activation?.status, "active");
+    assert.deepEqual(activated.activation?.embedding, {
+      provider: "http",
+      url: embeddings.url,
+      model: "test-embed",
+      name: "test-provider",
+    });
+
+    const runtime = await TeamMemoryRuntime.create(loadRuntimeConfig(activated));
+    runtime.close();
+    assert.equal(embeddings.requests.length, 2);
+  } finally {
+    await embeddings.close();
+    await removeDirectory(directory);
+  }
+}
+
 test("team management CLI covers login guards, gateway routing, and stored sessions", async (t) => {
   t.diagnostic("scenario: missing stored login guard");
   await assertMissingLoginGuard();
@@ -374,4 +456,6 @@ test("team management CLI covers login guards, gateway routing, and stored sessi
   await assertGatewayRoutes();
   t.diagnostic("scenario: password login writes and switches stored sessions");
   await assertPasswordLoginSessionStore();
+  t.diagnostic("scenario: setup validates embedding and activates memory module");
+  await assertSetupActivatesMemoryModule();
 });

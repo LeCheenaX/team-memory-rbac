@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
@@ -15,11 +17,116 @@ if (!process.execArgv.includes("--experimental-strip-types")) {
 
 const { TeamManagementCli, parseTeamManagementCommand } = await import("../src/adapters/cli/team-management.ts");
 const { TeamMemoryGateway } = await import("../src/adapters/runtime/gateway.ts");
-const { loadRuntimeConfigFile, TeamMemoryRuntime } = await import("../src/adapters/runtime/development-stack.ts");
+const { loadRuntimeConfig, loadRuntimeConfigFile, TeamMemoryRuntime } = await import("../src/adapters/runtime/development-stack.ts");
 const { clearStoredSession, readStoredSession, writeStoredSession } = await import("../src/adapters/local/session-store.ts");
 const { parseRuntimeConfigArgs, resolveConfigPath } = await import("./runtime-config-args.mjs");
 
 const parsedArgs = parseRuntimeConfigArgs(process.argv.slice(2), import.meta.url);
+let promptInterface;
+let pipedPromptLines;
+async function promptLine(message, defaultValue = "") {
+  const suffix = defaultValue.length === 0 ? "" : ` [${defaultValue}]`;
+  if (!process.stdin.isTTY) {
+    process.stdout.write(`${message}${suffix}: `);
+    pipedPromptLines ??= readFileSync(0, "utf8").split(/\r?\n/);
+    const value = pipedPromptLines.shift() ?? "";
+    return value.length === 0 ? defaultValue : value;
+  }
+  promptInterface ??= createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  const value = await promptInterface.question(`${message}${suffix}: `);
+  return value.length === 0 ? defaultValue : value;
+}
+
+async function readConfigDocument(path) {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return {};
+    throw error;
+  }
+}
+
+function withoutEmpty(value) {
+  return value.length === 0 ? undefined : value;
+}
+
+async function setupMemory(configPath) {
+  const existing = await readConfigDocument(configPath);
+  console.log("Team Memory setup: configure the memory runtime before it can be used.");
+  console.log("Dev and Production require a real HTTP embedding provider. unitTest may use deterministic fake embeddings.");
+
+  const runtimeMode = await promptLine("运行模式 runtimeMode (unitTest/Dev/Production)", existing.runtimeMode ?? "Dev");
+  const providerDefault = runtimeMode === "unitTest" ? "deterministic" : "http";
+  const embeddingProvider = await promptLine("embedding provider", existing.embedding?.provider ?? providerDefault);
+  const embeddingUrl = await promptLine("embedding URL", existing.embedding?.url ?? "");
+  const embeddingModel = await promptLine("embedding model (optional)", existing.embedding?.model ?? "");
+  const embeddingName = await promptLine("embedding name (optional)", existing.embedding?.name ?? "");
+  const embeddingApiKey = await promptLine("embedding API key (optional)", existing.embedding?.apiKey ?? "");
+  const libsqlUrl = await promptLine("libSQL URL", existing.libsql?.url ?? "file:.data/local/team-memory.db");
+  const casBackend = await promptLine("CAS backend (filesystem/object_store)", existing.cas?.backend ?? "filesystem");
+  const casDirectory = casBackend === "filesystem"
+    ? await promptLine("CAS directory", existing.cas?.directory ?? ".data/local/cas")
+    : "";
+  const objectStoreUrl = casBackend === "object_store"
+    ? await promptLine("object store URL", existing.cas?.objectStoreUrl ?? "")
+    : "";
+  const qdrantUrl = await promptLine("Qdrant URL", existing.qdrant?.url ?? "http://127.0.0.1:6333");
+  const qdrantApiKey = await promptLine("Qdrant API key (optional)", existing.qdrant?.apiKey ?? "");
+
+  const candidate = {
+    runtimeMode,
+    libsql: {
+      url: libsqlUrl,
+      ...(existing.libsql?.authToken === undefined ? {} : { authToken: existing.libsql.authToken }),
+    },
+    cas: {
+      backend: casBackend,
+      ...(casBackend === "filesystem" ? { directory: casDirectory } : { objectStoreUrl }),
+    },
+    qdrant: {
+      url: qdrantUrl,
+      ...(withoutEmpty(qdrantApiKey) === undefined ? {} : { apiKey: qdrantApiKey }),
+    },
+    embedding: {
+      provider: embeddingProvider,
+      url: embeddingUrl,
+      ...(withoutEmpty(embeddingApiKey) === undefined ? {} : { apiKey: embeddingApiKey }),
+      ...(withoutEmpty(embeddingModel) === undefined ? {} : { model: embeddingModel }),
+      ...(withoutEmpty(embeddingName) === undefined ? {} : { name: embeddingName }),
+    },
+  };
+
+  const runtimeConfig = loadRuntimeConfig(candidate);
+  console.log("Validating embedding model...");
+  await runtimeConfig.embeddings.ready?.();
+  const activated = {
+    ...candidate,
+    activation: {
+      status: "active",
+      embedding: {
+        provider: runtimeConfig.embeddingProviderKind,
+        url: runtimeConfig.embeddingProviderUrl,
+        ...(runtimeConfig.embeddingProviderModel === undefined ? {} : { model: runtimeConfig.embeddingProviderModel }),
+        ...(runtimeConfig.embeddingProviderName === undefined ? {} : { name: runtimeConfig.embeddingProviderName }),
+      },
+      validatedAt: new Date().toISOString(),
+    },
+  };
+  await mkdir(dirname(configPath), { recursive: true });
+  await writeFile(configPath, `${JSON.stringify(activated, null, 2)}\n`);
+  promptInterface?.close();
+  console.log("Embedding model validation passed.");
+  console.log("Memory module activated.");
+}
+
+if (parsedArgs.args[0] === "setup") {
+  await setupMemory(parsedArgs.configPath);
+  process.exit(0);
+}
+
 const command = parseTeamManagementCommand(parsedArgs.args);
 
 function nonEmptyEnv(name) {
@@ -50,21 +157,6 @@ const runtime = await TeamMemoryRuntime.create(await loadRuntimeConfigFile(resol
 try {
   const gateway = new TeamMemoryGateway(runtime);
 
-  let promptInterface;
-  let pipedPromptLines;
-  async function promptLine(message) {
-    if (!process.stdin.isTTY) {
-      process.stdout.write(message);
-      pipedPromptLines ??= readFileSync(0, "utf8").split(/\r?\n/);
-      return pipedPromptLines.shift() ?? "";
-    }
-    promptInterface ??= createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    return promptInterface.question(message);
-  }
-
   async function loginWithPassword(userId, password) {
     const rootEntityId = nonEmptyEnv("TEAM_MEMORY_ROOT_ENTITY_ID") ?? nonEmptyEnv("BOOTSTRAP_ROOT_ENTITY_ID");
     const expiresAt = nonEmptyEnv("TEAM_MEMORY_SESSION_EXPIRES_AT") ?? nonEmptyEnv("BOOTSTRAP_SESSION_EXPIRES_AT");
@@ -82,12 +174,12 @@ try {
   }
 
   if (isPasswordLogin || isInteractiveLogin) {
-    const userId = isPasswordLogin ? command[1] : await promptLine("请输入用户名: ");
+    const userId = isPasswordLogin ? command[1] : await promptLine("请输入用户名");
     if (isInteractiveLogin && (await runtime.rbac.getUser(userId)) === undefined) {
       console.error("该用户不存在");
       process.exit(1);
     }
-    const password = isPasswordLogin ? command[2] : await promptLine("请输入密码: ");
+    const password = isPasswordLogin ? command[2] : await promptLine("请输入密码");
     let session;
     try {
       session = await loginWithPassword(userId, password);

@@ -52,6 +52,7 @@ local Team Memory state is in the `hermes-local-workspace` volume mounted at
 ```powershell
 docker compose up -d qdrant
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local check
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config config/team-memory.hermes-local.json setup
 $env:BOOTSTRAP_USER_PASSWORD = "<test local admin password>"
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin -- --config config/team-memory.hermes-local.json
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config config/team-memory.hermes-local.json login
@@ -77,7 +78,12 @@ PYTHONPATH=/opt/team-memory-rbac
 
 The memory runtime itself is configured by
 `config/team-memory.hermes-local.json`. That file declares `runtimeMode`,
-libSQL, CAS, Qdrant, and an explicit embedding provider URL.
+libSQL, CAS, Qdrant, and an explicit embedding provider URL. `unitTest` is the
+only mode that may use deterministic fake embeddings. `Dev` and `Production`
+must use a real HTTP embedding provider. Run `team -- --config
+config/team-memory.hermes-local.json setup` before bootstrap or login; setup
+prompts for the runtime and embedding settings, validates the embedding model,
+and writes activation only after validation passes.
 
 The bootstrap command writes the active Team Memory session to
 `/root/.hermes/team-memory-session.json`, which persists in the
@@ -109,8 +115,14 @@ docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local herm
 First start the Team Memory server stack:
 
 ```powershell
-docker compose up --build -d libsql qdrant object-store service
+docker compose up --build -d libsql qdrant object-store
+npm.cmd run team -- --config config/team-memory.server-local.json setup
+docker compose up --build -d service
 ```
+
+The server runtime is inactive until setup validates the configured real HTTP
+embedding model and writes activation. Do not configure libSQL, CAS, Qdrant, or
+embedding settings with environment variables.
 
 Create two agent session tokens with the manual bootstrap/onboarding flow, then
 export them:

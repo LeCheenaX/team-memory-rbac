@@ -26,6 +26,7 @@ export function unitTestRuntimeConfig(input: {
     qdrantUrl: input.qdrantUrl ?? "http://127.0.0.1:6333",
     embeddings: unitTestEmbeddingProvider(),
     embeddingProviderUrl: "deterministic://unit-test",
+    embeddingProviderKind: "deterministic",
   };
 }
 

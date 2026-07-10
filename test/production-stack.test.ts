@@ -213,21 +213,21 @@ test("production v1 architecture and CAS deployment modes are documented", async
   assert.match(notes, /not an AP multi-master design/);
 
   assert.equal(loadRuntimeConfig({
-    runtimeMode: "Dev",
+    runtimeMode: "unitTest",
     libsql: { url: "file:prod.db" },
     cas: { backend: "filesystem", directory: "/var/cas" },
     qdrant: { url: "http://qdrant" },
     embedding: { provider: "deterministic", url: "deterministic://test" },
   }).casBackend, "filesystem");
   assert.equal(loadRuntimeConfig({
-    runtimeMode: "Dev",
+    runtimeMode: "unitTest",
     libsql: { url: "file:prod.db" },
     cas: { backend: "object_store", objectStoreUrl: "http://objects" },
     qdrant: { url: "http://qdrant" },
     embedding: { provider: "deterministic", url: "deterministic://test" },
   }).casBackend, "object_store");
   assert.throws(() => loadRuntimeConfig({
-    runtimeMode: "Dev",
+    runtimeMode: "unitTest",
     libsql: { url: "file:prod.db" },
     cas: { backend: "" as "filesystem" },
     qdrant: { url: "http://qdrant" },

@@ -35,7 +35,18 @@ test("production runtime rejects deterministic or missing embedding providers", 
         qdrant: { url: "http://qdrant" },
         embedding: { provider: "deterministic", url: "deterministic://prod" },
       }),
-    /deterministic embeddings are not allowed in Production/,
+    /deterministic embeddings are only allowed in unitTest/,
+  );
+  assert.throws(
+    () =>
+      loadRuntimeConfig({
+        runtimeMode: "Dev",
+        libsql: { url: "file:dev.db" },
+        cas: { backend: "filesystem", directory: "/var/cas" },
+        qdrant: { url: "http://qdrant" },
+        embedding: { provider: "deterministic", url: "deterministic://dev" },
+      }),
+    /deterministic embeddings are only allowed in unitTest/,
   );
   assert.throws(
     () =>
@@ -58,8 +69,26 @@ test("production runtime rejects deterministic or missing embedding providers", 
         qdrantUrl: "http://qdrant",
         embeddings: undefined as never,
         embeddingProviderUrl: "http://embed",
+        embeddingProviderKind: "http",
       }),
     /embedding provider must be configured/,
+  );
+  await assert.rejects(
+    () =>
+      TeamMemoryRuntime.create({
+        runtimeMode: "Production",
+        libsqlUrl: "file:prod-inactive.db",
+        casBackend: "filesystem",
+        casDirectory: "/var/cas",
+        qdrantUrl: "http://qdrant",
+        embeddings: {
+          productionSafe: true,
+          embed: async () => [1],
+        },
+        embeddingProviderUrl: "http://embedding.example/v1",
+        embeddingProviderKind: "http",
+      }),
+    /memory module is not active/,
   );
 });
 
@@ -78,6 +107,15 @@ test("production runtime starts with a configured provider seam", async () => {
     qdrantUrl: "http://127.0.0.1:6333",
     embeddings,
     embeddingProviderUrl: "http://embedding.example/v1",
+    embeddingProviderKind: "http",
+    activation: {
+      status: "active",
+      embedding: {
+        provider: "http",
+        url: "http://embedding.example/v1",
+      },
+      validatedAt: "2026-07-10T00:00:00.000Z",
+    },
   });
   try {
     assert.ok(runtime);

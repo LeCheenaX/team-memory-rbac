@@ -11,7 +11,8 @@
     "url": "http://qdrant:6333"
   },
   "embedding": {
-    "provider": "deterministic",
-    "url": "deterministic://hermes-local"
+    "provider": "http",
+    "url": "http://host.docker.internal:11434/api/embeddings",
+    "model": "nomic-embed-text"
   }
 }

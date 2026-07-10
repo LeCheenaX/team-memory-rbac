@@ -10,7 +10,8 @@ test("Hermes local compose setup and manual flow do not require server client to
     await readFile("config/team-memory.hermes-local.json", "utf8"),
   ) as {
     runtimeMode: string;
-    embedding: { provider: string; url: string };
+    embedding: { provider: string; url: string; model?: string };
+    activation?: unknown;
   };
 
   assert.doesNotMatch(
@@ -33,8 +34,24 @@ test("Hermes local compose setup and manual flow do not require server client to
   assert.doesNotMatch(baseCompose, /QDRANT_URL:/);
   assert.doesNotMatch(baseCompose, /EMBEDDING_PROVIDER:/);
   assert.equal(hermesConfig.runtimeMode, "Dev");
-  assert.equal(hermesConfig.embedding.provider, "deterministic");
-  assert.match(hermesConfig.embedding.url, /^deterministic:\/\//);
+  assert.equal(hermesConfig.embedding.provider, "http");
+  assert.match(hermesConfig.embedding.url, /^http:\/\//);
+  assert.equal(typeof hermesConfig.embedding.model, "string");
+  assert.equal(hermesConfig.activation, undefined);
+  assert.match(manualFlow, /Dev` and `Production` must use a real HTTP embedding provider/);
+  assert.match(manualFlow, /team-memory setup --config <config-path>/);
+  assert.match(manualFlow, /validates\s+the configured embedding model/);
+  assert.match(manualFlow, /writes an `activation` record/);
+  assert.match(manualFlow, /intentionally inactive/);
+  assert.match(
+    manualFlow,
+    /run team -- --config config\/team-memory\.hermes-local\.json setup/,
+  );
+  assert.match(
+    manualFlow,
+    /npm\.cmd run team -- --config config\/team-memory\.server-local\.json setup/,
+  );
+  assert.doesNotMatch(manualFlow, /deterministic embedding provider URL/);
   assert.match(
     manualFlow,
     /Test 1 setup runs before `HERMES_A_TOKEN` and `HERMES_B_TOKEN` exist/,

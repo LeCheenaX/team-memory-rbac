@@ -5,13 +5,20 @@
 Configure the Team Memory runtime with a JSON config file, not environment
 variables. The file must include `runtimeMode` (`unitTest`, `Dev`, or
 `Production`), libSQL, CAS, Qdrant, and an explicit embedding provider with a
-URL. Use `cas.backend=filesystem` with `cas.directory` only for a single service
+URL. `unitTest` may use deterministic fake embeddings; `Dev` and `Production`
+must use a real HTTP embedding provider. Before starting a `Dev` or
+`Production` runtime, run `npm run team -- --config <config-path> setup` and
+complete the prompts. Setup validates the configured embedding model and writes
+activation only after validation passes. Configs without a current activation
+record are intentionally inactive.
+
+Use `cas.backend=filesystem` with `cas.directory` only for a single service
 worker or workers sharing the same durable volume. Use `cas.backend=object_store`
 with `cas.objectStoreUrl` when multiple service workers may read the same Cloud
-Authority state without a shared filesystem. Start the service with
-`npm run dev:server -- --config <config-path>` or the container entry point.
-Secrets such as session tokens may still come from the host environment; memory
-runtime settings must not.
+Authority state without a shared filesystem. After setup activation, start the
+service with `npm run dev:server -- --config <config-path>` or the container
+entry point. Secrets such as session tokens may still come from the host
+environment; memory runtime settings must not.
 
 Production v1 is one logical Cloud Authority: one authoritative SQL/History source, one authoritative CAS namespace, one authoritative RBAC source, and replaceable Qdrant/BM25/relation projections. Service workers are request handlers, not authorities. Do not run AP multi-master cloud authority replicas in v1.
 
