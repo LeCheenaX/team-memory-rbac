@@ -188,6 +188,7 @@ export interface HistoryWriteCommand extends PermissionRequest {
     message?: string;
   };
   operation: MemoryOperationInput;
+  operations?: MemoryOperationInput[];
   provenance?: MemoryOperation["provenance"];
 }
 

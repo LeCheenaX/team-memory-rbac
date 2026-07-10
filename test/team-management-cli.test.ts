@@ -221,7 +221,7 @@ async function assertGatewayRoutes(): Promise<void> {
       parseTeamManagementCommand(["resources", "ingest", "resource-cli"]),
     ) as { chunks: unknown[]; rebuiltOnly: boolean };
     assert.equal(ingestion.chunks.length, 1);
-    assert.equal(ingestion.rebuiltOnly, false);
+    assert.equal(ingestion.rebuiltOnly, true);
     assert.equal(
       ((await cli.run(session.token, ["health"])) as { live: boolean }).live,
       true,

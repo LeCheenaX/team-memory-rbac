@@ -32,7 +32,10 @@ async function setup() {
     sessionExpiresAt: "2030-01-01T00:00:00.000Z",
     now,
   });
-  const gateway = new TeamMemoryGateway(runtime, { retrieval: "active-view" });
+  const gateway = new TeamMemoryGateway(runtime, {
+    retrieval: "active-view",
+    projectWrites: false,
+  });
   const server = createTeamMemoryServer(gateway);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -92,43 +95,15 @@ async function onboard(baseUrl: string, token: string): Promise<string> {
 
 async function writeNote(client: TeamMemoryHttpClient, suffix: string): Promise<void> {
   await client.write({
-    clientMutationId: `prod-write-entity-${suffix}`,
-    action: "write_entity",
-    resourceKind: "memory_entity",
-    commit: { id: `commit-prod-entity-${suffix}` },
-    operation: {
-      kind: "create_entity",
-      id: `operation-prod-entity-${suffix}`,
-      entity: {
-        id: `entity-prod-${suffix}`,
-        rootEntityId: "root-prod",
-        currentBranchId: `branch-prod-${suffix}`,
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      },
+    clientMutationId: `prod-write-${suffix}`,
+    target: {
+      kind: "memory_entity",
+      name: `Production ${suffix}`,
     },
-  });
-  await client.write({
-    clientMutationId: `prod-write-branch-${suffix}`,
-    action: "write_entity_branch",
-    resourceKind: "memory_entity_branch",
-    commit: { id: `commit-prod-branch-${suffix}` },
-    operation: {
-      kind: "create_entity_branch",
-      id: `operation-prod-branch-${suffix}`,
-      branch: {
-        id: `branch-prod-${suffix}`,
-        entityId: `entity-prod-${suffix}`,
-        rootEntityId: "root-prod",
-        branchRef: "main",
-        title: `Production ${suffix}`,
-        description: "Direct host memory works",
-        tags: ["production"],
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      },
+    patch: {
+      title: `Production ${suffix}`,
+      description: "Direct host memory works",
+      tags: ["production"],
     },
   });
 }
@@ -163,15 +138,34 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
       token,
       fetch: connectorFetch,
     });
-    const identity = await client.identity() as { agentId: string; rootEntityId: string };
+    const identity = await client.identity() as {
+      agentId: string;
+      rootEntityId: string;
+      provider: {
+        mode: string;
+        trustedRootEntityId: string;
+        visibleTools: string[];
+        tokenAvailable: boolean;
+      };
+    };
     assert.equal(identity.agentId, "agent-prod-openclaw");
     assert.equal(identity.rootEntityId, "root-prod");
-    const tools = await client.listTools() as Array<{ name: string }>;
+    assert.equal(identity.provider.mode, "runtime");
+    assert.equal(identity.provider.trustedRootEntityId, "root-prod");
+    assert.equal(identity.provider.tokenAvailable, true);
+    assert.ok(identity.provider.visibleTools.includes("memory.write"));
+    const tools = await client.listTools() as Array<{
+      name: string;
+      inputSchema: { required?: string[]; additionalProperties?: boolean };
+    }>;
     assert.ok(tools.some((tool) => tool.name === "memory.catalog"));
     assert.ok(tools.some((tool) => tool.name === "memory.search"));
     assert.ok(tools.some((tool) => tool.name === "memory.write"));
     assert.ok(!tools.some((tool) => tool.name === "memory.importResource"));
     assert.ok(!tools.some((tool) => tool.name === "memory.ingestResource"));
+    const writeTool = tools.find((tool) => tool.name === "memory.write");
+    assert.deepEqual(writeTool?.inputSchema.required, ["target", "patch"]);
+    assert.equal(writeTool?.inputSchema.additionalProperties, false);
 
     const openclaw = new OpenClawTeamMemoryPlugin({
       baseUrl: fixture.baseUrl,
@@ -185,42 +179,15 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     );
 
     await openclaw.call("memory_write", {
-      clientMutationId: "openclaw-write-entity",
-      action: "write_entity",
-      resourceKind: "memory_entity",
-      commit: { id: "commit-openclaw-entity" },
-      operation: {
-        kind: "create_entity",
-        id: "operation-openclaw-entity",
-        entity: {
-          id: "entity-openclaw",
-          rootEntityId: "root-prod",
-          currentBranchId: "branch-openclaw",
-          status: "active",
-          createdAt: now,
-          updatedAt: now,
-        },
+      clientMutationId: "openclaw-write",
+      target: {
+        kind: "memory_entity",
+        name: "OpenClaw Production Memory",
       },
-    });
-    await openclaw.call("memory_write", {
-      clientMutationId: "openclaw-write-branch",
-      action: "write_entity_branch",
-      resourceKind: "memory_entity_branch",
-      commit: { id: "commit-openclaw-branch" },
-      operation: {
-        kind: "create_entity_branch",
-        id: "operation-openclaw-branch",
-        branch: {
-          id: "branch-openclaw",
-          entityId: "entity-openclaw",
-          rootEntityId: "root-prod",
-          branchRef: "main",
-          title: "OpenClaw Production Memory",
-          tags: ["openclaw"],
-          status: "active",
-          createdAt: now,
-          updatedAt: now,
-        },
+      patch: {
+        title: "OpenClaw Production Memory",
+        description: "OpenClaw writes through stable capture",
+        tags: ["openclaw"],
       },
     });
     const search = await openclaw.call("memory_search", {
@@ -228,18 +195,15 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     }) as { value: { items: unknown[] } };
     assert.equal(search.value.items.length, 1);
 
-    await openclaw.call("memory_import", {
+    const imported = await openclaw.call("memory_import", {
       clientMutationId: "openclaw-import-resource",
       resourceId: "resource-openclaw",
       title: "OpenClaw resource",
       sourceType: "document",
       content: "OpenClaw can import resources",
-    });
-    const ingested = await openclaw.call("memory_ingest", {
-      clientMutationId: "openclaw-ingest-resource",
-      resourceId: "resource-openclaw",
-    }) as { chunks: unknown[] };
-    assert.equal(ingested.chunks.length, 1);
+    }) as { resource: { id: string }; ingestion: { status: string } };
+    assert.equal(imported.resource.id, "resource-openclaw");
+    assert.ok(["indexed", "retryable_failed"].includes(imported.ingestion.status));
     const resource = await openclaw.call("memory_get", {
       resourceId: "resource-openclaw",
     }) as { resource: { id: string } };

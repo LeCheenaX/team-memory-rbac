@@ -32,7 +32,10 @@ async function setup() {
     sessionExpiresAt: "2030-01-01T00:00:00.000Z",
     now,
   });
-  const gateway = new TeamMemoryGateway(runtime, { retrieval: "active-view" });
+  const gateway = new TeamMemoryGateway(runtime, {
+    retrieval: "active-view",
+    projectWrites: false,
+  });
   const server = createTeamMemoryServer(gateway);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -84,43 +87,15 @@ async function onboard(baseUrl: string, token: string): Promise<string> {
 
 async function writeMemory(client: TeamMemoryHttpClient): Promise<void> {
   await client.write({
-    clientMutationId: "host-lifecycle-entity",
-    action: "write_entity",
-    resourceKind: "memory_entity",
-    commit: { id: "commit-host-lifecycle-entity" },
-    operation: {
-      kind: "create_entity",
-      id: "operation-host-lifecycle-entity",
-      entity: {
-        id: "entity-host-lifecycle",
-        rootEntityId: "root-host",
-        currentBranchId: "branch-host-lifecycle",
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      },
+    clientMutationId: "host-lifecycle-memory",
+    target: {
+      kind: "memory_entity",
+      name: "Hermes rollout checklist",
     },
-  });
-  await client.write({
-    clientMutationId: "host-lifecycle-branch",
-    action: "write_entity_branch",
-    resourceKind: "memory_entity_branch",
-    commit: { id: "commit-host-lifecycle-branch" },
-    operation: {
-      kind: "create_entity_branch",
-      id: "operation-host-lifecycle-branch",
-      branch: {
-        id: "branch-host-lifecycle",
-        entityId: "entity-host-lifecycle",
-        rootEntityId: "root-host",
-        branchRef: "main",
-        title: "Hermes rollout checklist",
-        description: "Always recall the Hermes provider fixture requirements.",
-        tags: ["hermes", "provider"],
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      },
+    patch: {
+      title: "Hermes rollout checklist",
+      description: "Always recall the Hermes provider fixture requirements.",
+      tags: ["hermes", "provider"],
     },
   });
 }
@@ -141,7 +116,7 @@ test("host lifecycle recall injects trusted-boundary context and capture writes 
     }) as { text: string; memoryIds: string[] };
     assert.match(recalled.text, /team-memory-context/);
     assert.match(recalled.text, /Hermes provider fixture requirements/);
-    assert.ok(recalled.memoryIds.includes("branch-host-lifecycle"));
+    assert.ok(recalled.memoryIds.length > 0);
 
     const captured = await client.captureHostMemory("hermes", {
       sessionId: "hermes-session",

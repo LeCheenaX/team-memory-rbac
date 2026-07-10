@@ -24,12 +24,10 @@ function required(name) {
 }
 
 const adminToken = required("ADMIN_TOKEN");
-const rootEntityId = required("BOOTSTRAP_ROOT_ENTITY_ID");
 const agentId = required("LOCAL_HERMES_AGENT_ID");
 const delegationId = required("LOCAL_HERMES_DELEGATION_ID");
 const sessionId = required("LOCAL_HERMES_SESSION_ID");
 const expiresAt = required("LOCAL_HERMES_SESSION_EXPIRES_AT");
-const now = new Date().toISOString();
 
 const runtime = await TeamMemoryRuntime.create(loadRuntimeConfig(process.env));
 try {
@@ -47,46 +45,15 @@ try {
   const tools = await hermes.listTools(token);
 
   await hermes.invokeTool(token, "memory.write", {
-    clientMutationId: "local-hermes-smoke-entity",
-    action: "write_entity",
-    resourceKind: "memory_entity",
-    commit: { id: "commit:local-hermes-smoke-entity" },
-    operation: {
-      kind: "create_entity",
-      id: "operation:local-hermes-smoke-entity",
-      entity: {
-        id: "entity:local-hermes-smoke",
-        rootEntityId,
-        currentBranchId: "branch:local-hermes-smoke",
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      },
+    clientMutationId: "local-hermes-smoke-memory",
+    target: {
+      kind: "memory_entity",
+      name: "Local Hermes RBAC Memory Smoke",
     },
-  });
-
-  await hermes.invokeTool(token, "memory.write", {
-    clientMutationId: "local-hermes-smoke-branch",
-    action: "write_entity_branch",
-    resourceKind: "memory_entity_branch",
-    commit: { id: "commit:local-hermes-smoke-branch" },
-    operation: {
-      kind: "create_entity_branch",
-      id: "operation:local-hermes-smoke-branch",
-      branch: {
-        id: "branch:local-hermes-smoke",
-        entityId: "entity:local-hermes-smoke",
-        rootEntityId,
-        branchRef: "main",
-        title: "Local Hermes RBAC Memory Smoke",
-        description: "Single Hermes adapter can write and recall memory without an HTTP server or sync.",
-        tags: ["local-hermes-smoke"],
-        importance: 1,
-        confidence: 1,
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      },
+    patch: {
+      title: "Local Hermes RBAC Memory Smoke",
+      description: "Single Hermes adapter can write and recall memory without an HTTP server or sync.",
+      tags: ["local-hermes-smoke"],
     },
   });
 

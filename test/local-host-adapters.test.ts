@@ -30,7 +30,10 @@ test("OpenClaw plugin and Claude Code hooks run against a local gateway without 
       sessionExpiresAt: "2030-01-01T00:00:00.000Z",
       now,
     });
-    const gateway = new TeamMemoryGateway(runtime, { retrieval: "active-view" });
+    const gateway = new TeamMemoryGateway(runtime, {
+      retrieval: "active-view",
+      projectWrites: false,
+    });
     const onboarded = await gateway.onboardAgent(admin.token, {
       agentId: "agent-local-hosts",
       delegationId: "delegation-local-hosts",
@@ -49,42 +52,15 @@ test("OpenClaw plugin and Claude Code hooks run against a local gateway without 
       ["memory_search", "memory_catalog", "memory_write"],
     );
     await openclaw.call("memory_write", {
-      clientMutationId: "local-openclaw-entity",
-      action: "write_entity",
-      resourceKind: "memory_entity",
-      commit: { id: "commit-local-openclaw-entity" },
-      operation: {
-        kind: "create_entity",
-        id: "operation-local-openclaw-entity",
-        entity: {
-          id: "entity-local-openclaw",
-          rootEntityId: "root-local-hosts",
-          currentBranchId: "branch-local-openclaw",
-          status: "active",
-          createdAt: now,
-          updatedAt: now,
-        },
+      clientMutationId: "local-openclaw-memory",
+      target: {
+        kind: "memory_entity",
+        name: "Local OpenClaw Offline Memory",
       },
-    });
-    await openclaw.call("memory_write", {
-      clientMutationId: "local-openclaw-branch",
-      action: "write_entity_branch",
-      resourceKind: "memory_entity_branch",
-      commit: { id: "commit-local-openclaw-branch" },
-      operation: {
-        kind: "create_entity_branch",
-        id: "operation-local-openclaw-branch",
-        branch: {
-          id: "branch-local-openclaw",
-          entityId: "entity-local-openclaw",
-          rootEntityId: "root-local-hosts",
-          branchRef: "main",
-          title: "Local OpenClaw Offline Memory",
-          tags: ["local"],
-          status: "active",
-          createdAt: now,
-          updatedAt: now,
-        },
+      patch: {
+        title: "Local OpenClaw Offline Memory",
+        description: "OpenClaw works through the local gateway",
+        tags: ["local"],
       },
     });
     const openclawSearch = await openclaw.call("memory_search", {

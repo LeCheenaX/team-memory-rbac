@@ -43,6 +43,12 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
+function requestOperations(
+  request: MemoryWriteCommand,
+): MemoryOperationInput[] {
+  return request.operations ?? [request.operation];
+}
+
 /** @deprecated Combined History + Memory reference implementation. */
 export class InMemoryMemoryAuthority
   implements MemoryAdapter<MemoryWriteResult, MemoryWriteCommand>
@@ -73,7 +79,9 @@ export class InMemoryMemoryAuthority
     );
     const branch = branchState.branch;
     const previousHeadCommitId = branch.headCommitId;
-    const expandedInputs = this.expandOperation(request.operation);
+    const expandedInputs = requestOperations(request).flatMap((input) =>
+      this.expandOperation(input),
+    );
     const newOperations = expandedInputs.map((input) =>
       this.createOperation(request, input, createdAt),
     );
@@ -324,16 +332,19 @@ export class InMemoryMemoryAuthority
     if (request.branchRef.length === 0) {
       throw new Error("branchRef must be a non-empty string");
     }
-    this.assertOperationMatchesPermission(request);
-    this.assertOperationRoot(request.operation, request.rootEntityId);
+    const operations = requestOperations(request);
+    for (const operation of operations) {
+      this.assertOperationMatchesPermission(request, operation);
+      this.assertOperationRoot(operation, request.rootEntityId);
+    }
     let activeView: MemoryActiveView | undefined;
-    if (
+    if (operations.some((operation) =>
       !(
-        request.operation.kind === "create_entity" &&
-        request.operation.entity.rootEntityId === null
+        operation.kind === "create_entity" &&
+        operation.entity.rootEntityId === null
       ) &&
-      request.operation.kind !== "revert_commit"
-    ) {
+      operation.kind !== "revert_commit"
+    )) {
       activeView = this.readActiveView(
         request.rootEntityId,
         request.branchRef,
@@ -347,45 +358,60 @@ export class InMemoryMemoryAuthority
         throw new Error("active RootEntity not found");
       }
     }
-    this.assertMutationTargetExists(request.operation, activeView);
-    this.assertRevisionIdAvailable(request.operation);
-    if (
-      request.operation.kind === "create_entity_branch" &&
-      request.operation.branch.branchRef !== request.branchRef
-    ) {
-      throw new Error("entity branchRef must match commit branchRef");
-    }
-    if (
-      request.operation.kind === "create_relation" &&
-      request.operation.relation.branchRef !== request.branchRef
-    ) {
-      throw new Error("relation branchRef must match commit branchRef");
-    }
-    if (
-      request.operation.kind === "replace_relation" &&
-      request.operation.replacement.branchRef !== request.branchRef
-    ) {
-      throw new Error("relation branchRef must match commit branchRef");
-    }
-    if (request.operation.kind === "revert_commit") {
-      const input = request.operation;
-      const target = this.commits.find(
-        (commit) =>
-          commit.id === input.targetCommitId &&
-          commit.rootEntityId === request.rootEntityId &&
-          commit.branchRef === request.branchRef,
-      );
-      if (target === undefined) {
-        throw new Error("revert target commit not found");
+    const pendingEntityIds = new Set(
+      operations
+        .filter((operation) => operation.kind === "create_entity")
+        .map((operation) => operation.entity.id),
+    );
+    for (const operation of operations) {
+      this.assertMutationTargetExists(operation, activeView);
+      this.assertRevisionIdAvailable(operation);
+      if (
+        operation.kind === "create_entity_branch" &&
+        operation.branch.branchRef !== request.branchRef
+      ) {
+        throw new Error("entity branchRef must match commit branchRef");
       }
       if (
-        target.operationIds.some(
-          (operationId) =>
-            this.operations.find(({ id }) => id === operationId)?.kind ===
-            "revert_commit",
-        )
+        operation.kind === "create_entity_branch" &&
+        activeView !== undefined &&
+        !activeView.entities.some(({ id }) => id === operation.branch.entityId) &&
+        !pendingEntityIds.has(operation.branch.entityId)
       ) {
-        throw new Error("reverting a revert commit is not supported");
+        throw new Error(`entity not found: ${operation.branch.entityId}`);
+      }
+      if (
+        operation.kind === "create_relation" &&
+        operation.relation.branchRef !== request.branchRef
+      ) {
+        throw new Error("relation branchRef must match commit branchRef");
+      }
+      if (
+        operation.kind === "replace_relation" &&
+        operation.replacement.branchRef !== request.branchRef
+      ) {
+        throw new Error("relation branchRef must match commit branchRef");
+      }
+      if (operation.kind === "revert_commit") {
+        const input = operation;
+        const target = this.commits.find(
+          (commit) =>
+            commit.id === input.targetCommitId &&
+            commit.rootEntityId === request.rootEntityId &&
+            commit.branchRef === request.branchRef,
+        );
+        if (target === undefined) {
+          throw new Error("revert target commit not found");
+        }
+        if (
+          target.operationIds.some(
+            (operationId) =>
+              this.operations.find(({ id }) => id === operationId)?.kind ===
+              "revert_commit",
+          )
+        ) {
+          throw new Error("reverting a revert commit is not supported");
+        }
       }
     }
   }
@@ -465,10 +491,11 @@ export class InMemoryMemoryAuthority
 
   private assertOperationMatchesPermission(
     request: MemoryWriteCommand,
+    operation: MemoryOperationInput,
   ): void {
     if (
-      request.operation.kind === "create_entity" &&
-      request.operation.entity.rootEntityId === null
+      operation.kind === "create_entity" &&
+      operation.entity.rootEntityId === null
     ) {
       if (
         request.action !== "create_root_entity" ||
@@ -481,8 +508,8 @@ export class InMemoryMemoryAuthority
       return;
     }
     if (
-      request.operation.kind === "tombstone_entity" &&
-      request.operation.targetId === request.rootEntityId
+      operation.kind === "tombstone_entity" &&
+      operation.targetId === request.rootEntityId
     ) {
       if (
         request.action !== "delete_root_entity" ||
@@ -492,6 +519,19 @@ export class InMemoryMemoryAuthority
           "tombstone_entity requires delete_root_entity:memory_entity",
         );
       }
+      return;
+    }
+
+    if (
+      request.action === "commit" &&
+      request.resourceKind === "memory_entity" &&
+      (
+        operation.kind === "create_entity" ||
+        operation.kind === "create_entity_branch" ||
+        operation.kind === "create_relation" ||
+        operation.kind === "replace_relation"
+      )
+    ) {
       return;
     }
 
@@ -522,13 +562,13 @@ export class InMemoryMemoryAuthority
       revert_commit: ["revert", "memory_entity"],
       resolve_conflict: ["merge", "memory_entity"],
     } as const;
-    const [action, resourceKind] = expected[request.operation.kind];
+    const [action, resourceKind] = expected[operation.kind];
     if (
       request.action !== action ||
       request.resourceKind !== resourceKind
     ) {
       throw new Error(
-        `${request.operation.kind} requires ${action}:${resourceKind}`,
+        `${operation.kind} requires ${action}:${resourceKind}`,
       );
     }
   }

@@ -53,10 +53,10 @@ const writePermissions: Permission[] = [
   ...readPermissions,
   { action: "write_entity", resourceKind: "memory_entity" },
   { action: "write_entity_branch", resourceKind: "memory_entity_branch" },
+  { action: "commit", resourceKind: "memory_entity" },
 ];
 
-test("runtime agent integrations", async (t) => {
-  await t.test("OpenClaw, Claude Code, Codex, and Hermes use real sessions for read, search, and write", async () => {
+test("runtime adapters use stable tools and enforce live read-only delegation", async () => {
     const { directory, runtime, rootEntityId, userId } = await setupRuntime("write");
     try {
       await runtime.rbac.saveAgent({
@@ -88,7 +88,10 @@ test("runtime agent integrations", async (t) => {
         expiresAt: "2030-01-01T00:00:00.000Z",
         createdAt: now,
       });
-      const gateway = new TeamMemoryGateway(runtime);
+      const gateway = new TeamMemoryGateway(runtime, {
+        retrieval: "active-view",
+        projectWrites: false,
+      });
       const adapters = [
         new OpenClawAgentAdapter(gateway),
         new ClaudeCodeAgentAdapter(gateway),
@@ -104,42 +107,15 @@ test("runtime agent integrations", async (t) => {
         const tools = await adapter.listTools(session.token);
         assert.ok(tools.some((tool) => tool.name === "memory.write"));
         await adapter.invokeTool(session.token, "memory.write", {
-          clientMutationId: `runtime-write-entity-${index}`,
-          action: "write_entity",
-          resourceKind: "memory_entity",
-          commit: { id: `commit-runtime-entity-${index}` },
-          operation: {
-            kind: "create_entity",
-            id: `operation-runtime-entity-${index}`,
-            entity: {
-              id: `entity-runtime-${index}`,
-              rootEntityId,
-              currentBranchId: `branch-runtime-${index}`,
-              status: "active",
-              createdAt: now,
-              updatedAt: now,
-            },
+          clientMutationId: `runtime-write-${index}`,
+          target: {
+            kind: "memory_entity",
+            name: `Runtime Note ${index}`,
           },
-        });
-        await adapter.invokeTool(session.token, "memory.write", {
-          clientMutationId: `runtime-write-branch-${index}`,
-          action: "write_entity_branch",
-          resourceKind: "memory_entity_branch",
-          commit: { id: `commit-runtime-branch-${index}` },
-          operation: {
-            kind: "create_entity_branch",
-            id: `operation-runtime-branch-${index}`,
-            branch: {
-              id: `branch-runtime-${index}`,
-              entityId: `entity-runtime-${index}`,
-              rootEntityId,
-              branchRef: "main",
-              title: `Runtime Note ${index}`,
-              tags: ["runtime"],
-              status: "active",
-              createdAt: now,
-              updatedAt: now,
-            },
+          patch: {
+            title: `Runtime Note ${index}`,
+            description: "Runtime adapters write through stable capture.",
+            tags: ["runtime"],
           },
         });
         const result = await adapter.invokeTool(session.token, "memory.search", {
@@ -148,16 +124,6 @@ test("runtime agent integrations", async (t) => {
         }) as { value: { items: unknown[] } };
         assert.equal(result.value.items.length, 1);
       }
-    } finally {
-      runtime.close();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
-    }
-  });
-
-  await t.test("read-only runtime agents cannot see or bypass write tools, and revoked delegations fail live", async () => {
-    const { directory, runtime, rootEntityId, userId } = await setupRuntime("read");
-    try {
       await runtime.rbac.saveAgent({
         id: "agent-read-runtime",
         ownerUserId: userId,
@@ -177,7 +143,7 @@ test("runtime agent integrations", async (t) => {
         delegatedAt: now,
         status: "active",
       });
-      const session = await runtime.rbac.createSession({
+      const readSession = await runtime.rbac.createSession({
         id: "session-read-runtime",
         userId,
         agentId: "agent-read-runtime",
@@ -187,32 +153,22 @@ test("runtime agent integrations", async (t) => {
         expiresAt: "2030-01-01T00:00:00.000Z",
         createdAt: now,
       });
-      const adapter = new CodexAgentAdapter(new TeamMemoryGateway(runtime));
+      const adapter = new CodexAgentAdapter(new TeamMemoryGateway(runtime, {
+        retrieval: "active-view",
+        projectWrites: false,
+      }));
       assert.equal(
-        (await adapter.listTools(session.token)).some((tool) => tool.name === "memory.write"),
+        (await adapter.listTools(readSession.token)).some((tool) => tool.name === "memory.write"),
         false,
       );
-      const denied = await adapter.invokeTool(session.token, "memory.write", {
-        clientMutationId: "runtime-denied",
-        action: "write_entity",
-        resourceKind: "memory_entity",
-        commit: { id: "commit-runtime-denied" },
-        operation: {
-          kind: "create_entity",
-          id: "operation-runtime-denied",
-          entity: {
-            id: "entity-runtime-denied",
-            rootEntityId,
-            status: "active",
-            createdAt: now,
-            updatedAt: now,
-          },
-        },
+      const denied = await adapter.invokeTool(readSession.token, "memory.write", {
+        target: { kind: "memory_entity", name: "Denied" },
+        patch: { description: "should not write" },
       });
       assert.equal(denied.decision.allowed, false);
       await runtime.rbac.revokeDelegation("delegation-read-runtime", now);
       await assert.rejects(
-        () => adapter.resolvePrincipal(session.token),
+        () => adapter.resolvePrincipal(readSession.token),
         /invalid session/,
       );
     } finally {
@@ -220,5 +176,4 @@ test("runtime agent integrations", async (t) => {
       await new Promise((resolve) => setTimeout(resolve, 500));
       await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
     }
-  });
 });

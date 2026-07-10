@@ -153,6 +153,12 @@ function requestFingerprint<T extends { authorization: unknown }>(
   return JSON.stringify(stableValue(command));
 }
 
+function commandOperations(
+  command: CloudMemoryWriteCommand,
+): MemoryOperationInput[] {
+  return command.operations ?? [command.operation];
+}
+
 function withoutTimestamps<T extends { createdAt?: string; updatedAt?: string }>(
   value: T,
 ): Omit<T, "createdAt" | "updatedAt"> {
@@ -233,6 +239,12 @@ function operationEffect(operation: MemoryOperationInput): string {
       break;
   }
   return JSON.stringify(stableValue(effect));
+}
+
+function operationsEffect(command: CloudMemoryWriteCommand): string {
+  return JSON.stringify(
+    stableValue(commandOperations(command).map(operationEffect)),
+  );
 }
 
 function actorFrom(command: CloudMemoryWriteCommand): MemoryActor {
@@ -341,6 +353,15 @@ function operationForBranch(
   return operation;
 }
 
+function operationsForBranch(
+  operations: MemoryOperationInput[],
+  branchRef: string,
+): MemoryOperationInput[] {
+  return operations.map((operation) =>
+    operationForBranch(operation, branchRef),
+  );
+}
+
 function seedForBranch(
   view: MemoryActiveView,
   branchRef: string,
@@ -360,12 +381,10 @@ function seedForBranch(
   };
 }
 
-function conflictSeedForOperation(
-  view: MemoryActiveView,
-  branchRef: string,
+function removeIncomingOperationFromSeed(
+  seed: MemoryAuthoritySeed,
   operation: MemoryOperationInput,
 ): MemoryAuthoritySeed {
-  const seed = seedForBranch(view, branchRef);
   if (operation.kind === "create_resource_chunk") {
     seed.resourceChunks = (seed.resourceChunks ?? []).filter(
       (chunk) => chunk.id !== operation.chunk.id,
@@ -406,6 +425,17 @@ function conflictSeedForOperation(
     });
   }
   return seed;
+}
+
+function conflictSeedForOperations(
+  view: MemoryActiveView,
+  branchRef: string,
+  operations: MemoryOperationInput[],
+): MemoryAuthoritySeed {
+  return operations.reduce(
+    removeIncomingOperationFromSeed,
+    seedForBranch(view, branchRef),
+  );
 }
 
 export interface CloudMemoryAuthority
@@ -505,7 +535,7 @@ export class InMemoryCloudMemoryAuthority
       request.rootEntityId,
       request.branchRef,
     );
-    const keys = conflictKeysForOperation(request.operation);
+    const keys = commandOperations(request).flatMap(conflictKeysForOperation);
     const conflictingKeys = this.conflictingKeysSince(
       request.rootEntityId,
       request.branchRef,
@@ -952,7 +982,7 @@ export class InMemoryCloudMemoryAuthority
             record.status === "accepted",
         )?.sequence ?? 0;
     }
-    const incomingEffect = operationEffect(request.operation);
+    const incomingEffect = operationsEffect(request);
     return this.records.find(
       (record) =>
         record.status === "accepted" &&
@@ -962,10 +992,13 @@ export class InMemoryCloudMemoryAuthority
         conflictingKeys.every((key) =>
           record.conflictKeys.includes(key),
         ) &&
-        record.operations.some(
-          (operation) =>
-            operationEffect(operation.input) === incomingEffect,
-        ),
+        JSON.stringify(
+          stableValue(
+            record.operations.map((operation) =>
+              operationEffect(operation.input),
+            ),
+          ),
+        ) === incomingEffect,
     );
   }
 
@@ -1026,10 +1059,10 @@ export class InMemoryCloudMemoryAuthority
       request.branchRef,
     );
     const conflictAuthority = new InMemoryMemoryAuthority(
-      conflictSeedForOperation(
+      conflictSeedForOperations(
         targetView,
         conflictBranchRef,
-        request.operation,
+        commandOperations(request),
       ),
     );
     const conflictRequest = {
@@ -1039,6 +1072,14 @@ export class InMemoryCloudMemoryAuthority
         clone(request.operation),
         conflictBranchRef,
       ),
+      ...(request.operations === undefined
+        ? {}
+        : {
+            operations: operationsForBranch(
+              clone(request.operations),
+              conflictBranchRef,
+            ),
+          }),
     };
     const incoming = await conflictAuthority.execute(conflictRequest);
     this.sequence = sequence;

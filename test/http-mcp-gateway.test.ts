@@ -56,7 +56,10 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     qdrantUrl: "http://127.0.0.1:6333",
     objectStoreUrl: "http://127.0.0.1:9000",
   });
-  const gateway = new TeamMemoryGateway(runtime);
+  const gateway = new TeamMemoryGateway(runtime, {
+    retrieval: "active-view",
+    projectWrites: false,
+  });
   const server = createTeamMemoryServer(gateway);
   try {
     const adminSession = await bootstrapDevelopment(runtime, {
@@ -113,6 +116,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
           action: "write_entity_branch",
           resourceKind: "memory_entity_branch",
         },
+        { action: "commit", resourceKind: "memory_entity" },
         { action: "write_resource_chunk", resourceKind: "resource_chunk" },
       ],
       delegatedBy: "user-gateway",
@@ -166,50 +170,15 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     assert.equal(
       (
         await post(base, "/memory/write", writeSession.token, {
-          clientMutationId: "write-entity",
-          action: "write_entity",
-          resourceKind: "memory_entity",
-          commit: { id: "commit-entity", message: "Create guide" },
-          operation: {
-            kind: "create_entity",
-            id: "operation-entity",
-            entity: {
-              id: "entity-guide",
-              rootEntityId: "root-gateway",
-              currentBranchId: "branch-guide",
-              status: "active",
-              createdAt: now,
-              updatedAt: now,
-            },
+          clientMutationId: "write-guide",
+          target: {
+            kind: "memory_entity",
+            name: "Gateway Guide",
           },
-        })
-      ).status,
-      200,
-    );
-    assert.equal(
-      (
-        await post(base, "/memory/write", writeSession.token, {
-          clientMutationId: "write-branch",
-          action: "write_entity_branch",
-          resourceKind: "memory_entity_branch",
-          commit: { id: "commit-branch", message: "Describe guide" },
-          operation: {
-            kind: "create_entity_branch",
-            id: "operation-branch",
-            branch: {
-              id: "branch-guide",
-              entityId: "entity-guide",
-              rootEntityId: "root-gateway",
-              branchRef: "main",
-              title: "Gateway Guide",
-              description: "Shared HTTP and MCP behavior",
-              tags: ["guide"],
-              importance: 1,
-              confidence: 1,
-              status: "active",
-              createdAt: now,
-              updatedAt: now,
-            },
+          patch: {
+            title: "Gateway Guide",
+            description: "Shared HTTP and MCP behavior",
+            tags: ["guide"],
           },
         })
       ).status,
@@ -218,33 +187,12 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     await gateway.importResource(adminSession.token, {
       clientMutationId: "import-gateway-resource",
       resourceId: "resource-gateway",
+      revisionId: "revision-gateway",
       title: "Gateway Resource",
       sourceType: "document",
-      content: "HTTP and MCP resource backing content",
+      content: "HTTP and MCP share the same projected BM25 retrieval path",
+      maxChunkCharacters: 1200,
     });
-    const chunkWrite = await post(base, "/memory/write", writeSession.token, {
-      clientMutationId: "write-chunk",
-      action: "write_resource_chunk",
-      resourceKind: "resource_chunk",
-      commit: { id: "commit-chunk", message: "Index chunk" },
-      operation: {
-        kind: "create_resource_chunk",
-        id: "operation-chunk",
-        chunk: {
-          id: "chunk-gateway",
-          rootEntityId: "root-gateway",
-          resourceId: "resource-gateway",
-          chunkIndex: 0,
-          text: "HTTP and MCP share the same projected BM25 retrieval path",
-          status: "active",
-          metadata: { revisionId: "revision-gateway" },
-          createdAt: now,
-          updatedAt: now,
-        },
-      },
-    });
-    const chunkWriteText = await chunkWrite.text();
-    assert.equal(chunkWrite.status, 200, chunkWriteText);
 
     const httpSearch = await post(base, "/memory/search", readSession.token, {
       query: "Gateway",
@@ -308,21 +256,8 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     await assert.rejects(
       () =>
         mcp.callTool(readSession.token, "memory.write", {
-          clientMutationId: "denied-write",
-          action: "write_entity",
-          resourceKind: "memory_entity",
-          commit: { id: "commit-denied" },
-          operation: {
-            kind: "create_entity",
-            id: "operation-denied",
-            entity: {
-              id: "entity-denied",
-              rootEntityId: "root-gateway",
-              status: "active",
-              createdAt: now,
-              updatedAt: now,
-            },
-          },
+          target: { kind: "memory_entity", name: "Denied" },
+          patch: { description: "should not write" },
         }),
       /permission_denied/,
     );
@@ -331,16 +266,70 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       headers: { authorization: `Bearer ${adminSession.token}` },
     });
     assert.equal(history.status, 200);
-    assert.deepEqual(
-      ((await history.json()) as { value: { records: { commit: { id: string } }[] } })
-        .value.records.map(({ commit }) => commit.id),
-      [
-        "bootstrap-root-commit:root-gateway",
-        "commit-entity",
-        "commit-branch",
-        "commit:import-gateway-resource",
-        "commit-chunk",
-      ],
+    const historyPayload = await history.json() as {
+      value: { records: { commit: { id: string }; operations: unknown[] }[] };
+    };
+    const commitIds = historyPayload.value.records.map(({ commit }) => commit.id);
+    assert.equal(commitIds[0], "bootstrap-root-commit:root-gateway");
+    assert.match(commitIds[1] ?? "", /^commit:memory-write:/);
+    assert.equal(commitIds[2], "commit:import-gateway-resource");
+    assert.match(commitIds[3] ?? "", /^commit:import-gateway-resource:auto-ingest:chunk:/);
+    assert.equal(historyPayload.value.records[1]?.operations.length, 2);
+
+    const duplicate = await post(base, "/memory/write", writeSession.token, {
+      clientMutationId: "write-guide-duplicate",
+      target: { kind: "memory_entity", name: "Gateway Guide" },
+      patch: {
+        description: "Shared HTTP and MCP behavior",
+        tags: ["guide"],
+      },
+    });
+    const duplicateText = await duplicate.text();
+    assert.equal(duplicate.status, 200, duplicateText);
+    assert.equal(
+      (JSON.parse(duplicateText) as { value: { status: string } }).value.status,
+      "duplicate",
+    );
+
+    const conflict = await post(base, "/memory/write", writeSession.token, {
+      clientMutationId: "write-guide-conflict",
+      conflict: true,
+      target: { kind: "memory_entity", name: "Gateway Guide" },
+      patch: { description: "Gateway Guide now documents conflict capture." },
+    });
+    const conflictText = await conflict.text();
+    assert.equal(conflict.status, 200, conflictText);
+    assert.equal(
+      (JSON.parse(conflictText) as { value: { extra: { relationType: string } } })
+        .value.extra.relationType,
+      "contradicts",
+    );
+
+    const secondSameName = await post(base, "/memory/write", writeSession.token, {
+      clientMutationId: "write-second-same-name",
+      target: { kind: "memory_entity", name: "Second Guide" },
+      patch: {
+        title: "Gateway Guide",
+        description: "A separate entity with the same human-readable title.",
+      },
+    });
+    assert.equal(secondSameName.status, 200, await secondSameName.text());
+    const ambiguous = await post(base, "/memory/write", writeSession.token, {
+      clientMutationId: "write-ambiguous",
+      target: { kind: "memory_entity", name: "Gateway Guide" },
+      patch: { description: "Should ask the agent to disambiguate." },
+    });
+    const ambiguousText = await ambiguous.text();
+    assert.equal(ambiguous.status, 200, ambiguousText);
+    assert.equal(
+      (JSON.parse(ambiguousText) as { value: { status: string; extra: { guidance: string } } })
+        .value.status,
+      "ambiguous",
+    );
+    assert.equal(
+      (JSON.parse(ambiguousText) as { value: { extra: { guidance: string } } })
+        .value.extra.guidance,
+      "search_or_catalog_first",
     );
 
     const unsafe = await post(base, "/memory/search", readSession.token, {

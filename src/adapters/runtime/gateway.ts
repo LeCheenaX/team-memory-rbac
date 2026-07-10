@@ -13,7 +13,12 @@ import {
   type ConflictResolutionCommand,
   type ConflictResolutionResult,
   type MemoryAction,
+  type MemoryEntity,
+  type MemoryEntityBranch,
+  type MemoryOperationInput,
   type MemoryObjectKind,
+  type MemoryRelation,
+  type MemoryRelationType,
   type PermissionWatermarkProvider,
   type MemoryRetrievalRequest,
   type MemoryRetrievalResult,
@@ -62,6 +67,7 @@ export class TeamMemoryGatewayError extends Error {
 export interface TeamMemoryGatewayOptions {
   retrieval?: "runtime" | "active-view";
   permissionWatermarks?: PermissionWatermarkProvider;
+  projectWrites?: boolean;
 }
 
 const forbiddenPayloadFields = new Set([
@@ -208,6 +214,7 @@ function defaultAgentPermissions(ownerPermissions: readonly Permission[]): Permi
     "search:memory_entity",
     "write_entity:memory_entity",
     "write_entity_branch:memory_entity_branch",
+    "commit:memory_entity",
     "import_resource:resource",
     "read:resource",
     "search:resource",
@@ -223,8 +230,64 @@ function defaultAgentPermissions(ownerPermissions: readonly Permission[]): Permi
 const agentToolCatalog = [
   { name: "memory.catalog", description: "List visible memory entities and tags", action: "read", resourceKind: "memory_entity" },
   { name: "memory.search", description: "Search memory", action: "search", resourceKind: "memory_entity" },
-  { name: "memory.write", description: "Capture or update memory", action: "write_entity", resourceKind: "memory_entity" },
+  { name: "memory.write", description: "Capture or update memory", action: "commit", resourceKind: "memory_entity" },
 ] as const;
+
+function stableToolSchema(toolName: string): {
+  type: "object";
+  properties?: Record<string, unknown>;
+  required?: string[];
+  additionalProperties: false;
+} {
+  if (toolName === "memory.search") {
+    return {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        limit: { type: "integer" },
+        layer: { type: "string", enum: ["L1", "L2", "L3"] },
+        names: { type: "array", items: { type: "string" } },
+        tagsAny: { type: "array", items: { type: "string" } },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    };
+  }
+  if (toolName === "memory.write") {
+    return {
+      type: "object",
+      properties: {
+        target: {
+          type: "object",
+          properties: {
+            kind: {
+              type: "string",
+              enum: [
+                "memory_entity",
+                "memory_entity_branch",
+                "resource",
+                "memory_relation",
+              ],
+            },
+            name: { type: "string" },
+          },
+          required: ["kind", "name"],
+          additionalProperties: false,
+        },
+        patch: { type: "object" },
+        clientMutationId: { type: "string" },
+        conflict: { type: "boolean" },
+      },
+      required: ["target", "patch"],
+      additionalProperties: false,
+    };
+  }
+  return {
+    type: "object",
+    properties: {},
+    additionalProperties: false,
+  };
+}
 
 const stableCatalogFields = new Set<string>();
 const stableSearchFields = new Set([
@@ -234,6 +297,83 @@ const stableSearchFields = new Set([
   "names",
   "tagsAny",
 ]);
+const stableWriteFields = new Set([
+  "target",
+  "patch",
+  "clientMutationId",
+  "branchRef",
+  "expectedHeadCommitId",
+  "conflict",
+]);
+const validTargetKinds = new Set([
+  "memory_entity",
+  "memory_entity_branch",
+  "resource",
+  "memory_relation",
+]);
+const systemManagedPatchFields = new Set([
+  "id",
+  "rootEntityId",
+  "entityId",
+  "resourceId",
+  "revisionId",
+  "branchId",
+  "relationId",
+  "sourceMetadata",
+  "session",
+  "sessionId",
+  "provenance",
+  "host",
+  "createdAt",
+  "updatedAt",
+  "embedding",
+  "embeddings",
+  "bm25",
+  "bm25DocumentId",
+  "keywords",
+  "generatedKeywords",
+  "contentHash",
+]);
+const entityPatchFields = new Set(["name", "title", "description", "tags", "status"]);
+const branchPatchFields = new Set([...entityPatchFields, "extraInfo"]);
+const relationPatchFields = new Set([
+  "name",
+  "title",
+  "description",
+  "tags",
+  "status",
+  "sourceId",
+  "targetId",
+  "relationType",
+]);
+const resourcePatchFields = new Set([
+  "content",
+  "contentBase64",
+  "lineRange",
+  "replaceMode",
+]);
+
+type StableTargetKind =
+  | "memory_entity"
+  | "memory_entity_branch"
+  | "resource"
+  | "memory_relation";
+
+interface StableTarget {
+  kind: StableTargetKind;
+  name: string;
+}
+
+interface StableWriteResult {
+  status: "captured" | "duplicate" | "ambiguous";
+  entityId?: string;
+  branchId?: string;
+  relationId?: string;
+  resourceId?: string;
+  revisionId?: string;
+  commitIds: string[];
+  extra: Record<string, unknown>;
+}
 
 function assertOnlyFields(
   payload: Record<string, unknown>,
@@ -282,6 +422,109 @@ function optionalRecallLayer(
   );
 }
 
+function stableWriteTarget(payload: Record<string, unknown>): StableTarget {
+  const target = objectValue(payload, "target");
+  assertOnlyFields(target, new Set(["kind", "name"]), "memory.write target");
+  const kind = stringValue(target, "kind");
+  if (!validTargetKinds.has(kind)) {
+    throw new TeamMemoryGatewayError(
+      "validation_failed",
+      "target.kind must be memory_entity, memory_entity_branch, resource, or memory_relation",
+    );
+  }
+  return {
+    kind: kind as StableTargetKind,
+    name: stringValue(target, "name"),
+  };
+}
+
+function patchFieldsFor(kind: StableTargetKind): Set<string> {
+  if (kind === "memory_entity") return entityPatchFields;
+  if (kind === "memory_entity_branch") return branchPatchFields;
+  if (kind === "resource") return resourcePatchFields;
+  return relationPatchFields;
+}
+
+function stablePatch(
+  target: StableTarget,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const patch = objectValue(payload, "patch");
+  const allowed = patchFieldsFor(target.kind);
+  for (const field of Object.keys(patch)) {
+    if (systemManagedPatchFields.has(field) || !allowed.has(field)) {
+      throw new TeamMemoryGatewayError(
+        "validation_failed",
+        `memory.write patch cannot provide ${field}`,
+      );
+    }
+  }
+  if (Object.keys(patch).length === 0) {
+    throw new TeamMemoryGatewayError(
+      "validation_failed",
+      "patch must contain at least one field",
+    );
+  }
+  return patch;
+}
+
+function optionalTags(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.some((item) => typeof item !== "string" || item.length === 0)
+  ) {
+    throw new TeamMemoryGatewayError(
+      "validation_failed",
+      "tags must be an array of non-empty strings",
+    );
+  }
+  return value;
+}
+
+function optionalStatus<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  field = "status",
+): T | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string" && (allowed as readonly string[]).includes(value)) {
+    return value as T;
+  }
+  throw new TeamMemoryGatewayError(
+    "validation_failed",
+    `${field} is not valid for target.kind`,
+  );
+}
+
+function optionalRelationType(value: unknown): MemoryRelationType | undefined {
+  if (value === undefined) return undefined;
+  if (
+    value === "has" ||
+    value === "depends_on" ||
+    value === "relates_to" ||
+    value === "refers_to" ||
+    value === "contradicts" ||
+    value === "supersedes" ||
+    value === "next_is"
+  ) {
+    return value;
+  }
+  throw new TeamMemoryGatewayError(
+    "validation_failed",
+    "relationType is not valid",
+  );
+}
+
+function stableName(branch: MemoryEntityBranch | undefined, fallback: string): string {
+  return branch?.title ?? fallback;
+}
+
+function descriptionFromPatch(patch: Record<string, unknown>): string {
+  const value = patch.description;
+  return typeof value === "string" ? value : "";
+}
+
 export class TeamMemoryGateway {
   private readonly runtime: TeamMemoryRuntime;
   private readonly writeRouter: PermissionRouter<
@@ -300,12 +543,14 @@ export class TeamMemoryGateway {
     AuthorizedSyncBatch,
     AuthorizedSyncRequest
   >;
+  private readonly projectWrites: boolean;
 
   constructor(
     runtime: TeamMemoryRuntime,
     options: TeamMemoryGatewayOptions = {},
   ) {
     this.runtime = runtime;
+    this.projectWrites = options.projectWrites ?? true;
     this.writeRouter = new PermissionRouter(runtime.policy, runtime.history);
     this.retrievalRouter =
       options.retrieval === "active-view"
@@ -350,8 +595,16 @@ export class TeamMemoryGateway {
     agentId?: string;
     rootEntityId: string;
     delegationId?: string;
+    provider: {
+      mode: "runtime";
+      trustedRootEntityId: string;
+      visibleTools: string[];
+      tokenAvailable: boolean;
+      sessionAvailable: boolean;
+    };
   }> {
     const session = await this.authenticate(token);
+    const visibleTools = await this.visibleToolNamesForSession(session);
     return {
       sessionId: session.sessionId,
       userId: session.userId,
@@ -360,13 +613,52 @@ export class TeamMemoryGateway {
       ...(session.delegationId === undefined
         ? {}
         : { delegationId: session.delegationId }),
+      provider: {
+        mode: "runtime",
+        trustedRootEntityId: session.rootEntityId,
+        visibleTools,
+        tokenAvailable: true,
+        sessionAvailable: true,
+      },
     };
+  }
+
+  private async projectMemoryIfEnabled(
+    rootEntityId: string,
+    branchRef: string,
+  ): Promise<void> {
+    if (this.projectWrites) {
+      await this.runtime.projectMemory(rootEntityId, branchRef);
+    }
+  }
+
+  private async visibleToolNamesForSession(
+    session: AuthenticatedSession,
+  ): Promise<string[]> {
+    const visible: string[] = [];
+    for (const tool of agentToolCatalog) {
+      if (session.subject.kind !== "agent") {
+        visible.push(tool.name);
+        continue;
+      }
+      const decision = await this.runtime.policy.decide({
+        subject: session.subject,
+        rootEntityId: session.rootEntityId,
+        taskScope: session.taskScope,
+        action: tool.action,
+        resourceKind: tool.resourceKind,
+      });
+      if (decision.allowed) {
+        visible.push(tool.name);
+      }
+    }
+    return visible;
   }
 
   async listAgentTools(token: string | undefined): Promise<Array<{
     name: string;
     description: string;
-    inputSchema: { type: "object"; additionalProperties: true };
+    inputSchema: ReturnType<typeof stableToolSchema>;
   }>> {
     const visible = [];
     for (const tool of agentToolCatalog) {
@@ -375,7 +667,7 @@ export class TeamMemoryGateway {
         visible.push({
           name: tool.name,
           description: tool.description,
-          inputSchema: { type: "object" as const, additionalProperties: true as const },
+          inputSchema: stableToolSchema(tool.name),
         });
       }
     }
@@ -694,7 +986,7 @@ export class TeamMemoryGateway {
       typeof payload.content === "string"
         ? payload.content
         : Buffer.from(stringValue(payload, "contentBase64"), "base64");
-    return this.runtime.resources.import(session, {
+    const imported = await this.runtime.resources.import(session, {
       clientMutationId: stringValue(payload, "clientMutationId"),
       ...(typeof payload.resourceId === "string"
         ? { resourceId: payload.resourceId }
@@ -719,6 +1011,20 @@ export class TeamMemoryGateway {
         ? { metadata: payload.metadata as Record<string, unknown> }
         : {}),
     });
+    return {
+      ...imported,
+      ingestion: await this.tryAutomaticIngestion(session, {
+        resourceId: imported.resource.id,
+        branchRef: typeof payload.branchRef === "string" ? payload.branchRef : "main",
+        clientMutationId: `${stringValue(payload, "clientMutationId")}:auto-ingest`,
+        ...(imported.resource.currentRevisionId === undefined
+          ? {}
+          : { revisionId: imported.resource.currentRevisionId }),
+        ...(typeof payload.maxChunkCharacters === "number"
+          ? { maxChunkCharacters: payload.maxChunkCharacters }
+          : {}),
+      }),
+    };
   }
 
   async reviseResource(
@@ -732,7 +1038,7 @@ export class TeamMemoryGateway {
       typeof payload.content === "string"
         ? payload.content
         : Buffer.from(stringValue(payload, "contentBase64"), "base64");
-    return this.runtime.resources.revise(session, {
+    const revised = await this.runtime.resources.revise(session, {
       clientMutationId: stringValue(payload, "clientMutationId"),
       resourceId,
       content,
@@ -752,6 +1058,47 @@ export class TeamMemoryGateway {
         ? { metadata: payload.metadata as Record<string, unknown> }
         : {}),
     });
+    return {
+      ...revised,
+      ingestion: await this.tryAutomaticIngestion(session, {
+        resourceId,
+        revisionId: revised.revisionId,
+        branchRef: typeof payload.branchRef === "string" ? payload.branchRef : "main",
+        clientMutationId: `${stringValue(payload, "clientMutationId")}:auto-ingest`,
+        ...(typeof payload.maxChunkCharacters === "number"
+          ? { maxChunkCharacters: payload.maxChunkCharacters }
+          : {}),
+      }),
+    };
+  }
+
+  private async tryAutomaticIngestion(
+    session: AuthenticatedSession,
+    input: {
+      resourceId: string;
+      revisionId?: string;
+      branchRef: string;
+      clientMutationId: string;
+      maxChunkCharacters?: number;
+    },
+  ): Promise<
+    | { status: "indexed"; revisionId: string; chunkCount: number; rebuiltOnly: boolean }
+    | { status: "retryable_failed"; message: string }
+  > {
+    try {
+      const result = await this.runtime.ingestion.ingest(session, input);
+      return {
+        status: "indexed",
+        revisionId: result.revisionId,
+        chunkCount: result.chunks.length,
+        rebuiltOnly: result.rebuiltOnly,
+      };
+    } catch (error) {
+      return {
+        status: "retryable_failed",
+        message: error instanceof Error ? error.message : "automatic ingestion failed",
+      };
+    }
   }
 
   async ingestResource(
@@ -895,31 +1242,49 @@ export class TeamMemoryGateway {
   async writeMemory(
     token: string | undefined,
     payload: Record<string, unknown>,
-  ): Promise<CloudMemoryWriteResult> {
+  ): Promise<StableWriteResult> {
     assertNoIdentityOverride(payload);
+    assertOnlyFields(payload, stableWriteFields, "memory.write");
     const session = await this.authenticate(token);
+    const target = stableWriteTarget(payload);
+    const patch = stablePatch(target, payload);
     const branch = branchRef(payload);
+    if (target.kind === "resource") {
+      return this.writeResourcePatch(session, target, patch, payload, branch);
+    }
+    const prepared = this.prepareStableMemoryOperations(session, target, patch, payload, branch);
+    if (prepared.status !== "ready") {
+      return prepared;
+    }
     const request: CloudMemoryWriteCommand = {
       subject: gatewaySubject(session),
       rootEntityId: session.rootEntityId,
       taskScope: session.taskScope,
       branchRef: branch,
-      action: stringValue(payload, "action") as MemoryAction,
-      resourceKind: stringValue(payload, "resourceKind") as MemoryObjectKind,
-      clientMutationId: stringValue(payload, "clientMutationId"),
+      action: "commit",
+      resourceKind: "memory_entity",
+      clientMutationId: optionalString(payload, "clientMutationId") ??
+        `memory-write:${randomUUID()}`,
       ...(optionalString(payload, "expectedHeadCommitId") === undefined
-        ? {}
+        ? (() => {
+            const head = this.runtime.history.headCommitId(
+              session.rootEntityId,
+              branch,
+            );
+            return head === undefined ? {} : { expectedHeadCommitId: head };
+          })()
         : {
             expectedHeadCommitId: optionalString(
               payload,
               "expectedHeadCommitId",
             ) as string,
           }),
-      commit: objectValue(payload, "commit") as CloudMemoryWriteCommand["commit"],
-      operation: objectValue(
-        payload,
-        "operation",
-      ) as CloudMemoryWriteCommand["operation"],
+      commit: {
+        id: prepared.commitId,
+        message: `Capture ${target.name}`,
+      },
+      operation: prepared.operations[0] as MemoryOperationInput,
+      operations: prepared.operations,
     };
     const result = unwrap(await this.writeRouter.execute(request));
     if (result.status === "conflict") {
@@ -928,8 +1293,368 @@ export class TeamMemoryGateway {
         result.conflict.id,
       );
     }
-    await this.runtime.projectMemory(session.rootEntityId, branch);
-    return result;
+    await this.projectMemoryIfEnabled(session.rootEntityId, branch);
+    return {
+      status: "captured",
+      ...(prepared.entityId === undefined ? {} : { entityId: prepared.entityId }),
+      ...(prepared.branchId === undefined ? {} : { branchId: prepared.branchId }),
+      ...(prepared.relationId === undefined ? {} : { relationId: prepared.relationId }),
+      commitIds: [result.write.commit.id],
+      extra: prepared.extra,
+    };
+  }
+
+  private prepareStableMemoryOperations(
+    session: AuthenticatedSession,
+    target: StableTarget,
+    patch: Record<string, unknown>,
+    payload: Record<string, unknown>,
+    branch: string,
+  ):
+    | {
+        status: "ready";
+        commitId: string;
+        operations: MemoryOperationInput[];
+        entityId?: string;
+        branchId?: string;
+        relationId?: string;
+        extra: Record<string, unknown>;
+      }
+    | StableWriteResult {
+    const view = this.runtime.history.readActiveView(session.rootEntityId, branch);
+    const branchById = new Map(view.entityBranches.map((candidate) => [
+      candidate.id,
+      candidate,
+    ]));
+    const now = new Date().toISOString();
+    const commitId = `commit:memory-write:${randomUUID()}`;
+    if (target.kind === "memory_entity") {
+      const matches = view.entities
+        .filter((entity) => entity.rootEntityId !== null)
+        .filter((entity) =>
+          stableName(branchById.get(entity.currentBranchId ?? ""), entity.id) ===
+          target.name
+        );
+      if (matches.length > 1) {
+        return this.ambiguousResult(target, matches.map((entity) =>
+          stableName(branchById.get(entity.currentBranchId ?? ""), entity.id)
+        ));
+      }
+      const title = typeof patch.title === "string"
+        ? patch.title
+        : typeof patch.name === "string"
+          ? patch.name
+          : target.name;
+      const tags = optionalTags(patch.tags) ?? [];
+      const status = optionalStatus(patch.status, [
+        "active",
+        "archived",
+        "tombstoned",
+        "conflicted",
+      ] as const) ?? "active";
+      const existing = matches[0];
+      const existingBranch = existing?.currentBranchId === undefined
+        ? undefined
+        : branchById.get(existing.currentBranchId);
+      if (
+        existingBranch !== undefined &&
+        existingBranch.description === descriptionFromPatch(patch)
+      ) {
+        return {
+          status: "duplicate",
+          ...(existing === undefined ? {} : { entityId: existing.id }),
+          branchId: existingBranch.id,
+          commitIds: [],
+          extra: { captureDecision: "duplicate_signal" },
+        };
+      }
+      const entityId = existing?.id ?? `entity:${randomUUID()}`;
+      const branchId = `branch:${randomUUID()}`;
+      const operations: MemoryOperationInput[] = [];
+      if (existing === undefined) {
+        const entity: MemoryEntity = {
+          id: entityId,
+          rootEntityId: session.rootEntityId,
+          currentBranchId: branchId,
+          status,
+          createdAt: now,
+          updatedAt: now,
+        };
+        operations.push({
+          kind: "create_entity",
+          id: `operation:${commitId}:entity`,
+          entity,
+        });
+      }
+      const memoryBranch: MemoryEntityBranch = {
+        id: branchId,
+        entityId,
+        rootEntityId: session.rootEntityId,
+        branchRef: branch,
+        ...(existingBranch === undefined ? {} : { parentBranchId: existingBranch.id }),
+        title,
+        description: descriptionFromPatch(patch),
+        tags,
+        ...(patch.extraInfo === undefined
+          ? {}
+          : { extraInfo: patch.extraInfo as Record<string, unknown> }),
+        importance: 0.75,
+        confidence: 0.8,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      };
+      operations.push({
+        kind: "create_entity_branch",
+        id: `operation:${commitId}:branch`,
+        branch: memoryBranch,
+      });
+      let relationId: string | undefined;
+      if (existingBranch !== undefined) {
+        relationId = `relation:${randomUUID()}`;
+        operations.push({
+          kind: "create_relation",
+          id: `operation:${commitId}:relation`,
+          relation: {
+            id: relationId,
+            rootEntityId: session.rootEntityId,
+            sourceKind: "memory_entity_branch",
+            sourceId: branchId,
+            targetKind: "memory_entity_branch",
+            targetId: existingBranch.id,
+            relationType: payload.conflict === true ? "contradicts" : "relates_to",
+            branchRef: branch,
+            weight: 1,
+            confidence: payload.conflict === true ? 1 : 0.75,
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+      }
+      return {
+        status: "ready",
+        commitId,
+        operations,
+        entityId,
+        branchId,
+        ...(relationId === undefined ? {} : { relationId }),
+        extra: {
+          captureDecision: existing === undefined ? "new_entity" : "new_branch",
+          relationType: existingBranch === undefined
+            ? undefined
+            : payload.conflict === true ? "contradicts" : "relates_to",
+        },
+      };
+    }
+
+    if (target.kind === "memory_entity_branch") {
+      const matches = view.entityBranches.filter((candidate) =>
+        candidate.title === target.name
+      );
+      if (matches.length !== 1) {
+        return this.ambiguousResult(target, matches.map(({ title }) => title));
+      }
+      const existing = matches[0] as MemoryEntityBranch;
+      if (existing.description === descriptionFromPatch(patch)) {
+        return {
+          status: "duplicate",
+          entityId: existing.entityId,
+          branchId: existing.id,
+          commitIds: [],
+          extra: { captureDecision: "duplicate_signal" },
+        };
+      }
+      const branchId = `branch:${randomUUID()}`;
+      const tags = optionalTags(patch.tags) ?? existing.tags;
+      const nextBranch: MemoryEntityBranch = {
+        ...existing,
+        id: branchId,
+        parentBranchId: existing.id,
+        title: typeof patch.title === "string"
+          ? patch.title
+          : typeof patch.name === "string" ? patch.name : existing.title,
+        description: typeof patch.description === "string"
+          ? patch.description
+          : existing.description,
+        tags,
+        ...(patch.extraInfo === undefined
+          ? {}
+          : { extraInfo: patch.extraInfo as Record<string, unknown> }),
+        status: optionalStatus(patch.status, [
+          "active",
+          "pending",
+          "conflicted",
+          "deprecated",
+          "verified",
+          "superseded",
+          "tombstoned",
+        ] as const) ?? existing.status,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const relationId = `relation:${randomUUID()}`;
+      return {
+        status: "ready",
+        commitId,
+        entityId: existing.entityId,
+        branchId,
+        relationId,
+        operations: [
+          {
+            kind: "create_entity_branch",
+            id: `operation:${commitId}:branch`,
+            branch: nextBranch,
+          },
+          {
+            kind: "create_relation",
+            id: `operation:${commitId}:relation`,
+            relation: {
+              id: relationId,
+              rootEntityId: session.rootEntityId,
+              sourceKind: "memory_entity_branch",
+              sourceId: branchId,
+              targetKind: "memory_entity_branch",
+              targetId: existing.id,
+              relationType: payload.conflict === true ? "contradicts" : "relates_to",
+              branchRef: branch,
+              weight: 1,
+              confidence: payload.conflict === true ? 1 : 0.75,
+              status: "active",
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        ],
+        extra: {
+          captureDecision: "new_branch",
+          relationType: payload.conflict === true ? "contradicts" : "relates_to",
+        },
+      };
+    }
+
+    const relationMatches = view.relations.filter((candidate) =>
+      candidate.relationType === target.name ||
+      candidate.id === target.name
+    );
+    if (relationMatches.length !== 1) {
+      return this.ambiguousResult(
+        target,
+        relationMatches.map(({ relationType }) => relationType),
+      );
+    }
+    const relation = relationMatches[0] as MemoryRelation;
+    const replacement: MemoryRelation = {
+      ...relation,
+      id: `relation:${randomUUID()}`,
+      sourceId: typeof patch.sourceId === "string" ? patch.sourceId : relation.sourceId,
+      targetId: typeof patch.targetId === "string" ? patch.targetId : relation.targetId,
+      relationType: optionalRelationType(patch.relationType) ?? relation.relationType,
+      status: optionalStatus(patch.status, [
+        "active",
+        "tombstoned",
+        "conflicted",
+      ] as const) ?? relation.status,
+      updatedAt: now,
+    };
+    return {
+      status: "ready",
+      commitId,
+      relationId: replacement.id,
+      operations: [
+        {
+          kind: "replace_relation",
+          id: `operation:${commitId}:tombstone-relation`,
+          previousRelationId: relation.id,
+          replacementOperationId: `operation:${commitId}:create-relation`,
+          replacement,
+        },
+      ],
+      extra: { captureDecision: "replace_relation" },
+    };
+  }
+
+  private ambiguousResult(
+    target: StableTarget,
+    candidates: string[],
+  ): StableWriteResult {
+    return {
+      status: "ambiguous",
+      commitIds: [],
+      extra: {
+        target,
+        candidates,
+        guidance: "search_or_catalog_first",
+      },
+    };
+  }
+
+  private async writeResourcePatch(
+    session: AuthenticatedSession,
+    target: StableTarget,
+    patch: Record<string, unknown>,
+    payload: Record<string, unknown>,
+    branch: string,
+  ): Promise<StableWriteResult> {
+    const view = this.runtime.history.readActiveView(session.rootEntityId, branch);
+    const matches = view.resources.filter((resource) => resource.title === target.name);
+    if (matches.length !== 1) {
+      return this.ambiguousResult(target, matches.map(({ title }) => title));
+    }
+    const resource = matches[0] as { id: string };
+    let content: string | Uint8Array;
+    if (typeof patch.contentBase64 === "string") {
+      content = Buffer.from(patch.contentBase64, "base64");
+    } else if (typeof patch.content === "string") {
+      content = patch.content;
+    } else {
+      throw new TeamMemoryGatewayError(
+        "validation_failed",
+        "resource patch requires content or contentBase64",
+      );
+    }
+    if (patch.lineRange !== undefined) {
+      const lineRange = patch.lineRange as { start?: unknown; end?: unknown };
+      if (
+        typeof lineRange !== "object" ||
+        lineRange === null ||
+        typeof lineRange.start !== "number" ||
+        typeof lineRange.end !== "number" ||
+        lineRange.start < 1 ||
+        lineRange.end < lineRange.start ||
+        typeof content !== "string"
+      ) {
+        throw new TeamMemoryGatewayError(
+          "validation_failed",
+          "lineRange requires string content and numeric start/end",
+        );
+      }
+      const current = await this.runtime.resources.read(session, {
+        resourceId: resource.id,
+        branchRef: branch,
+      });
+      const text = Buffer.from(current.content).toString();
+      const lines = text.split(/\r?\n/);
+      lines.splice(lineRange.start - 1, lineRange.end - lineRange.start + 1, content);
+      content = lines.join("\n");
+    }
+    const revision = await this.runtime.resources.revise(session, {
+      clientMutationId: optionalString(payload, "clientMutationId") ??
+        `memory-write-resource:${randomUUID()}`,
+      resourceId: resource.id,
+      content,
+      branchRef: branch,
+      ...(optionalString(payload, "expectedHeadCommitId") === undefined
+        ? {}
+        : { expectedHeadCommitId: optionalString(payload, "expectedHeadCommitId") as string }),
+    });
+    return {
+      status: "captured",
+      resourceId: resource.id,
+      revisionId: revision.revisionId,
+      commitIds: [],
+      extra: { captureDecision: "resource_revision" },
+    };
   }
 
   async searchMemory(
@@ -1094,7 +1819,7 @@ export class TeamMemoryGateway {
     if (branchResult.status === "conflict") {
       throw new TeamMemoryGatewayError("conflict", branchResult.conflict.id);
     }
-    await this.runtime.projectMemory(session.rootEntityId, branch);
+    await this.projectMemoryIfEnabled(session.rootEntityId, branch);
     return {
       status: "captured",
       entityId,
@@ -1198,7 +1923,7 @@ export class TeamMemoryGateway {
       request.manualResourceKind = payload.manualResourceKind as MemoryObjectKind;
     }
     const result = unwrap(await this.resolutionRouter.execute(request));
-    await this.runtime.projectMemory(session.rootEntityId, branch);
+    await this.projectMemoryIfEnabled(session.rootEntityId, branch);
     return result;
   }
 

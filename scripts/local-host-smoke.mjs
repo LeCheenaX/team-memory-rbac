@@ -59,49 +59,17 @@ const hostConfigs = [
 ];
 
 async function writeAndSearch(adapter, token, host) {
-  const entityId = `entity:local-${host}-smoke`;
-  const branchId = `branch:local-${host}-smoke`;
   const title = `Local ${host} RBAC Memory Smoke`;
   await adapter.invokeTool(token, "memory.write", {
-    clientMutationId: `local-${host}-smoke-entity`,
-    action: "write_entity",
-    resourceKind: "memory_entity",
-    commit: { id: `commit:local-${host}-smoke-entity` },
-    operation: {
-      kind: "create_entity",
-      id: `operation:local-${host}-smoke-entity`,
-      entity: {
-        id: entityId,
-        rootEntityId,
-        currentBranchId: branchId,
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      },
+    clientMutationId: `local-${host}-smoke-memory`,
+    target: {
+      kind: "memory_entity",
+      name: title,
     },
-  });
-  await adapter.invokeTool(token, "memory.write", {
-    clientMutationId: `local-${host}-smoke-branch`,
-    action: "write_entity_branch",
-    resourceKind: "memory_entity_branch",
-    commit: { id: `commit:local-${host}-smoke-branch` },
-    operation: {
-      kind: "create_entity_branch",
-      id: `operation:local-${host}-smoke-branch`,
-      branch: {
-        id: branchId,
-        entityId,
-        rootEntityId,
-        branchRef: "main",
-        title,
-        description: `${host} can write and recall memory without an HTTP server or sync.`,
-        tags: ["local-host-smoke", host],
-        importance: 1,
-        confidence: 1,
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      },
+    patch: {
+      title,
+      description: `${host} can write and recall memory without an HTTP server or sync.`,
+      tags: ["local-host-smoke", host],
     },
   });
   return adapter.invokeTool(token, "memory.search", {
