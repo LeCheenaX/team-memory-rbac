@@ -51,11 +51,11 @@ local Team Memory state is in the `hermes-local-workspace` volume mounted at
 
 ```powershell
 docker compose up -d qdrant
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json setup
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local check
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config config/team-memory.hermes-local.json setup
 $env:BOOTSTRAP_USER_PASSWORD = "<test local admin password>"
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin -- --config config/team-memory.hermes-local.json
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config config/team-memory.hermes-local.json login
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin -- --config /workspace/config/team-memory.hermes-local.json
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json login
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes setup
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes config
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes memory setup team_memory
@@ -63,7 +63,9 @@ docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local herm
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes
 ```
 
-The `check`, `setup`, and `config` commands exit after doing their setup work.
+The `setup`, `check`, and `config` commands exit after doing their setup work.
+`hermes-local check` validates both the Hermes install and the activated Team
+Memory runtime; before setup it must fail with `memory module is not active`.
 The interactive conversation begins when `hermes-local hermes` opens the Hermes
 chat UI. Keep that terminal attached for the transcript.
 
@@ -77,18 +79,20 @@ PYTHONPATH=/opt/team-memory-rbac
 ```
 
 The memory runtime itself is configured by
-`config/team-memory.hermes-local.json`. That file declares `runtimeMode`,
-libSQL, CAS, Qdrant, and an explicit embedding provider URL. `unitTest` is the
-only mode that may use deterministic fake embeddings. `Dev` and `Production`
-must use a real HTTP embedding provider. Run `team -- --config
-config/team-memory.hermes-local.json setup` before bootstrap or login; setup
-prompts for the runtime and embedding settings, validates the embedding model,
-and writes activation only after validation passes.
+`/workspace/config/team-memory.hermes-local.json`, which lives in the persistent
+`hermes-local-workspace` volume. The entrypoint copies the checked-in template
+there on first use. That file declares `runtimeMode`, libSQL, CAS, Qdrant, and
+an explicit embedding provider URL. `unitTest` is the only mode that may use
+deterministic fake embeddings. `Dev` and `Production` must use a real HTTP
+embedding provider. Run `team -- --config
+/workspace/config/team-memory.hermes-local.json setup` before bootstrap or
+login; setup prompts for the runtime and embedding settings, validates the
+embedding model, and writes activation only after validation passes.
 
 The bootstrap command writes the active Team Memory session to
 `/root/.hermes/team-memory-session.json`, which persists in the
 `hermes-local-home` volume. Use `team -- logout`, interactive
-`team -- --config config/team-memory.hermes-local.json login`, or one-shot
+`team -- --config /workspace/config/team-memory.hermes-local.json login`, or one-shot
 `npm run login <userId> <password>` to switch accounts. `TEAM_MEMORY_TOKEN` remains a low-level
 one-command override, but the normal Hermes flow should use the session file.
 

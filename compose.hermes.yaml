@@ -8,6 +8,7 @@ services:
       TEAM_MEMORY_TOKEN: ${TEAM_MEMORY_TOKEN:-}
       TEAM_MEMORY_MODE: local
       TEAM_MEMORY_REPO_ROOT: /opt/team-memory-rbac
+      TEAM_MEMORY_CONFIG_FILE: /workspace/config/team-memory.hermes-local.json
       TEAM_MEMORY_SESSION_FILE: /root/.hermes/team-memory-session.json
       PYTHONPATH: /opt/team-memory-rbac
       BOOTSTRAP_ROOT_ENTITY_ID: root:test1-local

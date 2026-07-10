@@ -21,7 +21,6 @@ Run host commands from the repository root.
 npm.cmd install
 npm.cmd run check
 docker compose -f compose.yaml -f compose.hermes.yaml build hermes-local hermes-a hermes-b
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local check
 ```
 
 The Test 1 setup runs before `HERMES_A_TOKEN` and `HERMES_B_TOKEN` exist. The
@@ -39,7 +38,7 @@ That is expected. The state that must survive is stored in named volumes:
 - `hermes-local-workspace` is mounted at `/workspace` and keeps the Test 1 local
   Team Memory database and CAS files.
 
-Do not wait for `check`, `bootstrap:root-admin`, or `team -- agents onboard` to
+Do not wait for `bootstrap:root-admin` or `team -- agents onboard` to
 turn into a Hermes chat session. The conversation begins only after a command
 like `docker compose -f compose.yaml -f compose.hermes.yaml run --rm
 hermes-local hermes` opens the Hermes chat UI.
@@ -53,8 +52,8 @@ or execute `HermesTeamMemoryProvider` directly.
 The plugin chooses only the connector path from container environment:
 
 - `TEAM_MEMORY_MODE=local` uses the local no-server runtime through
-  `HermesTeamMemoryProvider.from_local(...)` and the checked-in
-  `config/team-memory.hermes-local.json` runtime configuration.
+  `HermesTeamMemoryProvider.from_local(...)` and the persistent
+  `/workspace/config/team-memory.hermes-local.json` runtime configuration.
 - `TEAM_MEMORY_MODE=http` uses the Team Memory HTTP service through
   `HermesTeamMemoryProvider.from_http(...)`.
 
@@ -102,11 +101,11 @@ Start only Qdrant:
 
 ```powershell
 docker compose up -d qdrant
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local check
 ```
 
-The `check` command exits after validating the Hermes binary and Team Memory
-adapter import. It is not the interactive Hermes session.
+Do not run `hermes-local check` before Team Memory setup. The `check` command
+now validates the Hermes install, plugin import, and the Team Memory runtime
+activation. Before setup, it must fail with `memory module is not active`.
 
 Start or choose a real HTTP embedding service that the container can reach.
 The checked-in local Hermes template points to Ollama-style embeddings on the
@@ -116,14 +115,28 @@ host:
 http://host.docker.internal:11434/api/embeddings
 ```
 
-Run Team Memory setup inside the Hermes container before bootstrap. Answer the
+Run Team Memory setup inside the Hermes container before bootstrap. The
+entrypoint copies the checked-in template into
+`/workspace/config/team-memory.hermes-local.json` the first time the volume is
+used; setup must update that persistent workspace config, not the image copy
+under `/opt/team-memory-rbac`. Answer the
 prompts with `Dev`, provider `http`, the reachable embedding URL and model, and
 the local libSQL/CAS/Qdrant values for this test. Setup validates the embedding
 model and activates the memory module only after validation passes.
 
 ```powershell
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config config/team-memory.hermes-local.json setup
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json setup
 ```
+
+After setup succeeds, run:
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local check
+```
+
+The `check` command exits after validating the Hermes binary, Team Memory
+adapter import, Hermes plugin install, and activated Team Memory runtime. It is
+not the interactive Hermes session.
 
 Choose a local root admin password for this test run. Keep it for the duration
 of the manual test. Team Memory stores the active session under
@@ -137,14 +150,14 @@ $env:BOOTSTRAP_USER_PASSWORD = "<test local admin password>"
 Bootstrap the local root inside the Hermes container:
 
 ```powershell
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin -- --config config/team-memory.hermes-local.json
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin -- --config /workspace/config/team-memory.hermes-local.json
 ```
 
 The bootstrap command logs in `user:test1-admin` automatically. To verify the
 login flow from a user's point of view, run interactive login:
 
 ```powershell
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config config/team-memory.hermes-local.json login
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json login
 ```
 
 Team Memory prompts `请输入用户名:`. Enter `user:test1-admin` and press Enter.
@@ -175,7 +188,7 @@ talking to Hermes.
 
 ```powershell
 $env:TEST1_READONLY_PASSWORD = "<test read-only password>"
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config config/team-memory.hermes-local.json members create user:test1-readonly Test1ReadOnly $env:TEST1_READONLY_PASSWORD role-researcher
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json members create user:test1-readonly Test1ReadOnly $env:TEST1_READONLY_PASSWORD role-researcher
 ```
 
 To switch identities later:

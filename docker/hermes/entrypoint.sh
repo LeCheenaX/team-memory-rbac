@@ -3,8 +3,13 @@ set -euo pipefail
 
 export PYTHONPATH="/opt/team-memory-rbac:${PYTHONPATH:-}"
 export TEAM_MEMORY_URL="${TEAM_MEMORY_URL:-http://service:3000}"
+export TEAM_MEMORY_CONFIG_FILE="${TEAM_MEMORY_CONFIG_FILE:-/workspace/config/team-memory.hermes-local.json}"
 
 mkdir -p /workspace/.data/test1-local-hermes/cas
+mkdir -p "$(dirname "$TEAM_MEMORY_CONFIG_FILE")"
+if [[ ! -f "$TEAM_MEMORY_CONFIG_FILE" ]]; then
+  cp /opt/team-memory-rbac/config/team-memory.hermes-local.json "$TEAM_MEMORY_CONFIG_FILE"
+fi
 
 mkdir -p "${HERMES_HOME:-/root/.hermes}/plugins/team_memory"
 cp /opt/team-memory-rbac/adapters/hermes/team_memory_plugin/__init__.py \
@@ -27,6 +32,7 @@ assert "team_memory" in providers, providers
 assert load_memory_provider("team_memory") is not None
 print("team-memory-rbac Hermes memory plugin ok")
 PY
+  npm --prefix /opt/team-memory-rbac run --silent runtime:check -- --config "$TEAM_MEMORY_CONFIG_FILE"
   exit 0
 fi
 

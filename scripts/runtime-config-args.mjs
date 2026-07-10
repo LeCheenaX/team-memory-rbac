@@ -23,7 +23,7 @@ export function parseRuntimeConfigArgs(argv, importMetaUrl) {
     }
     cleaned.push(arg);
   }
-  const defaultPath = join(repoRoot, "config", "team-memory.local.json");
+  const defaultPath = process.env.TEAM_MEMORY_CONFIG_FILE ?? join(repoRoot, "config", "team-memory.local.json");
   return {
     configPath: configPath ?? defaultPath,
     args: cleaned,

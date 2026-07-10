@@ -19,6 +19,11 @@ test("Hermes Docker entrypoint remains executable on Linux checkouts", async () 
   assert.match(gitAttributes, /\*\.sh text eol=lf/);
   assert.doesNotMatch(entrypoint, /LIBSQL_URL/);
   assert.doesNotMatch(entrypoint, /CAS_DIRECTORY/);
+  assert.match(entrypoint, /TEAM_MEMORY_CONFIG_FILE/);
+  assert.match(entrypoint, /\/workspace\/config\/team-memory\.hermes-local\.json/);
+  assert.match(entrypoint, /cp \/opt\/team-memory-rbac\/config\/team-memory\.hermes-local\.json "\$TEAM_MEMORY_CONFIG_FILE"/);
+  assert.match(entrypoint, /runtime:check/);
+  assert.match(entrypoint, /--config "\$TEAM_MEMORY_CONFIG_FILE"/);
   assert.match(entrypoint, /mkdir -p \/workspace\/\.data\/test1-local-hermes\/cas/);
   assert.match(entrypoint, /plugins\/team_memory/);
   assert.match(entrypoint, /load_memory_provider\("team_memory"\)/);

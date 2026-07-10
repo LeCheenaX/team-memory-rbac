@@ -14,6 +14,8 @@ test("Team Memory ships as a real Hermes memory plugin", async () => {
   assert.match(plugin, /def register\(ctx/);
   assert.match(plugin, /ctx\.register_memory_provider\(TeamMemoryHermesProvider\(\)\)/);
   assert.match(plugin, /TEAM_MEMORY_MODE/);
+  assert.match(plugin, /TEAM_MEMORY_CONFIG_FILE/);
+  assert.match(plugin, /\/workspace\/config\/team-memory\.hermes-local\.json/);
   assert.match(plugin, /TEAM_MEMORY_SESSION_FILE/);
   assert.match(plugin, /def _session_token/);
   assert.match(plugin, /return bool\(_session_token\(\)\)/);
