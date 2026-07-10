@@ -38,9 +38,11 @@ services:
     build: .
     environment:
       LIBSQL_URL: http://libsql:8080
+      TEAM_MEMORY_RUNTIME_MODE: development
       CAS_BACKEND: object_store
       CAS_DIRECTORY: /data/cas
       QDRANT_URL: http://qdrant:6333
+      EMBEDDING_PROVIDER: deterministic
       OBJECT_STORE_URL: http://object-store:9000
       PORT: "3000"
     ports: ["3000:3000"]

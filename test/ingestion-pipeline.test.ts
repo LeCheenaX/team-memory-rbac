@@ -117,6 +117,52 @@ async function setup() {
   return { history, resources, ingestion, retrieval, vectors, cas };
 }
 
+async function setupWithEmbeddings(embeddings: EmbeddingProvider) {
+  const history = new InMemoryCloudMemoryAuthority();
+  await history.execute({
+    subject: session.subject,
+    rootEntityId,
+    branchRef: "main",
+    action: "create_root_entity",
+    resourceKind: "memory_entity",
+    clientMutationId: "create-root-with-provider",
+    commit: { id: "commit:create-root-with-provider" },
+    operation: {
+      kind: "create_entity",
+      id: "operation:create-root-with-provider",
+      entity: {
+        id: rootEntityId,
+        rootEntityId: null,
+        status: "active",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    },
+    authorization: {
+      ...decision({
+        subject: session.subject,
+        rootEntityId,
+        action: "create_root_entity",
+        resourceKind: "memory_entity",
+      }),
+      allowed: true,
+    },
+  });
+  const cas = new InMemoryResourceCas();
+  const resources = new ResourceService(policy, history, cas, () => timestamp);
+  const vectors = new InMemoryVectorMemoryStore();
+  const ingestion = new ResourceIngestionService(
+    policy,
+    history,
+    cas,
+    vectors,
+    new InMemoryBm25Index(),
+    embeddings,
+    () => timestamp,
+  );
+  return { resources, ingestion, vectors };
+}
+
 test("resource ingestion chunks document content, indexes BM25 and vectors, and reruns idempotently", async () => {
   const { history, resources, ingestion, retrieval } = await setup();
   await resources.import(session, {
@@ -208,6 +254,45 @@ test("ingestion supports conversation, code_file, and tool_output chunk metadata
     assert.equal(result.chunks[0]?.metadata?.revisionId, `revision:${sourceType}:v1`);
     assert.equal(result.chunks[0]?.metadata?.startLine, 1);
   }
+});
+
+test("resource chunk projection uses the configured embedding provider", async () => {
+  const calls: string[] = [];
+  const embeddings: EmbeddingProvider = {
+    name: "test-resource-embedding-provider",
+    productionSafe: true,
+    embed: async (text) => {
+      calls.push(text);
+      return [0.5, 0.5];
+    },
+  };
+  const { resources, ingestion, vectors } = await setupWithEmbeddings(embeddings);
+  await resources.import(session, {
+    clientMutationId: "import-provider-doc",
+    resourceId: "resource:doc",
+    revisionId: "revision:provider:v1",
+    title: "Provider guide",
+    sourceType: "document",
+    content: "provider-backed chunk",
+  });
+
+  await ingestion.ingest(session, {
+    resourceId: "resource:doc",
+    clientMutationId: "ingest-provider-doc",
+  });
+
+  assert.deepEqual(calls, ["provider-backed chunk"]);
+  const [point] = await vectors.list({
+    collection: "resource_chunks",
+    filter: {
+      rootEntityId,
+      branchRef: "main",
+      resourceId: "resource:doc",
+      status: "active",
+    },
+  });
+  assert.equal(point?.payload.embeddingModel, "test-resource-embedding-provider");
+  assert.deepEqual(point?.vector, [0.5, 0.5]);
 });
 
 test("failed ingestion can be retried without leaving searchable partial chunks", async () => {

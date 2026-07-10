@@ -19,21 +19,29 @@ import {
   StoreBackedAuthorizedQuerySource,
 } from "../../memory/retrieval.ts";
 import { PermissionRouter } from "../../permission-router.ts";
-import { ResourceIngestionService } from "../../ingestion/service.ts";
+import {
+  DeterministicEmbeddingProvider,
+  HttpEmbeddingProvider,
+  ResourceIngestionService,
+  type EmbeddingProvider,
+} from "../../ingestion/service.ts";
 import type { ResourceCas } from "../../memory/stores.ts";
 import { StoreMemoryProjector } from "../../memory/projector.ts";
 import { HistoryMemoryProjectionWorker } from "../../memory/projection-worker.ts";
 
 export type CasBackendKind = "filesystem" | "object_store";
+export type RuntimeMode = "development" | "test" | "production";
 
 export interface RuntimeConfig {
   libsqlUrl: string;
   libsqlAuthToken?: string;
+  runtimeMode?: RuntimeMode;
   casBackend?: CasBackendKind;
   casDirectory?: string;
   qdrantUrl: string;
   objectStoreUrl?: string;
   qdrantApiKey?: string;
+  embeddings?: EmbeddingProvider;
 }
 
 export function loadRuntimeConfig(environment: Record<string, string | undefined>): RuntimeConfig {
@@ -47,9 +55,14 @@ export function loadRuntimeConfig(environment: Record<string, string | undefined
   if (casBackend !== "filesystem" && casBackend !== "object_store") {
     throw new Error("CAS_BACKEND must be filesystem or object_store");
   }
+  const runtimeMode = runtimeModeFrom(
+    environment.TEAM_MEMORY_RUNTIME_MODE ?? environment.NODE_ENV,
+  );
+  const embeddings = embeddingsFromEnvironment(environment, runtimeMode);
   return {
     libsqlUrl: required("LIBSQL_URL"),
     ...(authToken === undefined || authToken.length === 0 ? {} : { libsqlAuthToken: authToken }),
+    runtimeMode,
     casBackend,
     ...(casBackend === "filesystem" ? { casDirectory: required("CAS_DIRECTORY") } : {}),
     qdrantUrl: required("QDRANT_URL"),
@@ -58,7 +71,59 @@ export function loadRuntimeConfig(environment: Record<string, string | undefined
     environment.QDRANT_API_KEY.length === 0
       ? {}
       : { qdrantApiKey: environment.QDRANT_API_KEY }),
+    ...(embeddings === undefined ? {} : { embeddings }),
   };
+}
+
+function runtimeModeFrom(value: string | undefined): RuntimeMode {
+  if (value === undefined || value.length === 0) return "development";
+  if (value === "development" || value === "test" || value === "production") {
+    return value;
+  }
+  throw new Error("TEAM_MEMORY_RUNTIME_MODE must be development, test, or production");
+}
+
+function optionalEnvironmentValue(
+  environment: Record<string, string | undefined>,
+  name: string,
+): string | undefined {
+  const value = environment[name];
+  return value === undefined || value.length === 0 ? undefined : value;
+}
+
+function embeddingsFromEnvironment(
+  environment: Record<string, string | undefined>,
+  runtimeMode: RuntimeMode,
+): EmbeddingProvider | undefined {
+  const provider = optionalEnvironmentValue(environment, "EMBEDDING_PROVIDER");
+  if (provider === undefined) {
+    if (runtimeMode === "production") {
+      throw new Error("EMBEDDING_PROVIDER must be configured in production");
+    }
+    return undefined;
+  }
+  if (provider === "deterministic") {
+    if (runtimeMode === "production") {
+      throw new Error("deterministic embeddings are not allowed in production");
+    }
+    return new DeterministicEmbeddingProvider();
+  }
+  if (provider === "http") {
+    const url = optionalEnvironmentValue(environment, "EMBEDDING_URL");
+    if (url === undefined) {
+      throw new Error("EMBEDDING_URL must be configured for EMBEDDING_PROVIDER=http");
+    }
+    return new HttpEmbeddingProvider({
+      url,
+      ...(optionalEnvironmentValue(environment, "EMBEDDING_API_KEY") === undefined
+        ? {}
+        : { apiKey: optionalEnvironmentValue(environment, "EMBEDDING_API_KEY") as string }),
+      ...(optionalEnvironmentValue(environment, "EMBEDDING_MODEL") === undefined
+        ? {}
+        : { model: optionalEnvironmentValue(environment, "EMBEDDING_MODEL") as string }),
+    });
+  }
+  throw new Error("EMBEDDING_PROVIDER must be deterministic or http");
 }
 
 function createResourceCas(config: RuntimeConfig): ResourceCas {
@@ -74,6 +139,26 @@ function createResourceCas(config: RuntimeConfig): ResourceCas {
 async function readyCas(cas: ResourceCas): Promise<void> {
   if ("ready" in cas && typeof cas.ready === "function") {
     await cas.ready();
+  }
+}
+
+function runtimeMode(config: RuntimeConfig): RuntimeMode {
+  return config.runtimeMode ?? "development";
+}
+
+function configuredEmbeddings(config: RuntimeConfig): EmbeddingProvider {
+  return config.embeddings ?? new DeterministicEmbeddingProvider();
+}
+
+function assertProductionEmbeddings(
+  config: RuntimeConfig,
+  embeddings: EmbeddingProvider,
+): void {
+  if (
+    runtimeMode(config) === "production" &&
+    embeddings.productionSafe !== true
+  ) {
+    throw new Error("production embedding provider must be configured");
   }
 }
 
@@ -95,6 +180,7 @@ export class TeamMemoryRuntime {
     MemoryRetrievalRequest
   >;
   private readonly config: RuntimeConfig;
+  private readonly embeddings: EmbeddingProvider;
 
   private constructor(
     client: Client,
@@ -111,9 +197,12 @@ export class TeamMemoryRuntime {
     projection: HistoryMemoryProjectionWorker,
     retrieval: TeamMemoryRuntime["retrieval"],
     config: RuntimeConfig,
-  ) { this.client = client; this.rbac = rbac; this.history = history; this.policy = policy; this.cas = cas; this.resources = resources; this.admin = admin; this.vectors = vectors; this.relations = relations; this.bm25 = bm25; this.ingestion = ingestion; this.projection = projection; this.retrieval = retrieval; this.config = config; }
+    embeddings: EmbeddingProvider,
+  ) { this.client = client; this.rbac = rbac; this.history = history; this.policy = policy; this.cas = cas; this.resources = resources; this.admin = admin; this.vectors = vectors; this.relations = relations; this.bm25 = bm25; this.ingestion = ingestion; this.projection = projection; this.retrieval = retrieval; this.config = config; this.embeddings = embeddings; }
 
   static async create(config: RuntimeConfig): Promise<TeamMemoryRuntime> {
+    const embeddings = configuredEmbeddings(config);
+    assertProductionEmbeddings(config, embeddings);
     const client = createLibsqlClient({ url: config.libsqlUrl, ...(config.libsqlAuthToken === undefined ? {} : { authToken: config.libsqlAuthToken }) });
     const rbac = await LibsqlRbacAuthority.create(client);
     const history = await LibsqlHistoryAuthority.create(client);
@@ -125,14 +214,14 @@ export class TeamMemoryRuntime {
     const vectors = new QdrantVectorMemoryStore({ url: config.qdrantUrl, ...(config.qdrantApiKey === undefined ? {} : { apiKey: config.qdrantApiKey }) });
     const relations = await LibsqlMemoryRelationStore.create(client);
     const bm25 = await LibsqlBm25Index.create(client);
-    const ingestion = new ResourceIngestionService(policy, history, cas, vectors, bm25);
+    const ingestion = new ResourceIngestionService(policy, history, cas, vectors, bm25, embeddings);
     const projection = new HistoryMemoryProjectionWorker(
       history,
       new StoreMemoryProjector(cas, vectors, relations),
-      { bm25 },
+      { bm25, embeddings },
     );
-    const retrieval = new PermissionRouter(policy, new MemoryRetrievalAdapter(new StoreBackedAuthorizedQuerySource(vectors, relations, "cloud_active", bm25)));
-    return new TeamMemoryRuntime(client, rbac, history, policy, cas, resources, admin, vectors, relations, bm25, ingestion, projection, retrieval, config);
+    const retrieval = new PermissionRouter(policy, new MemoryRetrievalAdapter(new StoreBackedAuthorizedQuerySource(vectors, relations, "cloud_active", bm25), { embeddings }));
+    return new TeamMemoryRuntime(client, rbac, history, policy, cas, resources, admin, vectors, relations, bm25, ingestion, projection, retrieval, config, embeddings);
   }
 
   async projectMemory(rootEntityId: string, branchRef: string): Promise<void> {
@@ -140,8 +229,10 @@ export class TeamMemoryRuntime {
   }
 
   async ready(): Promise<void> {
+    assertProductionEmbeddings(this.config, this.embeddings);
     await this.client.execute("select 1");
     await readyCas(this.cas);
+    await this.embeddings.ready?.();
     const checks = [
       fetch(new URL("/healthz", this.config.qdrantUrl)).then((response) => { if (!response.ok) throw new Error(`Qdrant is not ready (${response.status})`); }),
     ];

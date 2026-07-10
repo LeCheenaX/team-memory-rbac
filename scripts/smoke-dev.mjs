@@ -3,8 +3,11 @@ import { requiredCiChecks } from "../src/adapters/runtime/operations.ts";
 
 const config = loadRuntimeConfig({
   LIBSQL_URL: "file:smoke.db",
+  TEAM_MEMORY_RUNTIME_MODE: "development",
+  CAS_BACKEND: "filesystem",
   CAS_DIRECTORY: ".scratch/smoke-cas",
   QDRANT_URL: "http://127.0.0.1:6333",
+  EMBEDDING_PROVIDER: "deterministic",
   OBJECT_STORE_URL: "http://127.0.0.1:9000",
 });
 

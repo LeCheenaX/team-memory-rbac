@@ -16,10 +16,16 @@ import type { ResourceCas, VectorMemoryPoint, VectorMemoryStore } from "../memor
 import type { Bm25Document, Bm25Index } from "./bm25.ts";
 
 export interface EmbeddingProvider {
+  readonly name?: string;
+  readonly productionSafe?: boolean;
+  ready?(): Promise<void>;
   embed(text: string): Promise<number[]>;
 }
 
 export class DeterministicEmbeddingProvider implements EmbeddingProvider {
+  readonly name = "deterministic-local-v1";
+  readonly productionSafe = false;
+
   private readonly dimensions: number;
 
   constructor(dimensions = 16) {
@@ -35,6 +41,72 @@ export class DeterministicEmbeddingProvider implements EmbeddingProvider {
     const magnitude = Math.hypot(...vector) || 1;
     return vector.map((value) => value / magnitude);
   }
+}
+
+export class HttpEmbeddingProvider implements EmbeddingProvider {
+  readonly productionSafe = true;
+  readonly name: string;
+
+  private readonly url: string;
+  private readonly apiKey: string | undefined;
+  private readonly model: string | undefined;
+
+  constructor(options: {
+    url: string;
+    apiKey?: string;
+    model?: string;
+    name?: string;
+  }) {
+    this.url = options.url;
+    this.apiKey = options.apiKey;
+    this.model = options.model;
+    this.name = options.name ?? options.model ?? "http-embedding-provider";
+  }
+
+  async ready(): Promise<void> {
+    const probe = await this.embed("team memory readiness probe");
+    if (probe.length === 0) {
+      throw new Error("embedding provider returned an empty vector");
+    }
+  }
+
+  async embed(text: string): Promise<number[]> {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (this.apiKey !== undefined) {
+      headers.authorization = `Bearer ${this.apiKey}`;
+    }
+    const response = await fetch(this.url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        input: text,
+        ...(this.model === undefined ? {} : { model: this.model }),
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`embedding provider failed (${response.status})`);
+    }
+    const payload = await response.json() as {
+      embedding?: unknown;
+      data?: Array<{ embedding?: unknown }>;
+    };
+    const embedding = Array.isArray(payload.embedding)
+      ? payload.embedding
+      : payload.data?.[0]?.embedding;
+    if (
+      !Array.isArray(embedding) ||
+      embedding.some((value) => typeof value !== "number")
+    ) {
+      throw new Error("embedding provider returned an invalid vector");
+    }
+    return embedding;
+  }
+}
+
+export function embeddingProviderName(provider: EmbeddingProvider): string {
+  return provider.name ?? "configured-embedding-provider";
 }
 
 export interface IngestResourceRevisionInput {
@@ -160,6 +232,7 @@ export class ResourceIngestionService {
   private readonly vectors: VectorMemoryStore;
   private readonly bm25: Bm25Index;
   private readonly embeddings: EmbeddingProvider;
+  private readonly embeddingModel: string;
   private readonly now: () => string;
 
   constructor(
@@ -177,6 +250,7 @@ export class ResourceIngestionService {
     this.vectors = vectors;
     this.bm25 = bm25;
     this.embeddings = embeddings;
+    this.embeddingModel = embeddingProviderName(embeddings);
     this.now = now;
   }
 
@@ -284,7 +358,7 @@ export class ResourceIngestionService {
         ...chunk,
         branchRef: input.branchRef,
         revisionId: input.revisionId,
-        embeddingModel: "deterministic-local-v1",
+        embeddingModel: this.embeddingModel,
       },
     }));
     const documents: Bm25Document[] = input.chunks.map((chunk) => ({
