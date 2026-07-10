@@ -53,6 +53,7 @@ test("root admin bootstrap can reissue the same session with a password", async 
     };
     const firstStored = JSON.parse(await readFile(firstPayload.sessionFile, "utf8")) as {
       sessionToken: string;
+      agentSessionToken: string;
     };
 
     const second = runBootstrap(directory, "correct horse battery staple");
@@ -63,16 +64,30 @@ test("root admin bootstrap can reissue the same session with a password", async 
     };
     const secondStored = JSON.parse(await readFile(secondPayload.sessionFile, "utf8")) as {
       sessionToken: string;
+      agentSessionToken: string;
+      agentId: string;
+      delegationId: string;
     };
 
     assert.equal(secondPayload.sessionId, firstPayload.sessionId);
     assert.equal(secondPayload.sessionFile, firstPayload.sessionFile);
     assert.notEqual(secondStored.sessionToken, firstStored.sessionToken);
+    assert.notEqual(secondStored.agentSessionToken, firstStored.agentSessionToken);
+    assert.equal(secondStored.agentId, "agent:main:user:test-bootstrap-admin");
+    assert.equal(
+      secondStored.delegationId,
+      "delegation:main:user:test-bootstrap-admin:root:test-bootstrap",
+    );
 
     const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({ directory }));
     try {
       assert.equal(await runtime.rbac.authenticate(firstStored.sessionToken), undefined);
+      assert.equal(await runtime.rbac.authenticate(firstStored.agentSessionToken), undefined);
       assert.equal((await runtime.rbac.authenticate(secondStored.sessionToken))?.sessionId, secondPayload.sessionId);
+      assert.equal(
+        (await runtime.rbac.authenticate(secondStored.agentSessionToken))?.subject.kind,
+        "agent",
+      );
     } finally {
       runtime.close();
     }

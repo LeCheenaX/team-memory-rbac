@@ -18,6 +18,7 @@ if (!process.execArgv.includes("--experimental-strip-types")) {
 const { TeamManagementCli, parseTeamManagementCommand } = await import("../src/adapters/cli/team-management.ts");
 const { TeamMemoryGateway } = await import("../src/adapters/runtime/gateway.ts");
 const { loadRuntimeConfig, loadRuntimeConfigFile, TeamMemoryRuntime } = await import("../src/adapters/runtime/development-stack.ts");
+const { createMainAgentSession, revokeStoredMainAgentSession } = await import("../src/adapters/local/main-agent-session.ts");
 const { clearStoredSession, readStoredSession, writeStoredSession } = await import("../src/adapters/local/session-store.ts");
 const { parseRuntimeConfigArgs, resolveConfigPath } = await import("./runtime-config-args.mjs");
 
@@ -159,18 +160,22 @@ try {
 
   async function loginWithPassword(userId, password) {
     const rootEntityId = nonEmptyEnv("TEAM_MEMORY_ROOT_ENTITY_ID") ?? nonEmptyEnv("BOOTSTRAP_ROOT_ENTITY_ID");
-    const expiresAt = nonEmptyEnv("TEAM_MEMORY_SESSION_EXPIRES_AT") ?? nonEmptyEnv("BOOTSTRAP_SESSION_EXPIRES_AT");
     if (rootEntityId === undefined) throw new Error("TEAM_MEMORY_ROOT_ENTITY_ID or BOOTSTRAP_ROOT_ENTITY_ID must be configured for password login");
-    if (expiresAt === undefined) throw new Error("TEAM_MEMORY_SESSION_EXPIRES_AT or BOOTSTRAP_SESSION_EXPIRES_AT must be configured for password login");
     return runtime.rbac.createUserSessionWithPassword({
       id: nonEmptyEnv("TEAM_MEMORY_LOGIN_SESSION_ID") ?? `session:login:${userId}`,
       userId,
       password,
       rootEntityId,
       taskScope: { rootEntityId },
-      expiresAt,
+      expiresAt: loginSessionExpiresAt(),
       createdAt: new Date().toISOString(),
     });
+  }
+
+  function loginSessionExpiresAt() {
+    const expiresAt = nonEmptyEnv("TEAM_MEMORY_SESSION_EXPIRES_AT") ?? nonEmptyEnv("BOOTSTRAP_SESSION_EXPIRES_AT");
+    if (expiresAt === undefined) throw new Error("TEAM_MEMORY_SESSION_EXPIRES_AT or BOOTSTRAP_SESSION_EXPIRES_AT must be configured for password login");
+    return expiresAt;
   }
 
   if (isPasswordLogin || isInteractiveLogin) {
@@ -195,8 +200,18 @@ try {
       throw error;
     }
     const identity = await gateway.identity(session.token);
+    const mainAgent = await createMainAgentSession(runtime, {
+      userId,
+      rootEntityId: identity.rootEntityId,
+      expiresAt: loginSessionExpiresAt(),
+    });
+    await revokeStoredMainAgentSession(runtime, storedSession);
     const sessionFile = await writeStoredSession({
       sessionToken: session.token,
+      agentSessionToken: mainAgent.token,
+      agentSessionId: mainAgent.sessionId,
+      agentId: mainAgent.agentId,
+      delegationId: mainAgent.delegationId,
       ...identity,
       savedAt: new Date().toISOString(),
     }, process.env);
@@ -204,7 +219,16 @@ try {
     if (isInteractiveLogin) {
       console.log("登录成功");
     }
-    console.log(JSON.stringify({ status: "logged_in", ...identity, sessionFile }, null, 2));
+    console.log(JSON.stringify({
+      status: "logged_in",
+      ...identity,
+      mainAgent: {
+        agentId: mainAgent.agentId,
+        delegationId: mainAgent.delegationId,
+        sessionId: mainAgent.sessionId,
+      },
+      sessionFile,
+    }, null, 2));
     process.exit(0);
   }
 

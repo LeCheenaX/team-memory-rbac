@@ -13,7 +13,8 @@ if (!process.execArgv.includes("--experimental-strip-types")) {
 
 const { TeamMemoryRuntime, loadRuntimeConfigFile } = await import("../src/adapters/runtime/development-stack.ts");
 const { BUILT_IN_ROLES } = await import("../src/rbac/catalog.ts");
-const { writeStoredSession } = await import("../src/adapters/local/session-store.ts");
+const { createMainAgentSession, revokeStoredMainAgentSession } = await import("../src/adapters/local/main-agent-session.ts");
+const { readStoredSession, writeStoredSession } = await import("../src/adapters/local/session-store.ts");
 const { parseRuntimeConfigArgs, resolveConfigPath } = await import("./runtime-config-args.mjs");
 
 const parsedArgs = parseRuntimeConfigArgs(process.argv.slice(2), import.meta.url);
@@ -136,8 +137,20 @@ try {
     console.error(duplicateOneShotMessage);
     process.exitCode = 1;
   } else {
+    const storedSession = await readStoredSession(process.env);
+    const mainAgent = await createMainAgentSession(runtime, {
+      userId,
+      rootEntityId,
+      expiresAt: sessionExpiresAt,
+      now,
+    });
+    await revokeStoredMainAgentSession(runtime, storedSession, now);
     const sessionFile = await writeStoredSession({
       sessionToken: session.token,
+      agentSessionToken: mainAgent.token,
+      agentSessionId: mainAgent.sessionId,
+      agentId: mainAgent.agentId,
+      delegationId: mainAgent.delegationId,
       sessionId,
       userId,
       rootEntityId,
@@ -148,6 +161,11 @@ try {
       rootEntityId,
       userId,
       sessionId,
+      mainAgent: {
+        agentId: mainAgent.agentId,
+        delegationId: mainAgent.delegationId,
+        sessionId: mainAgent.sessionId,
+      },
       sessionFile,
     }, null, 2));
   }

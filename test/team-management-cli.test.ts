@@ -74,6 +74,45 @@ function runTeamCommand(
   });
 }
 
+function runLocalMemoryCommand(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<CommandResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      ["--experimental-strip-types", "scripts/local-memory-tool.mjs", ...args],
+      {
+        cwd: process.cwd(),
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`local-memory-tool ${args.join(" ")} timed out after 20000ms`));
+    }, 20_000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on("close", (status) => {
+      clearTimeout(timeout);
+      resolve({ status, stdout, stderr });
+    });
+  });
+}
+
 function envWithoutLogin(): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -323,6 +362,24 @@ async function assertPasswordLoginSessionStore(): Promise<void> {
     assert.equal(login.status, 0, login.stderr);
     assert.match(login.stdout, /"status": "logged_in"/);
     assert.doesNotMatch(login.stdout, /sessionToken/);
+    assert.match(login.stdout, /"mainAgent"/);
+
+    const storedAfterLogin = JSON.parse(await readFile(env.TEAM_MEMORY_SESSION_FILE, "utf8")) as {
+      sessionToken: string;
+      agentSessionToken: string;
+      agentId: string;
+      delegationId: string;
+    };
+    assert.equal(typeof storedAfterLogin.sessionToken, "string");
+    assert.equal(typeof storedAfterLogin.agentSessionToken, "string");
+    assert.notEqual(storedAfterLogin.agentSessionToken, storedAfterLogin.sessionToken);
+    assert.equal(storedAfterLogin.agentId, "agent:main:user-cli-login");
+    assert.equal(storedAfterLogin.delegationId, "delegation:main:user-cli-login:root-cli-login");
+
+    const localTools = await runLocalMemoryCommand(["--config", configPath, "tools"], env);
+    assert.equal(localTools.status, 0, localTools.stderr);
+    assert.match(localTools.stdout, /memory\.catalog/);
+    assert.doesNotMatch(localTools.stdout, /assign_user_role/);
 
     const relogin = await runTeamCommand(
       ["--config", configPath, "login"],
@@ -333,6 +390,13 @@ async function assertPasswordLoginSessionStore(): Promise<void> {
     assert.match(relogin.stdout, /请输入用户名/);
     assert.match(relogin.stdout, /请输入密码/);
     assert.match(relogin.stdout, /登录成功/);
+
+    const oldAgentTools = await runLocalMemoryCommand(["--config", configPath, "tools"], {
+      ...env,
+      LOCAL_SESSION_TOKEN: storedAfterLogin.agentSessionToken,
+    });
+    assert.equal(oldAgentTools.status, 1);
+    assert.match(oldAgentTools.stderr, /invalid session/);
 
     const missingUser = await runTeamCommand(
       ["--config", configPath, "login"],

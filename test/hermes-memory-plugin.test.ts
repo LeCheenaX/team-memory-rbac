@@ -18,6 +18,7 @@ test("Team Memory ships as a real Hermes memory plugin", async () => {
   assert.match(plugin, /\/workspace\/config\/team-memory\.hermes-local\.json/);
   assert.match(plugin, /TEAM_MEMORY_SESSION_FILE/);
   assert.match(plugin, /def _session_token/);
+  assert.match(plugin, /agentSessionToken/);
   assert.match(plugin, /return bool\(_session_token\(\)\)/);
   assert.match(plugin, /Variable metadata appears under extra/);
   assert.match(plugin, /names/);

@@ -209,7 +209,9 @@ Agent:
 Real path:
 
 1. Hermes loads `team_memory` plugin.
-2. Plugin reads `TEAM_MEMORY_TOKEN` or `TEAM_MEMORY_SESSION_FILE`.
+2. Plugin reads `TEAM_MEMORY_TOKEN` or `TEAM_MEMORY_SESSION_FILE`. When a
+   session file is present, it prefers `agentSessionToken` and falls back to the
+   legacy `sessionToken`.
 3. Plugin initializes `HermesTeamMemoryProvider.from_local(...)` or
    `.from_http(...)`.
 4. Provider calls `memory.catalog` or identity endpoints through the local/http

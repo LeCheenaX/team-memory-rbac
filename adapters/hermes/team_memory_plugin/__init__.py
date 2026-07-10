@@ -35,7 +35,7 @@ def _session_token() -> str:
         return ""
     except json.JSONDecodeError:
         return ""
-    value = payload.get("sessionToken")
+    value = payload.get("agentSessionToken") or payload.get("sessionToken")
     return value if isinstance(value, str) else ""
 
 

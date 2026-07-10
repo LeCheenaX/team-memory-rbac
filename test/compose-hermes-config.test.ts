@@ -84,6 +84,9 @@ test("Hermes local compose setup and manual flow do not require server client to
   assert.match(manualFlow, /npm --prefix \/opt\/team-memory-rbac run login admin adminpswd/);
   assert.match(manualFlow, /config\/team-memory\.hermes-local\.json/);
   assert.match(manualFlow, /team-memory-session\.json/);
+  assert.match(manualFlow, /automatic\s+main-agent session/);
+  assert.match(manualFlow, /do not copy an agent token after login/);
+  assert.match(manualFlow, /members assign assignment:test1-readonly-curator/);
   assert.match(manualFlow, /Reset the Hermes conversation before testing recall/);
   assert.match(manualFlow, /\/reset/);
   assert.match(manualFlow, /cannot be satisfied from the model's short-term/);

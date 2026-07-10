@@ -6,6 +6,8 @@ export interface StoredTeamMemorySession {
   sessionId: string;
   userId: string;
   rootEntityId: string;
+  agentSessionToken?: string;
+  agentSessionId?: string;
   agentId?: string;
   delegationId?: string;
   savedAt: string;
@@ -45,6 +47,8 @@ export async function readStoredSession(
       sessionId: parsed.sessionId,
       userId: parsed.userId,
       rootEntityId: parsed.rootEntityId,
+      ...(typeof parsed.agentSessionToken === "string" ? { agentSessionToken: parsed.agentSessionToken } : {}),
+      ...(typeof parsed.agentSessionId === "string" ? { agentSessionId: parsed.agentSessionId } : {}),
       ...(typeof parsed.agentId === "string" ? { agentId: parsed.agentId } : {}),
       ...(typeof parsed.delegationId === "string" ? { delegationId: parsed.delegationId } : {}),
       savedAt: parsed.savedAt,

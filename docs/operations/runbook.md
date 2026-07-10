@@ -22,19 +22,69 @@ environment; memory runtime settings must not.
 
 Production v1 is one logical Cloud Authority: one authoritative SQL/History source, one authoritative CAS namespace, one authoritative RBAC source, and replaceable Qdrant/BM25/relation projections. Service workers are request handlers, not authorities. Do not run AP multi-master cloud authority replicas in v1.
 
-## Agent Onboarding
+## Users, Login, And Permissions
 
-Use a root administrator token to create a production agent identity, delegation, and one-time agent session token:
+Create users and assign their root role from an authenticated administrator
+session. A root administrator can create the user and initial role in one
+command:
 
 ```sh
-TEAM_MEMORY_TOKEN=<admin-token> npm run team -- agents onboard <agent-id> <delegation-id> <session-id> <session-expires-at>
+npm run team -- --config <config-path> members create <user-id> <display-name> <password> <role-id>
 ```
 
-The returned `session.token` is the only value OpenClaw, Hermes, Claude Code, Codex, or another host should receive. Hosts must pass it as `TEAM_MEMORY_TOKEN`; they must not provide user, root, agent, or task-scope identity fields in tool payloads.
+Use `role-researcher` for read/search users, `role-curator` for ordinary memory
+writers, `role-maintainer` for operational memory maintenance, and
+`role-root-admin` only for people who can create users and change assignments.
+To grant or change a role later:
+
+```sh
+npm run team -- --config <config-path> members assign <assignment-id> <user-id> <role-id>
+npm run team -- --config <config-path> members revoke <assignment-id> <user-id>
+```
+
+Log in on the device or container that will run the host:
+
+```sh
+npm run team -- --config <config-path> login <user-id> <password>
+```
+
+Login writes the local Team Memory session file. That file contains the human
+user session for CLI administration plus an automatically issued main-agent
+session for host memory providers such as Hermes. The main agent inherits the
+user's effective non-administrator memory permissions for the selected root; it
+does not receive user-management, role-assignment, root-create, or root-delete
+permissions. Hosts should use the session file by default and should not ask the
+operator to copy an agent token after login.
+
+Log out by clearing the local session file:
+
+```sh
+npm run team -- logout
+```
+
+`TEAM_MEMORY_TOKEN` and `ADMIN_TOKEN` remain low-level one-command overrides.
+They are useful for automation and server setup, but they bypass the local login
+session file and should not be the normal Hermes device-login path.
+
+## Agent And Subagent Sessions
+
+The main host agent is created automatically during login. When a host delegates
+work to a subagent, it must use a short-lived agent session whose delegation is a
+subset of the owner's permissions and the current task scope. Long-running
+service clients may still be pre-provisioned explicitly:
+
+```sh
+TEAM_MEMORY_TOKEN=<admin-or-setup-token> npm run team -- --config <config-path> agents onboard <agent-id> <delegation-id> <session-id> <session-expires-at> [read-only|<permissions-json>]
+```
+
+Treat explicit `agents onboard` as service setup, not as a required step after a
+person logs in. Hosts must not provide user, root, agent, or task-scope identity
+fields in tool payloads.
 
 ## OpenClaw
 
-Set `TEAM_MEMORY_URL`, `TEAM_MEMORY_TOKEN`, and `TEAM_MEMORY_MODE`.
+Set `TEAM_MEMORY_URL`, `TEAM_MEMORY_MODE`, and either a local session file from
+`npm run team -- login` or an explicit service token in `TEAM_MEMORY_TOKEN`.
 
 For parallel memory, use `TEAM_MEMORY_MODE=parallel_native_team_memory` and install `adapters/openclaw/openclaw.plugin.json` as a tool plugin. It exposes `team_memory.search`, `team_memory.write`, `team_memory.import_resource`, and `team_memory.read_resource`.
 
@@ -56,7 +106,7 @@ from src.adapters.hermes.http_client import HermesMemoryHttpAdapter
 
 memory = HermesMemoryHttpAdapter(
     "https://team-memory.example.com",
-    "agent-session-token",
+    "main-agent-or-service-session-token",
 )
 ```
 
@@ -67,7 +117,7 @@ from src.adapters.hermes.http_client import HermesTeamMemoryProvider
 
 provider = HermesTeamMemoryProvider.from_http(
     "https://team-memory.example.com",
-    "agent-session-token",
+    "main-agent-or-service-session-token",
 )
 ```
 
@@ -82,7 +132,7 @@ Use `ClaudeCodeTeamMemoryHooks` for automatic lifecycle integration. Configure `
 Codex and other MCP hosts can run:
 
 ```sh
-TEAM_MEMORY_URL=https://team-memory.example.com TEAM_MEMORY_TOKEN=<agent-token> npm run mcp:stdio
+TEAM_MEMORY_URL=https://team-memory.example.com TEAM_MEMORY_TOKEN=<main-agent-or-service-token> npm run mcp:stdio
 ```
 
 Use `adapters/claude-code/.mcp.json` as a project-scoped starting point only when Claude Code also needs explicit Team Memory tools.

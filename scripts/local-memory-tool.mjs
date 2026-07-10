@@ -21,7 +21,7 @@ const parsedArgs = parseRuntimeConfigArgs(process.argv.slice(2), import.meta.url
 const [command, toolName, rawPayload] = parsedArgs.args;
 const storedSession = await readStoredSession(process.env);
 const token = process.env.LOCAL_SESSION_TOKEN === undefined || process.env.LOCAL_SESSION_TOKEN.length === 0
-  ? storedSession?.sessionToken
+  ? (storedSession?.agentSessionToken ?? storedSession?.sessionToken)
   : process.env.LOCAL_SESSION_TOKEN;
 if (token === undefined || token.length === 0) {
   throw new Error("Team Memory is not logged in. Run `team-memory login <userId> <password>` first.");

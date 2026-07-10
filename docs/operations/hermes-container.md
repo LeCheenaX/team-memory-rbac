@@ -93,8 +93,11 @@ The bootstrap command writes the active Team Memory session to
 `/root/.hermes/team-memory-session.json`, which persists in the
 `hermes-local-home` volume. Use `team -- logout`, interactive
 `team -- --config /workspace/config/team-memory.hermes-local.json login`, or one-shot
-`npm run login <userId> <password>` to switch accounts. `TEAM_MEMORY_TOKEN` remains a low-level
-one-command override, but the normal Hermes flow should use the session file.
+`npm run login <userId> <password>` to switch accounts. Login also writes a
+main-agent session into the same file. Hermes reads that main-agent session
+automatically, so a logged-in container does not need a copied agent token.
+`TEAM_MEMORY_TOKEN` remains a low-level one-command override, but the normal
+Hermes flow should use the session file.
 
 Activate the Team Memory external memory plugin with:
 
@@ -128,7 +131,13 @@ The server runtime is inactive until setup validates the configured real HTTP
 embedding model and writes activation. Do not configure libSQL, CAS, Qdrant, or
 embedding settings with environment variables.
 
-Create two agent session tokens with the manual bootstrap/onboarding flow, then
+For ordinary use, log in inside each Hermes container and let Team Memory write
+`/root/.hermes/team-memory-session.json`. The session file holds both the user
+session and the automatically issued main-agent session used by the Hermes
+memory provider.
+
+For long-running service-client tests that need fixed identities before a
+container logs in, you may still pre-provision explicit service agent tokens and
 export them:
 
 ```powershell
@@ -136,7 +145,8 @@ $env:HERMES_A_TOKEN = "<agent session token for Hermes A>"
 $env:HERMES_B_TOKEN = "<agent session token for Hermes B>"
 ```
 
-These tokens are intentionally server-mode only. They are not needed for
+These tokens are an override for server-mode service clients. They are not
+needed after a normal container login, and they are not needed for
 `hermes-local` bootstrap or the Test 1 local conversation.
 
 Start Hermes A:
@@ -163,7 +173,7 @@ Both containers receive:
 
 ```txt
 TEAM_MEMORY_URL=http://service:3000
-TEAM_MEMORY_TOKEN=<their own token>
+TEAM_MEMORY_TOKEN=<optional service-client override; normally empty after container login>
 PYTHONPATH=/opt/team-memory-rbac
 ```
 

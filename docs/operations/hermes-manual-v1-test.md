@@ -38,8 +38,8 @@ That is expected. The state that must survive is stored in named volumes:
 - `hermes-local-workspace` is mounted at `/workspace` and keeps the Test 1 local
   Team Memory database and CAS files.
 
-Do not wait for `bootstrap:root-admin` or `team -- agents onboard` to
-turn into a Hermes chat session. The conversation begins only after a command
+Do not wait for `bootstrap:root-admin`, `team -- login`, or service-client
+setup commands to turn into a Hermes chat session. The conversation begins only after a command
 like `docker compose -f compose.yaml -f compose.hermes.yaml run --rm
 hermes-local hermes` opens the Hermes chat UI.
 
@@ -178,13 +178,21 @@ shape is:
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run login admin adminpswd
 ```
 
+Every successful login writes `/root/.hermes/team-memory-session.json` with two
+sessions: the human user session for `team` CLI operations, and an automatic
+main-agent session for Hermes memory calls. The main agent inherits the user's
+effective non-administrator memory permissions. It must not be given
+user-management, role-assignment, root-create, or root-delete permissions.
+Hermes should use this file directly; do not copy an agent token after login.
+
 Do not set `HERMES_A_TOKEN` or `HERMES_B_TOKEN` for Test 1. Those are Test 2
 server-client tokens and are created only after the Team Memory HTTP server is
 bootstrapped.
 
 Create a read-only user for the RBAC denial pass. This is still setup; the
 denial itself must be tested by logging out, logging in as this user, and
-talking to Hermes.
+talking to Hermes. The user's role is assigned at creation time with
+`role-researcher`.
 
 ```powershell
 $env:TEST1_READONLY_PASSWORD = "<test read-only password>"
@@ -196,6 +204,13 @@ To switch identities later:
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- logout
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run login user:test1-admin $env:BOOTSTRAP_USER_PASSWORD
+```
+
+To change an existing user's permissions, use the administrator's user session:
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json members assign assignment:test1-readonly-curator user:test1-readonly role-curator
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json members revoke assignment:test1-readonly-curator user:test1-readonly
 ```
 
 ### Configure Hermes Native Settings
@@ -452,11 +467,12 @@ curl.exe http://127.0.0.1:3000/ready
 curl.exe -H "Authorization: Bearer $env:ADMIN_TOKEN" http://127.0.0.1:3000/identity
 ```
 
-### Server-Side Permission Setup
+### Server-Side Service Client Setup
 
-Use only the server admin token to create Hermes client sessions. These setup
-commands are allowed because Test 2 requires server-side permission
-configuration.
+Ordinary Hermes containers should log in and use their session file. Test 2
+also needs fixed long-running client identities so two containers can prove
+shared server memory without sharing a local session file. Use only the server
+admin token for that service-client setup.
 
 ```powershell
 $env:TEAM_MEMORY_TOKEN = $env:ADMIN_TOKEN
