@@ -111,9 +111,9 @@ class TeamMemoryHermesProvider(MemoryProvider):
                     "properties": {
                         "query": {"type": "string"},
                         "limit": {"type": "integer"},
-                        "entityIds": {"type": "array", "items": {"type": "string"}},
+                        "layer": {"type": "string", "enum": ["L1", "L2", "L3"]},
+                        "names": {"type": "array", "items": {"type": "string"}},
                         "tagsAny": {"type": "array", "items": {"type": "string"}},
-                        "tagsNone": {"type": "array", "items": {"type": "string"}},
                     },
                     "required": ["query"],
                 },
@@ -155,9 +155,9 @@ class TeamMemoryHermesProvider(MemoryProvider):
                 str(args.get("query", "")),
                 session_id=session_id,
                 limit=args.get("limit"),
-                entityIds=args.get("entityIds"),
+                layer=args.get("layer"),
+                names=args.get("names"),
                 tagsAny=args.get("tagsAny"),
-                tagsNone=args.get("tagsNone"),
             )
             return json.dumps(result)
         if tool_name == "team_memory_catalog":

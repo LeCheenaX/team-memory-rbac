@@ -9,6 +9,7 @@ import type {
 import {
   InMemoryAuthorizedQuerySource,
   MemoryRetrievalAdapter,
+  normalizeBm25Score,
   type MemoryActiveView,
 } from "../src/memory/index.ts";
 import { PermissionRouter } from "../src/permission-router.ts";
@@ -258,6 +259,67 @@ test("workflow retrieval expands only workflow relations", async () => {
   assert.deepEqual(
     result.value.items.map((item) => item.kind),
     ["entity", "relation"],
+  );
+});
+
+test("stable recall fuses candidates by layer, tags, names, and relation packing", async () => {
+  const recallRouter = new PermissionRouter(
+    allowPolicy,
+    new MemoryRetrievalAdapter(source, {
+      embeddings: { embed: async () => [1, 0] },
+      entityExtractor: { extract: () => ["Release workflow"] },
+    }),
+  );
+
+  const l3 = await recallRouter.execute(
+    request({
+      kind: "recall",
+      text: "Release workflow",
+      tagsAny: ["workflow"],
+      names: ["Release workflow"],
+    }),
+  );
+  if (!("value" in l3)) assert.fail("expected L3 recall value");
+  assert.deepEqual(
+    l3.value.items.map((item) => item.kind),
+    ["entity"],
+  );
+  assert.equal(l3.value.items[0]?.kind === "entity" ? l3.value.items[0].branch : undefined, undefined);
+
+  const l2 = await recallRouter.execute(
+    request({
+      kind: "recall",
+      text: "Release workflow",
+      layer: "L2",
+      tagsAny: ["workflow"],
+      limit: 5,
+    }),
+  );
+  if (!("value" in l2)) assert.fail("expected L2 recall value");
+  assert.ok(l2.value.items.some(
+    (item) =>
+      item.kind === "relation" &&
+      item.relation.id === "workflow-evidence",
+  ));
+  assert.ok(l2.value.items.every((item) => item.score >= 0 && item.score <= 1));
+
+  const l1 = await recallRouter.execute(
+    request({
+      kind: "recall",
+      text: "Release workflow evidence",
+      layer: "L1",
+      limit: 5,
+    }),
+  );
+  if (!("value" in l1)) assert.fail("expected L1 recall value");
+  assert.ok(l1.value.items.some(
+    (item) => item.kind === "resource_chunk" && item.chunk.id === "chunk-1",
+  ));
+
+  assert.equal(
+    normalizeBm25Score(5, "short query") >
+      normalizeBm25Score(1, "short query"),
+    true,
   );
 });
 

@@ -36,6 +36,10 @@ const readPermission: Permission = {
   action: "read",
   resourceKind: "memory_entity",
 };
+const searchPermission: Permission = {
+  action: "search",
+  resourceKind: "memory_entity",
+};
 const writePermission: Permission = {
   action: "write_entity",
   resourceKind: "memory_entity",
@@ -104,9 +108,10 @@ function setup() {
       },
     ],
     delegations: [
-      delegation("delegation-read", "agent-read", [readPermission]),
+      delegation("delegation-read", "agent-read", [readPermission, searchPermission]),
       delegation("delegation-curator", "agent-curator", [
         readPermission,
+        searchPermission,
         writePermission,
       ]),
     ],
@@ -399,9 +404,9 @@ test("OpenClaw, Claude Code, and Hermes expose host-specific memory integration 
     new SessionMemorySdk(sessions, policy),
     [
       {
-        name: "memory.read",
-        description: "Read team memory",
-        action: "read",
+        name: "memory.search",
+        description: "Search team memory",
+        action: "search",
         resourceKind: "memory_entity",
         inputSchema: { type: "object", properties: {} },
         execute: async () => "search",

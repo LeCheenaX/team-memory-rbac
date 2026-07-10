@@ -221,17 +221,66 @@ function defaultAgentPermissions(ownerPermissions: readonly Permission[]): Permi
 }
 
 const agentToolCatalog = [
-  { name: "memory.importResource", description: "Import a resource", action: "import_resource", resourceKind: "resource" },
-  { name: "memory.ingestResource", description: "Chunk and index a resource revision", action: "index_resource", resourceKind: "resource" },
-  { name: "memory.readResource", description: "Read a resource", action: "read", resourceKind: "resource" },
   { name: "memory.catalog", description: "List visible memory entities and tags", action: "read", resourceKind: "memory_entity" },
-  { name: "memory.write", description: "Write memory", action: "write_entity", resourceKind: "memory_entity" },
   { name: "memory.search", description: "Search memory", action: "search", resourceKind: "memory_entity" },
-  { name: "memory.history", description: "List memory history", action: "read", resourceKind: "memory_entity" },
-  { name: "memory.conflicts", description: "List memory conflicts", action: "read", resourceKind: "memory_entity" },
-  { name: "memory.resolveConflict", description: "Resolve memory conflicts", action: "merge", resourceKind: "memory_entity" },
-  { name: "memory.syncPull", description: "Pull authorized sync events", action: "read", resourceKind: "memory_entity" },
+  { name: "memory.write", description: "Capture or update memory", action: "write_entity", resourceKind: "memory_entity" },
 ] as const;
+
+const stableCatalogFields = new Set<string>();
+const stableSearchFields = new Set([
+  "query",
+  "limit",
+  "layer",
+  "names",
+  "tagsAny",
+]);
+
+function assertOnlyFields(
+  payload: Record<string, unknown>,
+  allowed: Set<string>,
+  surface: string,
+): void {
+  for (const field of Object.keys(payload)) {
+    if (!allowed.has(field)) {
+      throw new TeamMemoryGatewayError(
+        "validation_failed",
+        `${surface} payload cannot provide ${field}`,
+      );
+    }
+  }
+}
+
+function optionalStringList(
+  payload: Record<string, unknown>,
+  key: string,
+): string[] | undefined {
+  const value = payload[key];
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.some((item) => typeof item !== "string" || item.length === 0)
+  ) {
+    throw new TeamMemoryGatewayError(
+      "validation_failed",
+      `${key} must be an array of non-empty strings`,
+    );
+  }
+  return value;
+}
+
+function optionalRecallLayer(
+  payload: Record<string, unknown>,
+): "L1" | "L2" | "L3" | undefined {
+  const value = payload.layer;
+  if (value === undefined) return undefined;
+  if (value === "L1" || value === "L2" || value === "L3") {
+    return value;
+  }
+  throw new TeamMemoryGatewayError(
+    "validation_failed",
+    "layer must be L1, L2, or L3",
+  );
+}
 
 export class TeamMemoryGateway {
   private readonly runtime: TeamMemoryRuntime;
@@ -749,30 +798,23 @@ export class TeamMemoryGateway {
     token: string | undefined,
     payload: Record<string, unknown> = {},
   ): Promise<{
-    rootEntityId: string;
+    rootName: string;
     branchRef: string;
     entities: Array<{
-      id: string;
+      name: string;
       status: string;
-      currentBranchId?: string;
-      currentBranch?: {
-        id: string;
-        title: string;
-        description: string;
-        tags: string[];
-        status: string;
-        extra?: Record<string, unknown>;
-      };
+      tags: string[];
     }>;
     tags: Array<{
       tag: string;
       count: number;
-      entityIds: string[];
+      names: string[];
     }>;
   }> {
     assertNoIdentityOverride(payload);
+    assertOnlyFields(payload, stableCatalogFields, "memory.catalog");
     const session = await this.authenticate(token);
-    const branch = branchRef(payload);
+    const branch = "main";
     const decision = await this.runtime.policy.decide({
       subject: gatewaySubject(session),
       rootEntityId: session.rootEntityId,
@@ -794,6 +836,12 @@ export class TeamMemoryGateway {
       candidate.id,
       candidate,
     ]));
+    const rootEntity = view.entities.find(
+      (entity) => entity.id === session.rootEntityId && entity.rootEntityId === null,
+    );
+    const rootBranch = rootEntity?.currentBranchId === undefined
+      ? undefined
+      : branchById.get(rootEntity.currentBranchId);
     const visibleEntities = view.entities
       .filter((entity) => entity.rootEntityId !== null)
       .filter((entity) =>
@@ -819,37 +867,26 @@ export class TeamMemoryGateway {
       });
     const tagMap = new Map<string, Set<string>>();
     for (const { entity, branch } of visibleEntities) {
+      const name = branch?.title ?? entity.id;
       for (const tag of branch?.tags ?? []) {
-        const entityIds = tagMap.get(tag) ?? new Set<string>();
-        entityIds.add(entity.id);
-        tagMap.set(tag, entityIds);
+        const names = tagMap.get(tag) ?? new Set<string>();
+        names.add(name);
+        tagMap.set(tag, names);
       }
     }
     return {
-      rootEntityId: session.rootEntityId,
+      rootName: rootBranch?.title ?? session.rootEntityId,
       branchRef: branch,
       entities: visibleEntities.map(({ entity, branch }) => ({
-        id: entity.id,
+        name: branch?.title ?? entity.id,
         status: entity.status,
-        ...(entity.currentBranchId === undefined ? {} : { currentBranchId: entity.currentBranchId }),
-        ...(branch === undefined
-          ? {}
-          : {
-              currentBranch: {
-                id: branch.id,
-                title: branch.title,
-                description: branch.description,
-                tags: [...branch.tags],
-                status: branch.status,
-                ...(branch.extraInfo === undefined ? {} : { extra: branch.extraInfo }),
-              },
-            }),
+        tags: [...(branch?.tags ?? [])],
       })),
       tags: [...tagMap.entries()]
-        .map(([tag, entityIds]) => ({
+        .map(([tag, names]) => ({
           tag,
-          count: entityIds.size,
-          entityIds: [...entityIds].sort(),
+          count: names.size,
+          names: [...names].sort(),
         }))
         .sort((left, right) => left.tag.localeCompare(right.tag)),
     };
@@ -900,16 +937,32 @@ export class TeamMemoryGateway {
     payload: Record<string, unknown>,
   ): Promise<PermissionRouteResult<MemoryRetrievalResult>> {
     assertNoIdentityOverride(payload);
+    assertOnlyFields(payload, stableSearchFields, "memory.search");
     const session = await this.authenticate(token);
+    const text = stringValue(payload, "query");
     const request: MemoryRetrievalRequest = {
       subject: gatewaySubject(session),
       rootEntityId: session.rootEntityId,
       taskScope: session.taskScope,
-      branchRef: branchRef(payload),
-      action: (optionalString(payload, "action") ?? "search") as MemoryAction,
-      resourceKind: (optionalString(payload, "resourceKind") ??
-        "memory_entity") as MemoryObjectKind,
-      query: objectValue(payload, "query") as MemoryRetrievalRequest["query"],
+      branchRef: "main",
+      action: "search",
+      resourceKind: "memory_entity",
+      query: {
+        kind: "recall",
+        text,
+        ...(numberValue(payload, "limit") === undefined
+          ? {}
+          : { limit: numberValue(payload, "limit") as number }),
+        ...(optionalRecallLayer(payload) === undefined
+          ? {}
+          : { layer: optionalRecallLayer(payload) as "L1" | "L2" | "L3" }),
+        ...(optionalStringList(payload, "names") === undefined
+          ? {}
+          : { names: optionalStringList(payload, "names") as string[] }),
+        ...(optionalStringList(payload, "tagsAny") === undefined
+          ? {}
+          : { tagsAny: optionalStringList(payload, "tagsAny") as string[] }),
+      },
     };
     return this.retrievalRouter.execute(request);
   }

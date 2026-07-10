@@ -105,7 +105,8 @@ async function writeAndSearch(adapter, token, host) {
     },
   });
   return adapter.invokeTool(token, "memory.search", {
-    query: { kind: "entity", text: title, limit: 5 },
+    query: title,
+    limit: 5,
   });
 }
 
@@ -113,7 +114,7 @@ async function forgedIdentityRejected(adapter, token, host) {
   try {
     await adapter.invokeTool(token, "memory.search", {
       rootEntityId: "root:forged",
-      query: { kind: "entity", text: `Local ${host}` },
+      query: `Local ${host}`,
     });
     return false;
   } catch (error) {

@@ -167,9 +167,11 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     assert.equal(identity.agentId, "agent-prod-openclaw");
     assert.equal(identity.rootEntityId, "root-prod");
     const tools = await client.listTools() as Array<{ name: string }>;
+    assert.ok(tools.some((tool) => tool.name === "memory.catalog"));
+    assert.ok(tools.some((tool) => tool.name === "memory.search"));
     assert.ok(tools.some((tool) => tool.name === "memory.write"));
-    assert.ok(tools.some((tool) => tool.name === "memory.importResource"));
-    assert.ok(tools.some((tool) => tool.name === "memory.ingestResource"));
+    assert.ok(!tools.some((tool) => tool.name === "memory.importResource"));
+    assert.ok(!tools.some((tool) => tool.name === "memory.ingestResource"));
 
     const openclaw = new OpenClawTeamMemoryPlugin({
       baseUrl: fixture.baseUrl,
@@ -179,7 +181,7 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     });
     assert.deepEqual(
       openclaw.tools().map((tool) => tool.name),
-      ["memory_search", "memory_get", "memory_write", "memory_import", "memory_ingest"],
+      ["memory_search", "memory_catalog", "memory_write"],
     );
 
     await openclaw.call("memory_write", {
@@ -254,7 +256,7 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
       method: "tools/call",
       params: {
         name: "memory.search",
-        arguments: { query: { kind: "entity", text: "Production mcp" } },
+        arguments: { query: "Production mcp" },
       },
     }));
     await waitForResponses(writes, 3);

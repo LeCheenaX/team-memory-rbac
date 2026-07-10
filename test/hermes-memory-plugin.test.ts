@@ -18,7 +18,9 @@ test("Team Memory ships as a real Hermes memory plugin", async () => {
   assert.match(plugin, /def _session_token/);
   assert.match(plugin, /return bool\(_session_token\(\)\)/);
   assert.match(plugin, /Variable metadata appears under extra/);
-  assert.match(plugin, /entityIds/);
+  assert.match(plugin, /names/);
+  assert.doesNotMatch(plugin, /entityIds/);
+  assert.doesNotMatch(plugin, /tagsNone/);
   assert.match(plugin, /team_memory_catalog/);
   assert.match(plugin, /Pass content and optional outcome/);
   assert.match(plugin, /import the resource into Team Memory\/CAS/);

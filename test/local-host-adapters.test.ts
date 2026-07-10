@@ -46,7 +46,7 @@ test("OpenClaw plugin and Claude Code hooks run against a local gateway without 
     });
     assert.deepEqual(
       openclaw.tools().map((tool) => tool.name),
-      ["memory_search", "memory_get", "memory_write", "memory_import", "memory_ingest"],
+      ["memory_search", "memory_catalog", "memory_write"],
     );
     await openclaw.call("memory_write", {
       clientMutationId: "local-openclaw-entity",

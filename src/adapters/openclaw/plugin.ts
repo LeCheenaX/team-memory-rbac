@@ -7,6 +7,7 @@ import type {
 
 export interface OpenClawTeamMemoryClient {
   search(input: Record<string, unknown>): Promise<unknown>;
+  catalog(input?: Record<string, unknown>): Promise<unknown>;
   write(input: Record<string, unknown>): Promise<unknown>;
   importResource(input: Record<string, unknown>): Promise<unknown>;
   ingestResource(resourceId: string, input: Record<string, unknown>): Promise<unknown>;
@@ -67,18 +68,14 @@ export class OpenClawTeamMemoryPlugin {
   tools(): OpenClawToolDefinition[] {
     const common = [
       this.tool("team_memory.search", "Search RBAC-protected Team Memory"),
+      this.tool("team_memory.catalog", "List visible Team Memory names and tags"),
       this.tool("team_memory.write", "Write RBAC-protected Team Memory"),
-      this.tool("team_memory.import_resource", "Import a resource into Team Memory"),
-      this.tool("team_memory.ingest_resource", "Chunk and index a Team Memory resource"),
-      this.tool("team_memory.read_resource", "Read a Team Memory resource"),
     ];
     if (this.mode === "parallel_native_team_memory") return common;
     return [
       this.tool("memory_search", "OpenClaw active-memory recall through Team Memory"),
-      this.tool("memory_get", "OpenClaw active-memory resource lookup through Team Memory"),
+      this.tool("memory_catalog", "OpenClaw active-memory catalog through Team Memory"),
       this.tool("memory_write", "OpenClaw active-memory write through Team Memory"),
-      this.tool("memory_import", "OpenClaw active-memory import through Team Memory"),
-      this.tool("memory_ingest", "OpenClaw active-memory resource indexing through Team Memory"),
     ];
   }
 
@@ -87,6 +84,9 @@ export class OpenClawTeamMemoryPlugin {
       case "team_memory.search":
       case "memory_search":
         return this.client.search(this.normalizeSearch(input));
+      case "team_memory.catalog":
+      case "memory_catalog":
+        return this.client.catalog({});
       case "team_memory.write":
       case "memory_write":
         return this.client.write(input);
@@ -145,11 +145,16 @@ export class OpenClawTeamMemoryPlugin {
   }
 
   private normalizeSearch(input: Record<string, unknown>): Record<string, unknown> {
-    if ("query" in input) return input;
+    if (typeof input.query === "string") return input;
     const text = this.requiredString(input, "text");
     return {
-      ...input,
-      query: { kind: "entity", text },
+      query: text,
+      ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
+      ...(Array.isArray(input.tagsAny) ? { tagsAny: input.tagsAny } : {}),
+      ...(Array.isArray(input.names) ? { names: input.names } : {}),
+      ...(input.layer === "L1" || input.layer === "L2" || input.layer === "L3"
+        ? { layer: input.layer }
+        : {}),
     };
   }
 

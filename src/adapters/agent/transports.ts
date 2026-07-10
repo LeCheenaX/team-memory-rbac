@@ -158,7 +158,7 @@ const OPENCLAW_PROFILE: AgentRuntimeProfile = {
           hostConfiguration: {
             actions: [
               "Register Team Memory as the active memory plugin",
-              "Expose memory_search and memory_get-compatible tools backed by Team Memory",
+              "Expose memory_search and memory_catalog-compatible tools backed by Team Memory",
               "Route promotion and write tools through the Team Memory gateway",
             ],
             settings: {
@@ -357,22 +357,13 @@ class SessionTransportAdapter implements PrincipalContextTransport {
       .map((tool) => tool.name)
       .filter((name) =>
         [
-          "memory.read",
           "memory.search",
-          "memory.readResource",
-          "memory.ingestResource",
-          "memory.syncPull",
+          "memory.catalog",
         ].includes(name),
       );
     const writeTools = visibleTools
       .map((tool) => tool.name)
-      .filter((name) =>
-        [
-          "memory.write",
-          "memory.importResource",
-          "memory.ingestResource",
-        ].includes(name),
-      );
+      .filter((name) => ["memory.write"].includes(name));
     return {
       host: this.profile.host,
       displayName: this.profile.displayName,
@@ -464,16 +455,9 @@ export class McpTeamMemoryAdapter {
     inputSchema: { type: "object"; additionalProperties: true };
   }> {
     return [
-      "memory.importResource",
-      "memory.ingestResource",
-      "memory.readResource",
       "memory.catalog",
-      "memory.write",
       "memory.search",
-      "memory.history",
-      "memory.conflicts",
-      "memory.resolveConflict",
-      "memory.syncPull",
+      "memory.write",
     ].map((name) => ({
       name,
       inputSchema: { type: "object", additionalProperties: true },

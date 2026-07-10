@@ -157,6 +157,11 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       (JSON.parse(toolsText) as { value: Array<{ name: string }> }).value
         .some((tool) => tool.name === "memory.catalog"),
     );
+    assert.deepEqual(
+      (JSON.parse(toolsText) as { value: Array<{ name: string }> }).value
+        .map((tool) => tool.name),
+      ["memory.catalog", "memory.search"],
+    );
 
     assert.equal(
       (
@@ -242,8 +247,8 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     assert.equal(chunkWrite.status, 200, chunkWriteText);
 
     const httpSearch = await post(base, "/memory/search", readSession.token, {
-      branchRef: "main",
-      query: { kind: "entity", text: "Gateway", tagsAny: ["guide"] },
+      query: "Gateway",
+      tagsAny: ["guide"],
     });
     const httpSearchText = await httpSearch.text();
     assert.equal(httpSearch.status, 200, httpSearchText);
@@ -252,28 +257,28 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
         .items.length,
       1,
     );
-    const httpCatalog = await fetch(`${base}/memory/catalog?branchRef=main`, {
+    const httpCatalog = await fetch(`${base}/memory/catalog`, {
       headers: { authorization: `Bearer ${readSession.token}` },
     });
     const httpCatalogText = await httpCatalog.text();
     assert.equal(httpCatalog.status, 200, httpCatalogText);
     const catalog = JSON.parse(httpCatalogText) as {
       value: {
-        entities: Array<{ id: string; currentBranch?: { title: string; tags: string[] } }>;
-        tags: Array<{ tag: string; count: number }>;
+        entities: Array<{ name: string; status: string; tags: string[] }>;
+        tags: Array<{ tag: string; count: number; names: string[] }>;
       };
     };
     assert.ok(catalog.value.entities.some((entity) =>
-      entity.id === "entity-guide" &&
-      entity.currentBranch?.title === "Gateway Guide"
+      entity.name === "Gateway Guide" &&
+      entity.tags.includes("guide")
     ));
     assert.deepEqual(catalog.value.tags, [
-      { tag: "guide", count: 1, entityIds: ["entity-guide"] },
+      { tag: "guide", count: 1, names: ["Gateway Guide"] },
     ]);
     const keywordSearch = await post(base, "/memory/search", readSession.token, {
-      branchRef: "main",
-      resourceKind: "resource_chunk",
-      query: { kind: "keyword", text: "projected BM25", limit: 5 },
+      query: "projected BM25",
+      layer: "L1",
+      limit: 5,
     });
     const keywordSearchText = await keywordSearch.text();
     assert.equal(keywordSearch.status, 200, keywordSearchText);
@@ -288,18 +293,18 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       readSession.token,
       "memory.search",
       {
-        branchRef: "main",
-        query: { kind: "entity", text: "Gateway", tagsAny: ["guide"] },
+        query: "Gateway",
+        tagsAny: ["guide"],
       },
     ) as { value: { items: unknown[] } };
     assert.equal(mcpSearch.value.items.length, 1);
     const mcpCatalog = await mcp.callTool(
       readSession.token,
       "memory.catalog",
-      { branchRef: "main" },
-    ) as { entities: Array<{ id: string }> } | { value: { entities: Array<{ id: string }> } };
+      {},
+    ) as { entities: Array<{ name: string }> } | { value: { entities: Array<{ name: string }> } };
     const mcpCatalogValue = "value" in mcpCatalog ? mcpCatalog.value : mcpCatalog;
-    assert.ok(mcpCatalogValue.entities.some((entity) => entity.id === "entity-guide"));
+    assert.ok(mcpCatalogValue.entities.some((entity) => entity.name === "Gateway Guide"));
     await assert.rejects(
       () =>
         mcp.callTool(readSession.token, "memory.write", {
@@ -340,8 +345,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
 
     const unsafe = await post(base, "/memory/search", readSession.token, {
       rootEntityId: "other-root",
-      branchRef: "main",
-      query: { kind: "entity", text: "Gateway" },
+      query: "Gateway",
     });
     assert.equal(unsafe.status, 400);
     assert.equal(

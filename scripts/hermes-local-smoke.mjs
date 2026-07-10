@@ -91,18 +91,15 @@ try {
   });
 
   const search = await hermes.invokeTool(token, "memory.search", {
-    query: {
-      kind: "entity",
-      text: "Local Hermes RBAC Memory Smoke",
-      limit: 5,
-    },
+    query: "Local Hermes RBAC Memory Smoke",
+    limit: 5,
   });
 
   let forgedIdentityRejected = false;
   try {
     await hermes.invokeTool(token, "memory.search", {
       rootEntityId: "root:forged",
-      query: { kind: "entity", text: "Local Hermes" },
+      query: "Local Hermes",
     });
   } catch (error) {
     forgedIdentityRejected = error instanceof Error &&

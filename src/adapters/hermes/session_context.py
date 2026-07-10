@@ -81,20 +81,13 @@ class HermesMemoryAdapter:
         read_tools = [
             name for name in tool_names
             if name in {
-                "memory.read",
                 "memory.search",
-                "memory.readResource",
-                "memory.ingestResource",
-                "memory.syncPull",
+                "memory.catalog",
             }
         ]
         write_tools = [
             name for name in tool_names
-            if name in {
-                "memory.write",
-                "memory.importResource",
-                "memory.ingestResource",
-            }
+            if name in {"memory.write"}
         ]
         return {
             "host": "hermes",

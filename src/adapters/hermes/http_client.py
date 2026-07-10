@@ -270,20 +270,20 @@ class HermesTeamMemoryProvider:
         **metadata: Any,
     ) -> dict[str, Any]:
         session_id = str(metadata.get("session_id") or user_id or "hermes")
-        entity_ids = metadata.get("entityIds")
+        names = metadata.get("names")
         tags_any = metadata.get("tagsAny")
-        tags_none = metadata.get("tagsNone")
-        if isinstance(entity_ids, list) or isinstance(tags_any, list) or isinstance(tags_none, list):
-            memory_query: dict[str, Any] = {"kind": "entity", "text": query}
+        layer = metadata.get("layer")
+        if isinstance(names, list) or isinstance(tags_any, list) or isinstance(layer, str):
+            payload: dict[str, Any] = {"query": query}
             if limit is not None:
-                memory_query["limit"] = limit
-            if isinstance(entity_ids, list):
-                memory_query["entityIds"] = entity_ids
+                payload["limit"] = limit
+            if isinstance(names, list):
+                payload["names"] = names
             if isinstance(tags_any, list):
-                memory_query["tagsAny"] = tags_any
-            if isinstance(tags_none, list):
-                memory_query["tagsNone"] = tags_none
-            return self._client.call_tool("memory.search", {"query": memory_query})
+                payload["tagsAny"] = tags_any
+            if layer in {"L1", "L2", "L3"}:
+                payload["layer"] = layer
+            return self._client.call_tool("memory.search", payload)
         return self.recall_context(query, session_id=session_id, limit=limit)
 
     def catalog(self) -> dict[str, Any]:

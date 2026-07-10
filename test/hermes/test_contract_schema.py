@@ -159,9 +159,9 @@ class ContractSchemaTest(unittest.TestCase):
             if path == "memory/catalog":
                 return {
                     "value": {
-                        "rootEntityId": "root-http",
-                        "entities": [{"id": "entity-http"}],
-                        "tags": [{"tag": "guide", "count": 1}],
+                        "rootName": "root-http",
+                        "entities": [{"name": "entity-http"}],
+                        "tags": [{"tag": "guide", "count": 1, "names": ["entity-http"]}],
                     }
                 }
             raise AssertionError(path)
@@ -176,12 +176,12 @@ class ContractSchemaTest(unittest.TestCase):
         self.assertEqual(
             client.call_tool(
                 "memory.search",
-                {"query": {"kind": "entity", "text": "http"}},
+                {"query": "http"},
             )["value"]["items"][0]["id"],
             "entity-http",
         )
         self.assertEqual(
-            client.call_tool("memory.catalog", {})["entities"][0]["id"],
+            client.call_tool("memory.catalog", {})["entities"][0]["name"],
             "entity-http",
         )
         self.assertEqual(calls[0], ("GET", "identity", None))
@@ -220,9 +220,9 @@ class ContractSchemaTest(unittest.TestCase):
             if path == "memory/catalog":
                 return {
                     "value": {
-                        "rootEntityId": "root-hermes",
-                        "entities": [{"id": "entity-filtered"}],
-                        "tags": [{"tag": "hermes", "count": 1}],
+                        "rootName": "root-hermes",
+                        "entities": [{"name": "entity-filtered"}],
+                        "tags": [{"tag": "hermes", "count": 1, "names": ["entity-filtered"]}],
                     }
                 }
             raise AssertionError(path)
@@ -248,13 +248,14 @@ class ContractSchemaTest(unittest.TestCase):
         filtered = provider.search(
             "Hermes memory",
             user_id="hermes-user",
-            entityIds=["entity-filtered"],
+            names=["entity-filtered"],
             tagsAny=["hermes"],
         )
         self.assertEqual(filtered["value"]["items"][0]["id"], "entity-filtered")
         self.assertEqual(calls[1][1], "memory/search")
-        self.assertEqual(calls[1][2]["query"]["entityIds"], ["entity-filtered"])
-        self.assertEqual(calls[1][2]["query"]["tagsAny"], ["hermes"])
+        self.assertEqual(calls[1][2]["query"], "Hermes memory")
+        self.assertEqual(calls[1][2]["names"], ["entity-filtered"])
+        self.assertEqual(calls[1][2]["tagsAny"], ["hermes"])
 
         captured = provider.add(
             [
@@ -329,7 +330,7 @@ class ContractSchemaTest(unittest.TestCase):
             self.assertEqual(client.identity()["rootEntityId"], "root-local")
             self.assertEqual(client.list_tools()[1]["name"], "memory.write")
             self.assertEqual(
-                client.call_tool("memory.search", {"query": {"text": "local"}})["value"]["tool"],
+                client.call_tool("memory.search", {"query": "local"})["value"]["tool"],
                 "memory.search",
             )
 

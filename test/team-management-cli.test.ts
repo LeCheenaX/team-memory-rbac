@@ -146,7 +146,7 @@ async function assertGatewayRoutes(): Promise<void> {
       { roots: ["root-cli"] },
     );
     assert.equal(
-      ((await cli.run(session.token, ["memory", "catalog"])) as { rootEntityId: string }).rootEntityId,
+      ((await cli.run(session.token, ["memory", "catalog"])) as { rootName: string }).rootName,
       "root-cli",
     );
 

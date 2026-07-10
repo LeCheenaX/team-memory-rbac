@@ -11,9 +11,8 @@
     "mode": "parallel_native_team_memory",
     "tools": [
       "team_memory.search",
-      "team_memory.write",
-      "team_memory.import_resource",
-      "team_memory.read_resource"
+      "team_memory.catalog",
+      "team_memory.write"
     ]
   },
   "activeMemoryPlugin": {
@@ -21,9 +20,8 @@
     "slot": "memory",
     "tools": [
       "memory_search",
-      "memory_get",
-      "memory_write",
-      "memory_import"
+      "memory_catalog",
+      "memory_write"
     ],
     "settings": {
       "plugins.slots.memory": "team-memory-rbac"
