@@ -13,17 +13,16 @@ import {
   TeamMemoryRuntime,
 } from "../src/adapters/runtime/development-stack.ts";
 import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
+import { unitTestRuntimeConfig } from "./support/runtime-config.ts";
 
 const now = "2026-06-30T00:00:00.000Z";
 
 async function setup() {
   const directory = await mkdtemp(join(tmpdir(), "team-memory-rbac-host-"));
-  const runtime = await TeamMemoryRuntime.create({
-    libsqlUrl: `file:${join(directory, "host-lifecycle.db")}`,
-    casDirectory: join(directory, "cas"),
-    qdrantUrl: "http://127.0.0.1:6333",
-    objectStoreUrl: "http://127.0.0.1:9000",
-  });
+  const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({
+    directory,
+    databaseName: "host-lifecycle.db",
+  }));
   const admin = await bootstrapDevelopment(runtime, {
     rootEntityId: "root-host",
     userId: "user-host",

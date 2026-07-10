@@ -4,14 +4,7 @@ set -euo pipefail
 export PYTHONPATH="/opt/team-memory-rbac:${PYTHONPATH:-}"
 export TEAM_MEMORY_URL="${TEAM_MEMORY_URL:-http://service:3000}"
 
-if [[ "${LIBSQL_URL:-}" == file:* ]]; then
-  db_path="${LIBSQL_URL#file:}"
-  mkdir -p "$(dirname "$db_path")"
-fi
-
-if [[ -n "${CAS_DIRECTORY:-}" ]]; then
-  mkdir -p "$CAS_DIRECTORY"
-fi
+mkdir -p /workspace/.data/test1-local-hermes/cas
 
 mkdir -p "${HERMES_HOME:-/root/.hermes}/plugins/team_memory"
 cp /opt/team-memory-rbac/adapters/hermes/team_memory_plugin/__init__.py \

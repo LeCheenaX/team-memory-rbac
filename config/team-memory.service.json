@@ -1,0 +1,17 @@
+{
+  "runtimeMode": "Dev",
+  "libsql": {
+    "url": "http://libsql:8080"
+  },
+  "cas": {
+    "backend": "object_store",
+    "objectStoreUrl": "http://object-store:9000"
+  },
+  "qdrant": {
+    "url": "http://qdrant:6333"
+  },
+  "embedding": {
+    "provider": "deterministic",
+    "url": "deterministic://compose-service"
+  }
+}

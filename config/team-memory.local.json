@@ -1,0 +1,17 @@
+{
+  "runtimeMode": "Dev",
+  "libsql": {
+    "url": "file:.data/local/team-memory.db"
+  },
+  "cas": {
+    "backend": "filesystem",
+    "directory": ".data/local/cas"
+  },
+  "qdrant": {
+    "url": "http://127.0.0.1:6333"
+  },
+  "embedding": {
+    "provider": "deterministic",
+    "url": "deterministic://local-dev"
+  }
+}

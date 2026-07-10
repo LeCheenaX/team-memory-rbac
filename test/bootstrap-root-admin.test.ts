@@ -1,24 +1,29 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { TeamMemoryRuntime } from "../src/adapters/runtime/development-stack.ts";
+import {
+  unitTestRuntimeConfig,
+  unitTestRuntimeConfigDocument,
+} from "./support/runtime-config.ts";
 
 function runBootstrap(directory: string, password?: string) {
   return spawnSync(
     process.execPath,
-    ["--experimental-strip-types", "scripts/bootstrap-root-admin.mjs"],
+    [
+      "--experimental-strip-types",
+      "scripts/bootstrap-root-admin.mjs",
+      "--config",
+      join(directory, "team-memory.config.json"),
+    ],
     {
       cwd: process.cwd(),
       env: {
         ...process.env,
-        LIBSQL_URL: `file:${join(directory, "team-memory.db")}`,
-        CAS_BACKEND: "filesystem",
-        CAS_DIRECTORY: join(directory, "cas"),
-        QDRANT_URL: "http://127.0.0.1:6333",
         BOOTSTRAP_ROOT_ENTITY_ID: "root:test-bootstrap",
         BOOTSTRAP_USER_ID: "user:test-bootstrap-admin",
         BOOTSTRAP_USER_NAME: "Bootstrap Admin",
@@ -36,6 +41,10 @@ function runBootstrap(directory: string, password?: string) {
 test("root admin bootstrap can reissue the same session with a password", async () => {
   const directory = await mkdtemp(join(tmpdir(), "team-memory-bootstrap-"));
   try {
+    await writeFile(
+      join(directory, "team-memory.config.json"),
+      JSON.stringify(unitTestRuntimeConfigDocument({ directory }), null, 2),
+    );
     const first = runBootstrap(directory, "correct horse battery staple");
     assert.equal(first.status, 0, first.stderr);
     const firstPayload = JSON.parse(first.stdout) as {
@@ -60,11 +69,7 @@ test("root admin bootstrap can reissue the same session with a password", async 
     assert.equal(secondPayload.sessionFile, firstPayload.sessionFile);
     assert.notEqual(secondStored.sessionToken, firstStored.sessionToken);
 
-    const runtime = await TeamMemoryRuntime.create({
-      libsqlUrl: `file:${join(directory, "team-memory.db")}`,
-      casDirectory: join(directory, "cas"),
-      qdrantUrl: "http://127.0.0.1:6333",
-    });
+    const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({ directory }));
     try {
       assert.equal(await runtime.rbac.authenticate(firstStored.sessionToken), undefined);
       assert.equal((await runtime.rbac.authenticate(secondStored.sessionToken))?.sessionId, secondPayload.sessionId);
@@ -79,6 +84,10 @@ test("root admin bootstrap can reissue the same session with a password", async 
 test("root admin bootstrap explains repeated one-shot token creation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "team-memory-bootstrap-"));
   try {
+    await writeFile(
+      join(directory, "team-memory.config.json"),
+      JSON.stringify(unitTestRuntimeConfigDocument({ directory }), null, 2),
+    );
     const first = runBootstrap(directory);
     assert.equal(first.status, 0, first.stderr);
 

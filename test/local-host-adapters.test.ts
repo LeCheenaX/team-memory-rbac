@@ -11,16 +11,16 @@ import {
   TeamMemoryRuntime,
 } from "../src/adapters/runtime/development-stack.ts";
 import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
+import { unitTestRuntimeConfig } from "./support/runtime-config.ts";
 
 const now = "2026-06-30T00:00:00.000Z";
 
 test("OpenClaw plugin and Claude Code hooks run against a local gateway without HTTP or sync", async () => {
   const directory = await mkdtemp(join(tmpdir(), "team-memory-rbac-local-hosts-"));
-  const runtime = await TeamMemoryRuntime.create({
-    libsqlUrl: `file:${join(directory, "local-hosts.db")}`,
-    casDirectory: join(directory, "cas"),
-    qdrantUrl: "http://127.0.0.1:6333",
-  });
+  const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({
+    directory,
+    databaseName: "local-hosts.db",
+  }));
   try {
     const admin = await bootstrapDevelopment(runtime, {
       rootEntityId: "root-local-hosts",

@@ -12,11 +12,14 @@ if (!process.execArgv.includes("--experimental-strip-types")) {
 }
 
 const { createTeamMemoryServer } = await import("../src/adapters/http/server.ts");
-const { loadRuntimeConfig, TeamMemoryRuntime } = await import("../src/adapters/runtime/development-stack.ts");
+const { loadRuntimeConfigFile, TeamMemoryRuntime } = await import("../src/adapters/runtime/development-stack.ts");
+const { parseRuntimeConfigArgs, resolveConfigPath } = await import("./runtime-config-args.mjs");
+
+const parsedArgs = parseRuntimeConfigArgs(process.argv.slice(2), import.meta.url);
 
 const port = Number(process.env.PORT);
 if (!Number.isInteger(port) || port <= 0) throw new Error("PORT must be a positive integer");
-const runtime = await TeamMemoryRuntime.create(loadRuntimeConfig(process.env));
+const runtime = await TeamMemoryRuntime.create(await loadRuntimeConfigFile(resolveConfigPath(parsedArgs.configPath)));
 const server = createTeamMemoryServer(runtime);
 server.listen(port, "0.0.0.0");
 for (const signal of ["SIGINT", "SIGTERM"]) {

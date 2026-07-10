@@ -25,10 +25,7 @@ import type { Bm25Index } from "../ingestion/bm25.ts";
 import {
   bm25Internals,
 } from "../ingestion/bm25.ts";
-import {
-  DeterministicEmbeddingProvider,
-  type EmbeddingProvider,
-} from "../ingestion/service.ts";
+import type { EmbeddingProvider } from "../ingestion/service.ts";
 
 export type RetrievalOrigin =
   | "cloud_active"
@@ -425,12 +422,12 @@ export class MemoryRetrievalAdapter
   constructor(
     source: MemoryQuerySource,
     options: {
-      embeddings?: EmbeddingProvider;
+      embeddings: EmbeddingProvider;
       entityExtractor?: EntityExtractor;
-    } = {},
+    },
   ) {
     this.source = source;
-    this.embeddings = options.embeddings ?? new DeterministicEmbeddingProvider();
+    this.embeddings = options.embeddings;
     this.entityExtractor = options.entityExtractor ?? new HeuristicEntityExtractor();
   }
 

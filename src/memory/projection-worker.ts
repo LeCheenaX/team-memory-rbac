@@ -6,10 +6,7 @@ import type {
 } from "../contracts/memory.ts";
 import type { HistoryAuthority } from "../history/authority.ts";
 import type { Bm25Document, Bm25Index } from "../ingestion/bm25.ts";
-import {
-  DeterministicEmbeddingProvider,
-  type EmbeddingProvider,
-} from "../ingestion/service.ts";
+import type { EmbeddingProvider } from "../ingestion/service.ts";
 import type { MemoryProjectionWrite, MemoryProjector } from "./projector.ts";
 import type { VectorMemoryPoint } from "./stores.ts";
 
@@ -29,13 +26,13 @@ export class HistoryMemoryProjectionWorker {
     history: Pick<HistoryAuthority, "replay">,
     projector: MemoryProjector,
     options: {
-      embeddings?: EmbeddingProvider;
+      embeddings: EmbeddingProvider;
       bm25?: Bm25Index;
-    } = {},
+    },
   ) {
     this.history = history;
     this.projector = projector;
-    this.embeddings = options.embeddings ?? new DeterministicEmbeddingProvider();
+    this.embeddings = options.embeddings;
     this.bm25 = options.bm25;
   }
 

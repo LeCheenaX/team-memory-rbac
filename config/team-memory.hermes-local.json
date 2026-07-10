@@ -1,0 +1,17 @@
+{
+  "runtimeMode": "Dev",
+  "libsql": {
+    "url": "file:/workspace/.data/test1-local-hermes/team-memory.db"
+  },
+  "cas": {
+    "backend": "filesystem",
+    "directory": "/workspace/.data/test1-local-hermes/cas"
+  },
+  "qdrant": {
+    "url": "http://qdrant:6333"
+  },
+  "embedding": {
+    "provider": "deterministic",
+    "url": "deterministic://hermes-local"
+  }
+}

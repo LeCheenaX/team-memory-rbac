@@ -27,6 +27,7 @@ import {
   type EmbeddingProvider,
   type ResourceSourceType,
 } from "../src/index.ts";
+import { unitTestEmbeddingProvider } from "./support/runtime-config.ts";
 
 const rootEntityId = "root:ingestion";
 const timestamp = "2026-06-30T00:00:00.000Z";
@@ -100,7 +101,7 @@ async function setup() {
     cas,
     vectors,
     bm25,
-    undefined,
+    unitTestEmbeddingProvider(),
     () => timestamp,
   );
   const retrieval = new PermissionRouter(
@@ -112,6 +113,7 @@ async function setup() {
         "cloud_active",
         bm25,
       ),
+      { embeddings: unitTestEmbeddingProvider() },
     ),
   );
   return { history, resources, ingestion, retrieval, vectors, cas };

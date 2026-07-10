@@ -241,7 +241,7 @@ export class ResourceIngestionService {
     cas: ResourceCas,
     vectors: VectorMemoryStore,
     bm25: Bm25Index,
-    embeddings: EmbeddingProvider = new DeterministicEmbeddingProvider(),
+    embeddings: EmbeddingProvider,
     now: () => string = () => new Date().toISOString(),
   ) {
     this.policy = policy;

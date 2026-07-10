@@ -12,8 +12,11 @@ if (!process.execArgv.includes("--experimental-strip-types")) {
 }
 
 const { HermesAgentAdapter } = await import("../src/adapters/agent/transports.ts");
-const { TeamMemoryRuntime, loadRuntimeConfig } = await import("../src/adapters/runtime/development-stack.ts");
+const { TeamMemoryRuntime, loadRuntimeConfigFile } = await import("../src/adapters/runtime/development-stack.ts");
 const { TeamMemoryGateway } = await import("../src/adapters/runtime/gateway.ts");
+const { parseRuntimeConfigArgs, resolveConfigPath } = await import("./runtime-config-args.mjs");
+
+const parsedArgs = parseRuntimeConfigArgs(process.argv.slice(2), import.meta.url);
 
 function required(name) {
   const value = process.env[name];
@@ -29,7 +32,7 @@ const delegationId = required("LOCAL_HERMES_DELEGATION_ID");
 const sessionId = required("LOCAL_HERMES_SESSION_ID");
 const expiresAt = required("LOCAL_HERMES_SESSION_EXPIRES_AT");
 
-const runtime = await TeamMemoryRuntime.create(loadRuntimeConfig(process.env));
+const runtime = await TeamMemoryRuntime.create(await loadRuntimeConfigFile(resolveConfigPath(parsedArgs.configPath)));
 try {
   const gateway = new TeamMemoryGateway(runtime);
   const onboarded = await gateway.onboardAgent(adminToken, {

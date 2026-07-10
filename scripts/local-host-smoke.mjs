@@ -18,8 +18,11 @@ const {
 } = await import("../src/adapters/agent/transports.ts");
 const { ClaudeCodeTeamMemoryHooks } = await import("../src/adapters/claude-code/hooks.ts");
 const { OpenClawTeamMemoryPlugin } = await import("../src/adapters/openclaw/plugin.ts");
-const { TeamMemoryRuntime, loadRuntimeConfig } = await import("../src/adapters/runtime/development-stack.ts");
+const { TeamMemoryRuntime, loadRuntimeConfigFile } = await import("../src/adapters/runtime/development-stack.ts");
 const { TeamMemoryGateway } = await import("../src/adapters/runtime/gateway.ts");
+const { parseRuntimeConfigArgs, resolveConfigPath } = await import("./runtime-config-args.mjs");
+
+const parsedArgs = parseRuntimeConfigArgs(process.argv.slice(2), import.meta.url);
 
 function required(name) {
   const value = process.env[name];
@@ -91,7 +94,7 @@ async function forgedIdentityRejected(adapter, token, host) {
   }
 }
 
-const runtime = await TeamMemoryRuntime.create(loadRuntimeConfig(process.env));
+const runtime = await TeamMemoryRuntime.create(await loadRuntimeConfigFile(resolveConfigPath(parsedArgs.configPath)));
 try {
   const gateway = new TeamMemoryGateway(runtime);
   const results = [];

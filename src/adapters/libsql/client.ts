@@ -6,7 +6,7 @@ export function createLibsqlClient(options: {
   authToken?: string;
 }): Client {
   if (options.url.length === 0) {
-    throw new Error("LIBSQL_URL must be configured");
+    throw new Error("libsql.url must be configured");
   }
   return createClient(options);
 }

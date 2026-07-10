@@ -130,11 +130,13 @@ class TeamMemoryLocalClient:
         token: str,
         repo_root: str | Path | None = None,
         command: list[str] | None = None,
+        config_path: str | Path | None = None,
         env: dict[str, str] | None = None,
     ) -> None:
         self.token = token
         self.repo_root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[3]
         self.command = command
+        self.config_path = Path(config_path) if config_path is not None else None
         self.env = env
 
     def identity(self) -> dict[str, Any]:
@@ -182,7 +184,10 @@ class TeamMemoryLocalClient:
 
     def _default_command(self) -> list[str]:
         npm = shutil.which("npm.cmd") or shutil.which("npm") or "npm"
-        return [npm, "run", "--silent", "local-memory-tool", "--"]
+        command = [npm, "run", "--silent", "local-memory-tool", "--"]
+        if self.config_path is not None:
+            command.extend(["--config", str(self.config_path)])
+        return command
 
 
 class HermesMemoryHttpAdapter(HermesMemoryAdapter):
@@ -205,12 +210,14 @@ class HermesMemoryLocalAdapter(HermesMemoryAdapter):
         token: str,
         repo_root: str | Path | None = None,
         command: list[str] | None = None,
+        config_path: str | Path | None = None,
         env: dict[str, str] | None = None,
     ) -> None:
         client = TeamMemoryLocalClient(
             token,
             repo_root=repo_root,
             command=command,
+            config_path=config_path,
             env=env,
         )
         super().__init__(
@@ -235,9 +242,10 @@ class HermesTeamMemoryProvider:
         cls,
         token: str,
         repo_root: str | Path | None = None,
+        config_path: str | Path | None = None,
         env: dict[str, str] | None = None,
     ) -> "HermesTeamMemoryProvider":
-        return cls(TeamMemoryLocalClient(token, repo_root=repo_root, env=env))
+        return cls(TeamMemoryLocalClient(token, repo_root=repo_root, config_path=config_path, env=env))
 
     def recall_context(
         self,

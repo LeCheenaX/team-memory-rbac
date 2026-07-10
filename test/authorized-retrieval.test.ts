@@ -13,6 +13,7 @@ import {
   type MemoryActiveView,
 } from "../src/memory/index.ts";
 import { PermissionRouter } from "../src/permission-router.ts";
+import { unitTestEmbeddingProvider } from "./support/runtime-config.ts";
 
 const rootEntityId = "root-project-a";
 const timestamp = "2026-06-25T00:00:00.000Z";
@@ -183,7 +184,7 @@ const allowPolicy: PolicyEngine = {
 };
 const router = new PermissionRouter(
   allowPolicy,
-  new MemoryRetrievalAdapter(source),
+  new MemoryRetrievalAdapter(source, { embeddings: unitTestEmbeddingProvider() }),
 );
 
 test("keyword and semantic retrieval use the same authorized source and include evidence", async () => {
@@ -333,7 +334,7 @@ test("denied retrieval never reaches the query source", async () => {
     {
       decide: async (candidate) => decision(candidate, false),
     },
-    new MemoryRetrievalAdapter(deniedSource),
+    new MemoryRetrievalAdapter(deniedSource, { embeddings: unitTestEmbeddingProvider() }),
   );
 
   const result = await deniedRouter.execute(

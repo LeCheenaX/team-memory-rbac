@@ -51,9 +51,11 @@ class TeamMemoryHermesProvider(MemoryProvider):
         token = _session_token()
         mode = os.environ.get("TEAM_MEMORY_MODE", "http").strip().lower()
         if mode == "local":
+            repo_root = os.environ.get("TEAM_MEMORY_REPO_ROOT", "/opt/team-memory-rbac")
             self._provider = HermesTeamMemoryProvider.from_local(
                 token,
-                repo_root=os.environ.get("TEAM_MEMORY_REPO_ROOT", "/opt/team-memory-rbac"),
+                repo_root=repo_root,
+                config_path=os.path.join(repo_root, "config", "team-memory.hermes-local.json"),
             )
         else:
             self._provider = HermesTeamMemoryProvider.from_http(

@@ -11,9 +11,12 @@ if (!process.execArgv.includes("--experimental-strip-types")) {
   process.exit(result.status ?? 1);
 }
 
-const { TeamMemoryRuntime, loadRuntimeConfig } = await import("../src/adapters/runtime/development-stack.ts");
+const { TeamMemoryRuntime, loadRuntimeConfigFile } = await import("../src/adapters/runtime/development-stack.ts");
 const { BUILT_IN_ROLES } = await import("../src/rbac/catalog.ts");
 const { writeStoredSession } = await import("../src/adapters/local/session-store.ts");
+const { parseRuntimeConfigArgs, resolveConfigPath } = await import("./runtime-config-args.mjs");
+
+const parsedArgs = parseRuntimeConfigArgs(process.argv.slice(2), import.meta.url);
 
 function required(name) {
   const value = process.env[name];
@@ -33,7 +36,7 @@ const userPassword = process.env.BOOTSTRAP_USER_PASSWORD === undefined || proces
   ? undefined
   : process.env.BOOTSTRAP_USER_PASSWORD;
 
-const runtime = await TeamMemoryRuntime.create(loadRuntimeConfig(process.env));
+const runtime = await TeamMemoryRuntime.create(await loadRuntimeConfigFile(resolveConfigPath(parsedArgs.configPath)));
 try {
   for (const role of BUILT_IN_ROLES) await runtime.rbac.saveRole(role);
   await runtime.rbac.saveUser({

@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
+import { parseRuntimeConfigArgs, resolveConfigPath } from "./runtime-config-args.mjs";
 
-const qdrantUrl = process.env.QDRANT_URL ?? "http://127.0.0.1:6333";
+const parsedArgs = parseRuntimeConfigArgs(process.argv.slice(2), import.meta.url);
+const config = JSON.parse(await readFile(resolveConfigPath(parsedArgs.configPath), "utf8"));
+const qdrantUrl = config.qdrant?.url;
+if (typeof qdrantUrl !== "string" || qdrantUrl.length === 0) {
+  throw new Error("qdrant.url must be configured in the Team Memory config file");
+}
 const healthUrl = new URL("/healthz", qdrantUrl);
 const deadlineMs = Number(process.env.CHECK_DEPENDENCY_TIMEOUT_MS ?? 120_000);
 

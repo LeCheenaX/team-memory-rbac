@@ -11,6 +11,7 @@ import {
   TeamMemoryRuntime,
 } from "../src/adapters/runtime/development-stack.ts";
 import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
+import { unitTestRuntimeConfig } from "./support/runtime-config.ts";
 
 const now = "2026-06-29T00:00:00.000Z";
 
@@ -50,12 +51,10 @@ async function post(
 
 test("HTTP and MCP expose the same authenticated memory gateway without payload identity overrides", async () => {
   const directory = await temporaryDirectory();
-  const runtime = await TeamMemoryRuntime.create({
-    libsqlUrl: `file:${join(directory, "gateway.db")}`,
-    casDirectory: join(directory, "cas"),
-    qdrantUrl: "http://127.0.0.1:6333",
-    objectStoreUrl: "http://127.0.0.1:9000",
-  });
+  const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({
+    directory,
+    databaseName: "gateway.db",
+  }));
   const gateway = new TeamMemoryGateway(runtime, {
     retrieval: "active-view",
     projectWrites: false,

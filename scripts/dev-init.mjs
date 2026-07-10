@@ -1,6 +1,8 @@
-import { bootstrapDevelopment, loadRuntimeConfig, TeamMemoryRuntime } from "../src/adapters/runtime/development-stack.ts";
+import { bootstrapDevelopment, loadRuntimeConfigFile, TeamMemoryRuntime } from "../src/adapters/runtime/development-stack.ts";
+import { parseRuntimeConfigArgs, resolveConfigPath } from "./runtime-config-args.mjs";
 
-const config = loadRuntimeConfig(process.env);
+const parsedArgs = parseRuntimeConfigArgs(process.argv.slice(2), import.meta.url);
+const config = await loadRuntimeConfigFile(resolveConfigPath(parsedArgs.configPath));
 const runtime = await TeamMemoryRuntime.create(config);
 try {
   const now = new Date();

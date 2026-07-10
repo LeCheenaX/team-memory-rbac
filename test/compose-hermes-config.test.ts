@@ -3,8 +3,15 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("Hermes local compose setup and manual flow do not require server client tokens", async () => {
+  const baseCompose = await readFile("compose.yaml", "utf8");
   const compose = await readFile("compose.hermes.yaml", "utf8");
   const manualFlow = await readFile("docs/operations/hermes-manual-v1-test.md", "utf8");
+  const hermesConfig = JSON.parse(
+    await readFile("config/team-memory.hermes-local.json", "utf8"),
+  ) as {
+    runtimeMode: string;
+    embedding: { provider: string; url: string };
+  };
 
   assert.doesNotMatch(
     compose,
@@ -16,6 +23,18 @@ test("Hermes local compose setup and manual flow do not require server client to
   assert.match(compose, /TEAM_MEMORY_MODE: http/);
   assert.match(compose, /TEAM_MEMORY_SESSION_FILE: \/root\/\.hermes\/team-memory-session\.json/);
   assert.match(compose, /BOOTSTRAP_USER_PASSWORD: \$\{BOOTSTRAP_USER_PASSWORD:-\}/);
+  assert.doesNotMatch(compose, /LIBSQL_URL:/);
+  assert.doesNotMatch(compose, /CAS_BACKEND:/);
+  assert.doesNotMatch(compose, /QDRANT_URL:/);
+  assert.doesNotMatch(compose, /EMBEDDING_PROVIDER:/);
+  assert.match(baseCompose, /--config", "config\/team-memory\.service\.json"/);
+  assert.doesNotMatch(baseCompose, /LIBSQL_URL:/);
+  assert.doesNotMatch(baseCompose, /CAS_BACKEND:/);
+  assert.doesNotMatch(baseCompose, /QDRANT_URL:/);
+  assert.doesNotMatch(baseCompose, /EMBEDDING_PROVIDER:/);
+  assert.equal(hermesConfig.runtimeMode, "Dev");
+  assert.equal(hermesConfig.embedding.provider, "deterministic");
+  assert.match(hermesConfig.embedding.url, /^deterministic:\/\//);
   assert.match(
     manualFlow,
     /Test 1 setup runs before `HERMES_A_TOKEN` and `HERMES_B_TOKEN` exist/,
@@ -38,6 +57,12 @@ test("Hermes local compose setup and manual flow do not require server client to
   assert.match(manualFlow, /memory\.catalog/);
   assert.match(manualFlow, /tagsAny/);
   assert.match(manualFlow, /\$env:BOOTSTRAP_USER_PASSWORD = "<test local admin password>"/);
+  assert.match(manualFlow, /请输入用户名/);
+  assert.match(manualFlow, /请输入密码/);
+  assert.match(manualFlow, /登录成功/);
+  assert.match(manualFlow, /npm --prefix \/opt\/team-memory-rbac run login user:test1-admin/);
+  assert.match(manualFlow, /npm --prefix \/opt\/team-memory-rbac run login admin adminpswd/);
+  assert.match(manualFlow, /config\/team-memory\.hermes-local\.json/);
   assert.match(manualFlow, /team-memory-session\.json/);
   assert.match(manualFlow, /Reset the Hermes conversation before testing recall/);
   assert.match(manualFlow, /\/reset/);
@@ -49,9 +74,12 @@ test("Hermes local compose setup and manual flow do not require server client to
   assert.match(manualFlow, /under `extra`, not as ad hoc fields/);
   assert.match(manualFlow, /Resource\/CAS path/);
   assert.doesNotMatch(manualFlow, /Inside Hermes, configure the Team Memory provider with/);
-  assert.match(manualFlow, /team -- members create user:test1-readonly Test1ReadOnly/);
+  assert.match(manualFlow, /team -- --config config\/team-memory\.hermes-local\.json members create user:test1-readonly Test1ReadOnly/);
   assert.match(manualFlow, /team -- logout/);
-  assert.match(manualFlow, /team -- login user:test1-readonly/);
+  assert.match(manualFlow, /run login user:test1-readonly/);
+  assert.doesNotMatch(manualFlow, /\$env:LIBSQL_URL/);
+  assert.doesNotMatch(manualFlow, /\$env:CAS_BACKEND/);
+  assert.doesNotMatch(manualFlow, /\$env:QDRANT_URL/);
   assert.doesNotMatch(manualFlow, /\$readOnly =/);
   assert.match(
     manualFlow,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -14,6 +14,10 @@ import {
   TeamMemoryRuntime,
 } from "../src/adapters/runtime/development-stack.ts";
 import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
+import {
+  unitTestRuntimeConfig,
+  unitTestRuntimeConfigDocument,
+} from "./support/runtime-config.ts";
 
 const now = "2026-06-30T00:00:00.000Z";
 
@@ -26,6 +30,7 @@ interface CommandResult {
 function runTeamCommand(
   args: string[],
   env: NodeJS.ProcessEnv,
+  input?: string,
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -34,7 +39,7 @@ function runTeamCommand(
       {
         cwd: process.cwd(),
         env,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
       },
     );
     let stdout = "";
@@ -51,6 +56,11 @@ function runTeamCommand(
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
+    if (input !== undefined) {
+      child.stdin.end(input);
+    } else {
+      child.stdin.end();
+    }
     child.on("error", (error) => {
       clearTimeout(timeout);
       reject(error);
@@ -67,10 +77,6 @@ function envWithoutLogin(): NodeJS.ProcessEnv {
     ...process.env,
     TEAM_MEMORY_TOKEN: "",
     ADMIN_TOKEN: "",
-    LIBSQL_URL: "",
-    CAS_BACKEND: "",
-    CAS_DIRECTORY: "",
-    QDRANT_URL: "",
   };
 }
 
@@ -108,12 +114,10 @@ async function assertAdminTokenBypassesStoredLoginGuard(): Promise<void> {
 
 async function assertGatewayRoutes(): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "team-memory-rbac-"));
-  const runtime = await TeamMemoryRuntime.create({
-    libsqlUrl: `file:${join(directory, "team-cli.db")}`,
-    casDirectory: join(directory, "cas"),
-    qdrantUrl: "http://127.0.0.1:6333",
-    objectStoreUrl: "http://127.0.0.1:9000",
-  });
+  const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({
+    directory,
+    databaseName: "team-cli.db",
+  }));
   try {
     const session = await bootstrapDevelopment(runtime, {
       rootEntityId: "root-cli",
@@ -238,12 +242,10 @@ async function assertGatewayRoutes(): Promise<void> {
 
 async function assertPasswordLoginSessionStore(): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), "team-memory-rbac-"));
-  const config = {
-    libsqlUrl: `file:${join(directory, "team-cli-login.db")}`,
-    casDirectory: join(directory, "cas"),
-    qdrantUrl: "http://127.0.0.1:6333",
-    objectStoreUrl: "http://127.0.0.1:9000",
-  };
+  const config = unitTestRuntimeConfig({
+    directory,
+    databaseName: "team-cli-login.db",
+  });
   const runtime = await TeamMemoryRuntime.create(config);
   try {
     await bootstrapDevelopment(runtime, {
@@ -263,6 +265,19 @@ async function assertPasswordLoginSessionStore(): Promise<void> {
     runtime.close();
   }
 
+  const configPath = join(directory, "team-memory.config.json");
+  await writeFile(
+    configPath,
+    JSON.stringify(
+      unitTestRuntimeConfigDocument({
+        directory,
+        databaseName: "team-cli-login.db",
+      }),
+      null,
+      2,
+    ),
+  );
+
   const env = {
     ...process.env,
     TEAM_MEMORY_TOKEN: "",
@@ -270,26 +285,50 @@ async function assertPasswordLoginSessionStore(): Promise<void> {
     TEAM_MEMORY_SESSION_FILE: join(directory, "session.json"),
     TEAM_MEMORY_ROOT_ENTITY_ID: "root-cli-login",
     TEAM_MEMORY_SESSION_EXPIRES_AT: "2030-01-01T00:00:00.000Z",
-    LIBSQL_URL: config.libsqlUrl,
-    CAS_BACKEND: "filesystem",
-    CAS_DIRECTORY: config.casDirectory,
-    QDRANT_URL: config.qdrantUrl,
   };
   try {
     const login = await runTeamCommand(
-      ["login", "user-cli-login", "correct horse battery staple"],
+      ["--config", configPath, "login", "user-cli-login", "correct horse battery staple"],
       env,
     );
     assert.equal(login.status, 0, login.stderr);
     assert.match(login.stdout, /"status": "logged_in"/);
     assert.doesNotMatch(login.stdout, /sessionToken/);
 
-    const roots = await runTeamCommand(["roots", "list"], env);
+    const relogin = await runTeamCommand(
+      ["--config", configPath, "login"],
+      env,
+      "user-cli-login\ncorrect horse battery staple\n",
+    );
+    assert.equal(relogin.status, 0, relogin.stderr);
+    assert.match(relogin.stdout, /请输入用户名/);
+    assert.match(relogin.stdout, /请输入密码/);
+    assert.match(relogin.stdout, /登录成功/);
+
+    const missingUser = await runTeamCommand(
+      ["--config", configPath, "login"],
+      env,
+      "user-cli-missing\n",
+    );
+    assert.equal(missingUser.status, 1);
+    assert.match(missingUser.stderr, /该用户不存在/);
+
+    const badPassword = await runTeamCommand(
+      ["--config", configPath, "login"],
+      env,
+      "user-cli-login\nwrong\n",
+    );
+    assert.equal(badPassword.status, 1);
+    assert.match(badPassword.stderr, /密码错误/);
+
+    const roots = await runTeamCommand(["--config", configPath, "roots", "list"], env);
     assert.equal(roots.status, 0, roots.stderr);
     assert.match(roots.stdout, /root-cli-login/);
 
     const createReader = await runTeamCommand(
       [
+        "--config",
+        configPath,
         "members",
         "create",
         "user-cli-reader",
@@ -306,18 +345,18 @@ async function assertPasswordLoginSessionStore(): Promise<void> {
     assert.equal(logout.status, 0, logout.stderr);
     assert.match(logout.stdout, /"status": "logged_out"/);
 
-    const afterLogout = await runTeamCommand(["roots", "list"], env);
+    const afterLogout = await runTeamCommand(["--config", configPath, "roots", "list"], env);
     assert.equal(afterLogout.status, 1);
     assert.match(afterLogout.stderr, /Team Memory is not logged in/);
 
     const readerLogin = await runTeamCommand(
-      ["login", "user-cli-reader", "reader password"],
+      ["--config", configPath, "login", "user-cli-reader", "reader password"],
       env,
     );
     assert.equal(readerLogin.status, 0, readerLogin.stderr);
     assert.match(readerLogin.stdout, /user-cli-reader/);
 
-    const readerRoots = await runTeamCommand(["roots", "list"], env);
+    const readerRoots = await runTeamCommand(["--config", configPath, "roots", "list"], env);
     assert.equal(readerRoots.status, 0, readerRoots.stderr);
     assert.match(readerRoots.stdout, /root-cli-login/);
   } finally {

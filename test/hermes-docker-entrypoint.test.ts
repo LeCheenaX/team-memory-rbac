@@ -17,9 +17,9 @@ test("Hermes Docker entrypoint remains executable on Linux checkouts", async () 
   );
   assert.match(dockerfile, /sed -i 's\/\\r\$\/\/'/);
   assert.match(gitAttributes, /\*\.sh text eol=lf/);
-  assert.match(entrypoint, /\$\{LIBSQL_URL#file:\}/);
-  assert.match(entrypoint, /mkdir -p "\$\(dirname "\$db_path"\)"/);
-  assert.match(entrypoint, /mkdir -p "\$CAS_DIRECTORY"/);
+  assert.doesNotMatch(entrypoint, /LIBSQL_URL/);
+  assert.doesNotMatch(entrypoint, /CAS_DIRECTORY/);
+  assert.match(entrypoint, /mkdir -p \/workspace\/\.data\/test1-local-hermes\/cas/);
   assert.match(entrypoint, /plugins\/team_memory/);
   assert.match(entrypoint, /load_memory_provider\("team_memory"\)/);
 });

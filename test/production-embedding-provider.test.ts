@@ -18,36 +18,48 @@ test("production runtime rejects deterministic or missing embedding providers", 
   assert.throws(
     () =>
       loadRuntimeConfig({
-        TEAM_MEMORY_RUNTIME_MODE: "production",
-        LIBSQL_URL: "file:prod.db",
-        CAS_BACKEND: "filesystem",
-        CAS_DIRECTORY: "/var/cas",
-        QDRANT_URL: "http://qdrant",
+        runtimeMode: "Production",
+        libsql: { url: "file:prod.db" },
+        cas: { backend: "filesystem", directory: "/var/cas" },
+        qdrant: { url: "http://qdrant" },
+        embedding: undefined as never,
       }),
-    /EMBEDDING_PROVIDER/,
+    /embedding configuration/,
   );
   assert.throws(
     () =>
       loadRuntimeConfig({
-        TEAM_MEMORY_RUNTIME_MODE: "production",
-        EMBEDDING_PROVIDER: "deterministic",
-        LIBSQL_URL: "file:prod.db",
-        CAS_BACKEND: "filesystem",
-        CAS_DIRECTORY: "/var/cas",
-        QDRANT_URL: "http://qdrant",
+        runtimeMode: "Production",
+        libsql: { url: "file:prod.db" },
+        cas: { backend: "filesystem", directory: "/var/cas" },
+        qdrant: { url: "http://qdrant" },
+        embedding: { provider: "deterministic", url: "deterministic://prod" },
       }),
-    /deterministic embeddings are not allowed in production/,
+    /deterministic embeddings are not allowed in Production/,
+  );
+  assert.throws(
+    () =>
+      loadRuntimeConfig({
+        runtimeMode: "Dev",
+        libsql: { url: "file:dev.db" },
+        cas: { backend: "filesystem", directory: "/var/cas" },
+        qdrant: { url: "http://qdrant" },
+        embedding: { provider: "http", url: "" },
+      }),
+    /embedding\.url/,
   );
   await assert.rejects(
     () =>
       TeamMemoryRuntime.create({
-        runtimeMode: "production",
+        runtimeMode: "Production",
         libsqlUrl: "file:prod-without-embeddings.db",
         casBackend: "filesystem",
         casDirectory: "/var/cas",
         qdrantUrl: "http://qdrant",
+        embeddings: undefined as never,
+        embeddingProviderUrl: "http://embed",
       }),
-    /production embedding provider must be configured/,
+    /embedding provider must be configured/,
   );
 });
 
@@ -59,12 +71,13 @@ test("production runtime starts with a configured provider seam", async () => {
     embed: async () => [1, 0, 0],
   };
   const runtime = await TeamMemoryRuntime.create({
-    runtimeMode: "production",
+    runtimeMode: "Production",
     libsqlUrl: `file:${join(directory, "production-embeddings.db")}`,
     casBackend: "filesystem",
     casDirectory: join(directory, "cas"),
     qdrantUrl: "http://127.0.0.1:6333",
     embeddings,
+    embeddingProviderUrl: "http://embedding.example/v1",
   });
   try {
     assert.ok(runtime);

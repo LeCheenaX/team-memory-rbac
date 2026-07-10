@@ -50,12 +50,19 @@ mock script. The Hermes container installs a real user memory plugin named
 with `hermes memory setup team_memory`; do not ask the chatting agent to import
 or execute `HermesTeamMemoryProvider` directly.
 
-The plugin chooses its backend from container environment:
+The plugin chooses only the connector path from container environment:
 
 - `TEAM_MEMORY_MODE=local` uses the local no-server runtime through
-  `HermesTeamMemoryProvider.from_local(...)`.
+  `HermesTeamMemoryProvider.from_local(...)` and the checked-in
+  `config/team-memory.hermes-local.json` runtime configuration.
 - `TEAM_MEMORY_MODE=http` uses the Team Memory HTTP service through
   `HermesTeamMemoryProvider.from_http(...)`.
+
+Do not configure the memory runtime with environment variables. Runtime mode,
+libSQL, CAS, Qdrant, and embedding provider settings must live in a Team Memory
+config JSON file. The local Hermes test uses `runtimeMode: "Dev"` with an
+explicit deterministic embedding provider URL in
+`config/team-memory.hermes-local.json`.
 
 If Hermes cannot show that this provider is active, stop the test and fix the
 Hermes configuration first.
@@ -106,14 +113,32 @@ $env:BOOTSTRAP_USER_PASSWORD = "<test local admin password>"
 Bootstrap the local root inside the Hermes container:
 
 ```powershell
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin -- --config config/team-memory.hermes-local.json
 ```
 
 The bootstrap command logs in `user:test1-admin` automatically. To verify the
-stored identity:
+login flow from a user's point of view, run interactive login:
 
 ```powershell
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- login
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config config/team-memory.hermes-local.json login
+```
+
+Team Memory prompts `请输入用户名:`. Enter `user:test1-admin` and press Enter.
+It then prompts `请输入密码:`. Enter the test password and press Enter. The
+command returns `登录成功` when the password is correct, `该用户不存在` after an
+unknown user name, and `密码错误` after an incorrect password.
+
+For one-shot container login, pass the credentials after the npm script name:
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run login user:test1-admin $env:BOOTSTRAP_USER_PASSWORD
+```
+
+For a test account named `admin` with password `adminpswd`, the same one-shot
+shape is:
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run login admin adminpswd
 ```
 
 Do not set `HERMES_A_TOKEN` or `HERMES_B_TOKEN` for Test 1. Those are Test 2
@@ -126,14 +151,14 @@ talking to Hermes.
 
 ```powershell
 $env:TEST1_READONLY_PASSWORD = "<test read-only password>"
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- members create user:test1-readonly Test1ReadOnly $env:TEST1_READONLY_PASSWORD role-researcher
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config config/team-memory.hermes-local.json members create user:test1-readonly Test1ReadOnly $env:TEST1_READONLY_PASSWORD role-researcher
 ```
 
 To switch identities later:
 
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- logout
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- login user:test1-admin $env:BOOTSTRAP_USER_PASSWORD
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run login user:test1-admin $env:BOOTSTRAP_USER_PASSWORD
 ```
 
 ### Configure Hermes Native Settings
@@ -289,7 +314,7 @@ Hermes again:
 
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- logout
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- login user:test1-readonly $env:TEST1_READONLY_PASSWORD
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run login user:test1-readonly $env:TEST1_READONLY_PASSWORD
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes
 ```
 
@@ -354,11 +379,7 @@ $env:BOOTSTRAP_USER_NAME = "Test 2 Server Admin"
 $env:BOOTSTRAP_SESSION_ID = "session:test2-admin"
 $env:BOOTSTRAP_SESSION_EXPIRES_AT = "2030-01-01T00:00:00.000Z"
 $env:BOOTSTRAP_USER_PASSWORD = "<test server admin password>"
-$env:LIBSQL_URL = "http://127.0.0.1:8080"
-$env:CAS_BACKEND = "object_store"
-$env:OBJECT_STORE_URL = "http://127.0.0.1:9000"
-$env:QDRANT_URL = "http://127.0.0.1:6333"
-npm.cmd run bootstrap:root-admin
+npm.cmd run bootstrap:root-admin -- --config config/team-memory.server-local.json
 ```
 
 Save the returned admin token for this PowerShell session. If the env var is
@@ -386,8 +407,8 @@ configuration.
 
 ```powershell
 $env:TEAM_MEMORY_TOKEN = $env:ADMIN_TOKEN
-npm.cmd run team -- agents onboard agent:test2-hermes-a delegation:test2-hermes-a session:test2-hermes-a 2030-01-01T00:00:00.000Z
-npm.cmd run team -- agents onboard agent:test2-hermes-b delegation:test2-hermes-b session:test2-hermes-b 2030-01-01T00:00:00.000Z
+npm.cmd run team -- --config config/team-memory.server-local.json agents onboard agent:test2-hermes-a delegation:test2-hermes-a session:test2-hermes-a 2030-01-01T00:00:00.000Z
+npm.cmd run team -- --config config/team-memory.server-local.json agents onboard agent:test2-hermes-b delegation:test2-hermes-b session:test2-hermes-b 2030-01-01T00:00:00.000Z
 ```
 
 Save the returned tokens:
@@ -400,7 +421,7 @@ $env:HERMES_B_TOKEN = "<Hermes B agent token>"
 Create a read-only client for denial testing:
 
 ```powershell
-npm.cmd run team -- agents onboard agent:test2-hermes-readonly delegation:test2-hermes-readonly session:test2-hermes-readonly 2030-01-01T00:00:00.000Z read-only
+npm.cmd run team -- --config config/team-memory.server-local.json agents onboard agent:test2-hermes-readonly delegation:test2-hermes-readonly session:test2-hermes-readonly 2030-01-01T00:00:00.000Z read-only
 $env:HERMES_READONLY_TOKEN = "<Hermes read-only agent token>"
 ```
 
@@ -475,8 +496,8 @@ that is explicitly operating with the server-authenticated admin credential.
 
 ```powershell
 $env:TEAM_MEMORY_TOKEN = $env:ADMIN_TOKEN
-npm.cmd run team -- members list
-npm.cmd run team -- delegations list
+npm.cmd run team -- --config config/team-memory.server-local.json members list
+npm.cmd run team -- --config config/team-memory.server-local.json delegations list
 ```
 
 Pass condition: permission administration succeeds only with the admin token.
@@ -553,8 +574,8 @@ Resolve only with the server admin credential:
 
 ```powershell
 $env:TEAM_MEMORY_TOKEN = $env:ADMIN_TOKEN
-npm.cmd run team -- conflicts list
-npm.cmd run team -- conflicts resolve <conflict-id> take_incoming
+npm.cmd run team -- --config config/team-memory.server-local.json conflicts list
+npm.cmd run team -- --config config/team-memory.server-local.json conflicts resolve <conflict-id> take_incoming
 ```
 
 Then ask Hermes A or Hermes B:

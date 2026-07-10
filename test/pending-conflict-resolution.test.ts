@@ -20,6 +20,7 @@ import type {
 } from "../src/history/index.ts";
 import { InMemoryCloudMemoryAuthority } from "../src/history/index.ts";
 import { PermissionRouter } from "../src/permission-router.ts";
+import { unitTestEmbeddingProvider } from "./support/runtime-config.ts";
 
 const timestamp = "2026-06-25T00:00:00.000Z";
 const rootEntityId = "root-project-a";
@@ -158,7 +159,7 @@ test("a staged pending write is immediately searchable and survives local restar
   );
   const retrieval = new PermissionRouter(
     policy,
-    new MemoryRetrievalAdapter(pending.querySource()),
+    new MemoryRetrievalAdapter(pending.querySource(), { embeddings: unitTestEmbeddingProvider() }),
   );
   const result = await retrieval.execute({
     subject,
@@ -175,7 +176,7 @@ test("a staged pending write is immediately searchable and survives local restar
   const restarted = new InMemoryPendingOverlay(local, pending.inspect());
   const semantic = await new PermissionRouter(
     policy,
-    new MemoryRetrievalAdapter(restarted.querySource()),
+    new MemoryRetrievalAdapter(restarted.querySource(), { embeddings: unitTestEmbeddingProvider() }),
   ).execute({
     subject,
     rootEntityId,
@@ -273,7 +274,7 @@ test("pending entities and relations are immediately available to entity and gra
   );
   const retrieval = new PermissionRouter(
     policy,
-    new MemoryRetrievalAdapter(pending.querySource()),
+    new MemoryRetrievalAdapter(pending.querySource(), { embeddings: unitTestEmbeddingProvider() }),
   );
   const entity = await retrieval.execute({
     subject,

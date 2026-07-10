@@ -20,6 +20,7 @@ import {
   type CloudMemoryWriteCommand,
 } from "../src/history/index.ts";
 import { PermissionRouter } from "../src/permission-router.ts";
+import { unitTestEmbeddingProvider } from "./support/runtime-config.ts";
 
 const timestamp = "2026-06-25T00:00:00.000Z";
 const rootEntityId = "root-project-a";
@@ -307,6 +308,7 @@ test("permission watermark changes invalidate local reads before resync and remo
     policy,
     new MemoryRetrievalAdapter(
       new SynchronizedLocalQuerySource(store, watermarks),
+      { embeddings: unitTestEmbeddingProvider() },
     ),
   );
   watermarks.advance("user-alice", rootEntityId);

@@ -1,0 +1,17 @@
+{
+  "runtimeMode": "Dev",
+  "libsql": {
+    "url": "http://127.0.0.1:8080"
+  },
+  "cas": {
+    "backend": "object_store",
+    "objectStoreUrl": "http://127.0.0.1:9000"
+  },
+  "qdrant": {
+    "url": "http://127.0.0.1:6333"
+  },
+  "embedding": {
+    "provider": "deterministic",
+    "url": "deterministic://server-local"
+  }
+}

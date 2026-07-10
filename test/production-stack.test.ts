@@ -15,6 +15,9 @@ import { createTeamMemoryServer } from "../src/adapters/http/server.ts";
 import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
 import { ResourceConflictError, ResourceNotFoundError, ResourceService } from "../src/resources/service.ts";
 import {
+  unitTestRuntimeConfig,
+} from "./support/runtime-config.ts";
+import {
   AuthorizedWorkingReplicaSynchronizer,
   CloudAuthorizedViewAdapter,
   InMemoryLocalAuthorizedWorkingReplica,
@@ -168,12 +171,10 @@ test("libSQL History replays durable commits and keeps client mutations idempote
 
 test("authorized CAS imports preserve revisions and do not reveal tombstoned resources", async () => {
   const directory = await temporaryDirectory();
-  const config = {
-    libsqlUrl: `file:${join(directory, "runtime.db")}`,
-    casDirectory: join(directory, "cas"),
-    qdrantUrl: "http://127.0.0.1:6333",
-    objectStoreUrl: "http://127.0.0.1:9000",
-  };
+  const config = unitTestRuntimeConfig({
+    directory,
+    databaseName: "runtime.db",
+  });
   const now = "2026-06-26T00:00:00.000Z";
   const runtime = await TeamMemoryRuntime.create(config);
   try {
@@ -211,9 +212,27 @@ test("production v1 architecture and CAS deployment modes are documented", async
   assert.match(notes, /CP distributed\s+systems/);
   assert.match(notes, /not an AP multi-master design/);
 
-  assert.equal(loadRuntimeConfig({ LIBSQL_URL: "file:prod.db", CAS_BACKEND: "filesystem", CAS_DIRECTORY: "/var/cas", QDRANT_URL: "http://qdrant" }).casBackend, "filesystem");
-  assert.equal(loadRuntimeConfig({ LIBSQL_URL: "file:prod.db", CAS_BACKEND: "object_store", OBJECT_STORE_URL: "http://objects", QDRANT_URL: "http://qdrant" }).casBackend, "object_store");
-  assert.throws(() => loadRuntimeConfig({ LIBSQL_URL: "file:prod.db", CAS_DIRECTORY: "/var/cas", QDRANT_URL: "http://qdrant" }), /CAS_BACKEND/);
+  assert.equal(loadRuntimeConfig({
+    runtimeMode: "Dev",
+    libsql: { url: "file:prod.db" },
+    cas: { backend: "filesystem", directory: "/var/cas" },
+    qdrant: { url: "http://qdrant" },
+    embedding: { provider: "deterministic", url: "deterministic://test" },
+  }).casBackend, "filesystem");
+  assert.equal(loadRuntimeConfig({
+    runtimeMode: "Dev",
+    libsql: { url: "file:prod.db" },
+    cas: { backend: "object_store", objectStoreUrl: "http://objects" },
+    qdrant: { url: "http://qdrant" },
+    embedding: { provider: "deterministic", url: "deterministic://test" },
+  }).casBackend, "object_store");
+  assert.throws(() => loadRuntimeConfig({
+    runtimeMode: "Dev",
+    libsql: { url: "file:prod.db" },
+    cas: { backend: "" as "filesystem" },
+    qdrant: { url: "http://qdrant" },
+    embedding: { provider: "deterministic", url: "deterministic://test" },
+  }), /cas\.backend/);
 });
 
 test("CAS-first visibility blocks History commits when CAS is not durably readable", async () => {
@@ -277,7 +296,10 @@ test("CAS rejects a claimed hash that does not match its bytes", async () => {
 
 test("gateway sync uses durable permission watermarks for role and delegation changes", async () => {
   const directory = await temporaryDirectory();
-  const runtime = await TeamMemoryRuntime.create({ libsqlUrl: `file:${join(directory, "watermarks.db")}`, casDirectory: join(directory, "cas"), qdrantUrl: "http://127.0.0.1:6333" });
+  const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({
+    directory,
+    databaseName: "watermarks.db",
+  }));
   const gateway = new TeamMemoryGateway(runtime, { retrieval: "active-view" });
   try {
     const adminSession = await bootstrapDevelopment(runtime, { rootEntityId: "root-watermark", userId: "user-watermark", displayName: "Watermark Admin", sessionId: "session-watermark-admin", sessionExpiresAt: "2030-01-01T00:00:00.000Z", now: "2026-06-26T00:00:00.000Z" });
@@ -324,7 +346,10 @@ test("gateway sync uses durable permission watermarks for role and delegation ch
 
 test("HTTP smoke flow bootstraps, imports, and reads through a trusted session", async () => {
   const directory = await temporaryDirectory();
-  const runtime = await TeamMemoryRuntime.create({ libsqlUrl: `file:${join(directory, "http.db")}`, casDirectory: join(directory, "cas"), qdrantUrl: "http://127.0.0.1:6333", objectStoreUrl: "http://127.0.0.1:9000" });
+  const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({
+    directory,
+    databaseName: "http.db",
+  }));
   const server = createTeamMemoryServer(runtime);
   try {
     const session = await bootstrapDevelopment(runtime, { rootEntityId: "root-http", userId: "user-http", displayName: "HTTP User", sessionId: "session-http", sessionExpiresAt: "2030-01-01T00:00:00.000Z", now: "2026-06-26T00:00:00.000Z" });

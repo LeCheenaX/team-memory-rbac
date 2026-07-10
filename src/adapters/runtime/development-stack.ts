@@ -1,4 +1,6 @@
 import type { Client } from "@libsql/client";
+import { mkdir, readFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { FileSystemResourceCas } from "../cas/filesystem.ts";
 import { ObjectStoreResourceCas } from "../cas/object-store.ts";
 import { createLibsqlClient } from "../libsql/client.ts";
@@ -30,109 +32,126 @@ import { StoreMemoryProjector } from "../../memory/projector.ts";
 import { HistoryMemoryProjectionWorker } from "../../memory/projection-worker.ts";
 
 export type CasBackendKind = "filesystem" | "object_store";
-export type RuntimeMode = "development" | "test" | "production";
+export type RuntimeMode = "unitTest" | "Dev" | "Production";
+export type EmbeddingProviderKind = "deterministic" | "http";
+
+export interface RuntimeConfigDocument {
+  runtimeMode: RuntimeMode;
+  libsql: {
+    url: string;
+    authToken?: string;
+  };
+  cas: {
+    backend: CasBackendKind;
+    directory?: string;
+    objectStoreUrl?: string;
+  };
+  qdrant: {
+    url: string;
+    apiKey?: string;
+  };
+  embedding: {
+    provider: EmbeddingProviderKind;
+    url: string;
+    apiKey?: string;
+    model?: string;
+    name?: string;
+    dimensions?: number;
+  };
+}
 
 export interface RuntimeConfig {
   libsqlUrl: string;
   libsqlAuthToken?: string;
-  runtimeMode?: RuntimeMode;
-  casBackend?: CasBackendKind;
+  runtimeMode: RuntimeMode;
+  casBackend: CasBackendKind;
   casDirectory?: string;
   qdrantUrl: string;
   objectStoreUrl?: string;
   qdrantApiKey?: string;
-  embeddings?: EmbeddingProvider;
+  embeddings: EmbeddingProvider;
+  embeddingProviderUrl: string;
 }
 
-export function loadRuntimeConfig(environment: Record<string, string | undefined>): RuntimeConfig {
-  const required = (name: string): string => {
-    const value = environment[name];
-    if (value === undefined || value.length === 0) throw new Error(`${name} must be configured explicitly`);
-    return value;
-  };
-  const authToken = environment.LIBSQL_AUTH_TOKEN;
-  const casBackend = required("CAS_BACKEND");
-  if (casBackend !== "filesystem" && casBackend !== "object_store") {
-    throw new Error("CAS_BACKEND must be filesystem or object_store");
-  }
-  const runtimeMode = runtimeModeFrom(
-    environment.TEAM_MEMORY_RUNTIME_MODE ?? environment.NODE_ENV,
-  );
-  const embeddings = embeddingsFromEnvironment(environment, runtimeMode);
+export async function loadRuntimeConfigFile(path: string): Promise<RuntimeConfig> {
+  const raw = await readFile(path, "utf8");
+  return loadRuntimeConfig(JSON.parse(raw) as RuntimeConfigDocument);
+}
+
+export function loadRuntimeConfig(document: RuntimeConfigDocument): RuntimeConfig {
+  const runtimeMode = runtimeModeFrom(document.runtimeMode);
+  const casBackend = casBackendFrom(document.cas?.backend);
+  const embeddings = embeddingsFromDocument(document.embedding, runtimeMode);
   return {
-    libsqlUrl: required("LIBSQL_URL"),
-    ...(authToken === undefined || authToken.length === 0 ? {} : { libsqlAuthToken: authToken }),
+    libsqlUrl: requiredString(document.libsql?.url, "libsql.url"),
+    ...(optionalString(document.libsql?.authToken) === undefined ? {} : { libsqlAuthToken: document.libsql.authToken }),
     runtimeMode,
     casBackend,
-    ...(casBackend === "filesystem" ? { casDirectory: required("CAS_DIRECTORY") } : {}),
-    qdrantUrl: required("QDRANT_URL"),
-    ...(casBackend === "object_store" ? { objectStoreUrl: required("OBJECT_STORE_URL") } : {}),
-    ...(environment.QDRANT_API_KEY === undefined ||
-    environment.QDRANT_API_KEY.length === 0
-      ? {}
-      : { qdrantApiKey: environment.QDRANT_API_KEY }),
-    ...(embeddings === undefined ? {} : { embeddings }),
+    ...(casBackend === "filesystem" ? { casDirectory: requiredString(document.cas.directory, "cas.directory") } : {}),
+    qdrantUrl: requiredString(document.qdrant?.url, "qdrant.url"),
+    ...(casBackend === "object_store" ? { objectStoreUrl: requiredString(document.cas.objectStoreUrl, "cas.objectStoreUrl") } : {}),
+    ...(optionalString(document.qdrant?.apiKey) === undefined ? {} : { qdrantApiKey: document.qdrant.apiKey }),
+    embeddings,
+    embeddingProviderUrl: requiredString(document.embedding?.url, "embedding.url"),
   };
 }
 
 function runtimeModeFrom(value: string | undefined): RuntimeMode {
-  if (value === undefined || value.length === 0) return "development";
-  if (value === "development" || value === "test" || value === "production") {
+  if (value === "unitTest" || value === "Dev" || value === "Production") {
     return value;
   }
-  throw new Error("TEAM_MEMORY_RUNTIME_MODE must be development, test, or production");
+  throw new Error("runtimeMode must be unitTest, Dev, or Production");
 }
 
-function optionalEnvironmentValue(
-  environment: Record<string, string | undefined>,
-  name: string,
-): string | undefined {
-  const value = environment[name];
+function casBackendFrom(value: string | undefined): CasBackendKind {
+  if (value === "filesystem" || value === "object_store") return value;
+  throw new Error("cas.backend must be filesystem or object_store");
+}
+
+function requiredString(value: string | undefined, name: string): string {
+  if (value === undefined || value.length === 0) {
+    throw new Error(`${name} must be configured explicitly`);
+  }
+  return value;
+}
+
+function optionalString(value: string | undefined): string | undefined {
   return value === undefined || value.length === 0 ? undefined : value;
 }
 
-function embeddingsFromEnvironment(
-  environment: Record<string, string | undefined>,
+function embeddingsFromDocument(
+  embedding: RuntimeConfigDocument["embedding"] | undefined,
   runtimeMode: RuntimeMode,
-): EmbeddingProvider | undefined {
-  const provider = optionalEnvironmentValue(environment, "EMBEDDING_PROVIDER");
-  if (provider === undefined) {
-    if (runtimeMode === "production") {
-      throw new Error("EMBEDDING_PROVIDER must be configured in production");
-    }
-    return undefined;
+): EmbeddingProvider {
+  if (embedding === undefined) {
+    throw new Error("embedding configuration must be provided before using memory");
   }
+  const provider = requiredString(embedding.provider, "embedding.provider");
+  const url = requiredString(embedding.url, "embedding.url");
   if (provider === "deterministic") {
-    if (runtimeMode === "production") {
-      throw new Error("deterministic embeddings are not allowed in production");
+    if (runtimeMode === "Production") {
+      throw new Error("deterministic embeddings are not allowed in Production");
     }
-    return new DeterministicEmbeddingProvider();
+    return new DeterministicEmbeddingProvider(embedding.dimensions);
   }
   if (provider === "http") {
-    const url = optionalEnvironmentValue(environment, "EMBEDDING_URL");
-    if (url === undefined) {
-      throw new Error("EMBEDDING_URL must be configured for EMBEDDING_PROVIDER=http");
-    }
     return new HttpEmbeddingProvider({
       url,
-      ...(optionalEnvironmentValue(environment, "EMBEDDING_API_KEY") === undefined
-        ? {}
-        : { apiKey: optionalEnvironmentValue(environment, "EMBEDDING_API_KEY") as string }),
-      ...(optionalEnvironmentValue(environment, "EMBEDDING_MODEL") === undefined
-        ? {}
-        : { model: optionalEnvironmentValue(environment, "EMBEDDING_MODEL") as string }),
+      ...(optionalString(embedding.apiKey) === undefined ? {} : { apiKey: embedding.apiKey }),
+      ...(optionalString(embedding.model) === undefined ? {} : { model: embedding.model }),
+      ...(optionalString(embedding.name) === undefined ? {} : { name: embedding.name }),
     });
   }
-  throw new Error("EMBEDDING_PROVIDER must be deterministic or http");
+  throw new Error("embedding.provider must be deterministic or http");
 }
 
 function createResourceCas(config: RuntimeConfig): ResourceCas {
   const backend = config.casBackend ?? "filesystem";
   if (backend === "object_store") {
-    if (config.objectStoreUrl === undefined) throw new Error("OBJECT_STORE_URL must be configured for object_store CAS");
+    if (config.objectStoreUrl === undefined) throw new Error("cas.objectStoreUrl must be configured for object_store CAS");
     return new ObjectStoreResourceCas(config.objectStoreUrl);
   }
-  if (config.casDirectory === undefined) throw new Error("CAS_DIRECTORY must be configured for filesystem CAS");
+  if (config.casDirectory === undefined) throw new Error("cas.directory must be configured for filesystem CAS");
   return new FileSystemResourceCas(config.casDirectory);
 }
 
@@ -142,12 +161,22 @@ async function readyCas(cas: ResourceCas): Promise<void> {
   }
 }
 
+async function readyLibsqlFileDirectory(url: string): Promise<void> {
+  if (!url.startsWith("file:")) return;
+  const path = url.slice("file:".length);
+  if (path.length === 0 || path.startsWith("//")) return;
+  await mkdir(dirname(path), { recursive: true });
+}
+
 function runtimeMode(config: RuntimeConfig): RuntimeMode {
-  return config.runtimeMode ?? "development";
+  return config.runtimeMode;
 }
 
 function configuredEmbeddings(config: RuntimeConfig): EmbeddingProvider {
-  return config.embeddings ?? new DeterministicEmbeddingProvider();
+  if (config.embeddings === undefined) {
+    throw new Error("embedding provider must be configured before using memory");
+  }
+  return config.embeddings;
 }
 
 function assertProductionEmbeddings(
@@ -155,7 +184,7 @@ function assertProductionEmbeddings(
   embeddings: EmbeddingProvider,
 ): void {
   if (
-    runtimeMode(config) === "production" &&
+    runtimeMode(config) === "Production" &&
     embeddings.productionSafe !== true
   ) {
     throw new Error("production embedding provider must be configured");
@@ -180,7 +209,7 @@ export class TeamMemoryRuntime {
     MemoryRetrievalRequest
   >;
   private readonly config: RuntimeConfig;
-  private readonly embeddings: EmbeddingProvider;
+  readonly embeddings: EmbeddingProvider;
 
   private constructor(
     client: Client,
@@ -203,6 +232,7 @@ export class TeamMemoryRuntime {
   static async create(config: RuntimeConfig): Promise<TeamMemoryRuntime> {
     const embeddings = configuredEmbeddings(config);
     assertProductionEmbeddings(config, embeddings);
+    await readyLibsqlFileDirectory(config.libsqlUrl);
     const client = createLibsqlClient({ url: config.libsqlUrl, ...(config.libsqlAuthToken === undefined ? {} : { authToken: config.libsqlAuthToken }) });
     const rbac = await LibsqlRbacAuthority.create(client);
     const history = await LibsqlHistoryAuthority.create(client);
@@ -237,7 +267,7 @@ export class TeamMemoryRuntime {
       fetch(new URL("/healthz", this.config.qdrantUrl)).then((response) => { if (!response.ok) throw new Error(`Qdrant is not ready (${response.status})`); }),
     ];
     if ((this.config.casBackend ?? "filesystem") === "object_store") {
-      if (this.config.objectStoreUrl === undefined) throw new Error("OBJECT_STORE_URL must be configured for object_store CAS");
+      if (this.config.objectStoreUrl === undefined) throw new Error("cas.objectStoreUrl must be configured for object_store CAS");
       checks.push(fetch(new URL("/minio/health/live", this.config.objectStoreUrl)).then((response) => { if (!response.ok) throw new Error(`object store is not ready (${response.status})`); }));
     }
     await Promise.all(checks);

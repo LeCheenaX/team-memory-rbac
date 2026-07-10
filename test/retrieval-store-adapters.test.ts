@@ -25,6 +25,7 @@ import {
   StoreBackedAuthorizedQuerySource,
 } from "../src/memory/retrieval.ts";
 import { PermissionRouter } from "../src/permission-router.ts";
+import { unitTestEmbeddingProvider } from "./support/runtime-config.ts";
 
 const timestamp = "2026-06-30T00:00:00.000Z";
 const rootEntityId = "root:retrieval";
@@ -309,6 +310,7 @@ test("Qdrant payloads and libSQL relations power authorized retrieval after rest
           restartedVectors,
           restartedRelations,
         ),
+        { embeddings: unitTestEmbeddingProvider() },
       ),
     );
 

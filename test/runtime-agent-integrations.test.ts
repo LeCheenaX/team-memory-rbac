@@ -16,6 +16,7 @@ import {
 } from "../src/adapters/runtime/development-stack.ts";
 import { TeamMemoryGateway } from "../src/adapters/runtime/gateway.ts";
 import type { Permission } from "../src/contracts/rbac.ts";
+import { unitTestRuntimeConfig } from "./support/runtime-config.ts";
 
 const now = "2026-06-30T00:00:00.000Z";
 
@@ -27,12 +28,10 @@ async function setupRuntime(suffix: string) {
   const directory = await temporaryDirectory();
   const rootEntityId = `root-runtime-${suffix}`;
   const userId = `user-runtime-${suffix}`;
-  const runtime = await TeamMemoryRuntime.create({
-    libsqlUrl: `file:${join(directory, "runtime-agents.db")}`,
-    casDirectory: join(directory, "cas"),
-    qdrantUrl: "http://127.0.0.1:6333",
-    objectStoreUrl: "http://127.0.0.1:9000",
-  });
+  const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({
+    directory,
+    databaseName: "runtime-agents.db",
+  }));
   const admin = await bootstrapDevelopment(runtime, {
     rootEntityId,
     userId,
