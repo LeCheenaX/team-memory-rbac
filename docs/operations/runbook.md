@@ -29,8 +29,10 @@ session. A root administrator can create the user and initial role in one
 command:
 
 ```sh
-npm run team -- --config <config-path> members create <user-id> <display-name> <password> <role-id>
+npm run team -- --config <config-path> members create <user-id> <display-name> <role-id>
 ```
+
+Team Memory prompts for the new user's password.
 
 Use `role-researcher` for read/search users, `role-curator` for ordinary memory
 writers, `role-maintainer` for operational memory maintenance, and
@@ -45,12 +47,13 @@ npm run team -- --config <config-path> members revoke <assignment-id> <user-id>
 Log in on the device or container that will run the host:
 
 ```sh
-npm run team -- --config <config-path> login <user-id> <password>
+npm run team -- --config <config-path> login
 ```
 
-Login writes the local Team Memory session file. That file contains the human
-user session for CLI administration plus an automatically issued main-agent
-session for host memory providers such as Hermes. The main agent inherits the
+Team Memory prompts for the user name and password. Login writes the local Team
+Memory session file. That file contains the human user session for CLI
+administration plus an automatically issued main-agent session for host memory
+providers such as Hermes. The main agent inherits the
 user's effective non-administrator memory permissions for the selected root; it
 does not receive user-management, role-assignment, root-create, or root-delete
 permissions. Hosts should use the session file by default and should not ask the

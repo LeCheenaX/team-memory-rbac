@@ -138,45 +138,27 @@ The `check` command exits after validating the Hermes binary, Team Memory
 adapter import, Hermes plugin install, and activated Team Memory runtime. It is
 not the interactive Hermes session.
 
-Choose a local root admin password for this test run. Keep it for the duration
-of the manual test. Team Memory stores the active session under
-`/root/.hermes/team-memory-session.json`, so closing PowerShell does not require
-copying or saving a token.
-
-```powershell
-$env:BOOTSTRAP_USER_PASSWORD = "<test local admin password>"
-```
-
 Bootstrap the local root inside the Hermes container:
 
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin -- --config /workspace/config/team-memory.hermes-local.json
 ```
 
-The bootstrap command logs in `user:test1-admin` automatically. To verify the
-login flow from a user's point of view, run interactive login:
+When prompted, enter a local root admin password for this test run. Keep it for
+the duration of the manual test. The bootstrap command logs in
+`user:test1-admin` automatically and stores the active session under
+`/root/.hermes/team-memory-session.json`, so closing PowerShell does not require
+copying or saving a token.
+
+To verify the login flow from a user's point of view, run interactive login:
 
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json login
 ```
 
-Team Memory prompts `请输入用户名:`. Enter `user:test1-admin` and press Enter.
-It then prompts `请输入密码:`. Enter the test password and press Enter. The
-command returns `登录成功` when the password is correct, `该用户不存在` after an
-unknown user name, and `密码错误` after an incorrect password.
-
-For one-shot container login, pass the credentials after the npm script name:
-
-```powershell
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run login user:test1-admin $env:BOOTSTRAP_USER_PASSWORD
-```
-
-For a test account named `admin` with password `adminpswd`, the same one-shot
-shape is:
-
-```powershell
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run login admin adminpswd
-```
+Team Memory prompts for the user name and password. Enter `user:test1-admin`
+and the password chosen during bootstrap. The command returns `logged_in` when
+the password is correct.
 
 Every successful login writes `/root/.hermes/team-memory-session.json` with two
 sessions: the human user session for `team` CLI operations, and an automatic
@@ -195,15 +177,16 @@ talking to Hermes. The user's role is assigned at creation time with
 `role-researcher`.
 
 ```powershell
-$env:TEST1_READONLY_PASSWORD = "<test read-only password>"
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json members create user:test1-readonly Test1ReadOnly $env:TEST1_READONLY_PASSWORD role-researcher
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json members create user:test1-readonly Test1ReadOnly role-researcher
 ```
+
+When prompted, enter the read-only user's password.
 
 To switch identities later:
 
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- logout
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run login user:test1-admin $env:BOOTSTRAP_USER_PASSWORD
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json login
 ```
 
 To change an existing user's permissions, use the administrator's user session:
@@ -366,9 +349,12 @@ Hermes again:
 
 ```powershell
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- logout
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run login user:test1-readonly $env:TEST1_READONLY_PASSWORD
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json login
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes
 ```
+
+At the login prompts, enter `user:test1-readonly` and the password created for
+that user.
 
 Ask Hermes:
 

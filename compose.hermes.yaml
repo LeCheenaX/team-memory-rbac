@@ -16,7 +16,6 @@ services:
       BOOTSTRAP_USER_NAME: Test 1 Local Admin
       BOOTSTRAP_SESSION_ID: session:test1-admin
       BOOTSTRAP_SESSION_EXPIRES_AT: "2030-01-01T00:00:00.000Z"
-      BOOTSTRAP_USER_PASSWORD: ${BOOTSTRAP_USER_PASSWORD:-}
     working_dir: /workspace
     stdin_open: true
     tty: true

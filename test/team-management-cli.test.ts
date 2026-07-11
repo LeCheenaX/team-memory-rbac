@@ -426,10 +426,10 @@ async function assertPasswordLoginSessionStore(): Promise<void> {
         "create",
         "user-cli-reader",
         "Reader",
-        "reader password",
         "role-researcher",
       ],
       env,
+      "reader password\n",
     );
     assert.equal(createReader.status, 0, createReader.stderr);
     assert.match(createReader.stdout, /user-cli-reader/);

@@ -128,7 +128,7 @@ if (parsedArgs.args[0] === "setup") {
   process.exit(0);
 }
 
-const command = parseTeamManagementCommand(parsedArgs.args);
+let command = parseTeamManagementCommand(parsedArgs.args);
 
 function nonEmptyEnv(name) {
   const value = process.env[name];
@@ -233,6 +233,17 @@ try {
   }
 
   const cli = new TeamManagementCli(gateway);
+  if (
+    command[0] === "members" &&
+    command[1] === "create" &&
+    command[4].length === 0
+  ) {
+    const password = await promptLine("New user password");
+    if (password.length === 0) {
+      throw new Error("new user password is required");
+    }
+    command = ["members", "create", command[2], command[3], password, command[5]];
+  }
   const result = await cli.run(token, command);
   console.log(JSON.stringify(result, null, 2));
 } finally {

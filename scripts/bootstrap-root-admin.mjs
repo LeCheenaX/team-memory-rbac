@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 if (!process.execArgv.includes("--experimental-strip-types")) {
@@ -18,6 +19,7 @@ const { readStoredSession, writeStoredSession } = await import("../src/adapters/
 const { parseRuntimeConfigArgs, resolveConfigPath } = await import("./runtime-config-args.mjs");
 
 const parsedArgs = parseRuntimeConfigArgs(process.argv.slice(2), import.meta.url);
+let promptInterface;
 
 function required(name) {
   const value = process.env[name];
@@ -27,15 +29,29 @@ function required(name) {
   return value;
 }
 
+async function promptLine(message) {
+  if (!process.stdin.isTTY) return undefined;
+  promptInterface ??= createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  const value = await promptInterface.question(`${message}: `);
+  return value.length === 0 ? undefined : value;
+}
+
+async function bootstrapPassword() {
+  const configured = process.env.BOOTSTRAP_USER_PASSWORD;
+  if (configured !== undefined && configured.length > 0) return configured;
+  return promptLine("Root admin password");
+}
+
 const rootEntityId = required("BOOTSTRAP_ROOT_ENTITY_ID");
 const userId = required("BOOTSTRAP_USER_ID");
 const displayName = required("BOOTSTRAP_USER_NAME");
 const sessionId = required("BOOTSTRAP_SESSION_ID");
 const sessionExpiresAt = required("BOOTSTRAP_SESSION_EXPIRES_AT");
 const now = process.env.BOOTSTRAP_NOW ?? new Date().toISOString();
-const userPassword = process.env.BOOTSTRAP_USER_PASSWORD === undefined || process.env.BOOTSTRAP_USER_PASSWORD.length === 0
-  ? undefined
-  : process.env.BOOTSTRAP_USER_PASSWORD;
+const userPassword = await bootstrapPassword();
 
 const runtime = await TeamMemoryRuntime.create(await loadRuntimeConfigFile(resolveConfigPath(parsedArgs.configPath)));
 try {
@@ -127,7 +143,7 @@ try {
       error instanceof Error &&
       error.message.includes("UNIQUE constraint failed: rbac_sessions.session_id")
     ) {
-      duplicateOneShotMessage = "root admin session already exists. Re-run with BOOTSTRAP_USER_PASSWORD set to issue a fresh token for the same bootstrap session, or use the ADMIN_TOKEN you saved earlier.";
+      duplicateOneShotMessage = "root admin session already exists. Re-run bootstrap interactively to issue a fresh token for the same bootstrap session, or use the admin token you saved earlier.";
     } else {
       throw error;
     }
@@ -170,5 +186,6 @@ try {
     }, null, 2));
   }
 } finally {
+  promptInterface?.close();
   runtime.close();
 }

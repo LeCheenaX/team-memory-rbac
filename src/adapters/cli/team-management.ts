@@ -150,6 +150,9 @@ export function parseTeamManagementCommand(args: string[]): TeamManagementComman
   if (area === "roots" && action === "list") return ["roots", "list"];
   if (area === "members" && action === "list") return ["members", "list"];
   if (area === "members" && action === "create" && first !== undefined && second !== undefined && third !== undefined) {
+    if (args[5] === undefined && third.startsWith("role-")) {
+      return ["members", "create", first, second, "", third];
+    }
     return args[5] === undefined
       ? ["members", "create", first, second, third]
       : ["members", "create", first, second, third, args[5]];

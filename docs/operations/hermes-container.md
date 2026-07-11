@@ -53,9 +53,7 @@ local Team Memory state is in the `hermes-local-workspace` volume mounted at
 docker compose up -d qdrant
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json setup
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local check
-$env:BOOTSTRAP_USER_PASSWORD = "<test local admin password>"
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin -- --config /workspace/config/team-memory.hermes-local.json
-docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm --prefix /opt/team-memory-rbac run team -- --config /workspace/config/team-memory.hermes-local.json login
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes setup
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes config
 docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local hermes memory setup team_memory
@@ -66,17 +64,10 @@ docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local herm
 The `setup`, `check`, and `config` commands exit after doing their setup work.
 `hermes-local check` validates both the Hermes install and the activated Team
 Memory runtime; before setup it must fail with `memory module is not active`.
+The bootstrap command prompts for the local root admin password and writes the
+session file that Hermes will use.
 The interactive conversation begins when `hermes-local hermes` opens the Hermes
 chat UI. Keep that terminal attached for the transcript.
-
-The local container receives only connector/session values from the environment:
-
-```txt
-TEAM_MEMORY_TOKEN=<optional low-level override; normally empty for local account login>
-TEAM_MEMORY_SESSION_FILE=/root/.hermes/team-memory-session.json
-BOOTSTRAP_USER_PASSWORD=<test local admin password from the host environment>
-PYTHONPATH=/opt/team-memory-rbac
-```
 
 The memory runtime itself is configured by
 `/workspace/config/team-memory.hermes-local.json`, which lives in the persistent
@@ -91,9 +82,9 @@ embedding model, and writes activation only after validation passes.
 
 The bootstrap command writes the active Team Memory session to
 `/root/.hermes/team-memory-session.json`, which persists in the
-`hermes-local-home` volume. Use `team -- logout`, interactive
-`team -- --config /workspace/config/team-memory.hermes-local.json login`, or one-shot
-`npm run login <userId> <password>` to switch accounts. Login also writes a
+`hermes-local-home` volume. Use `team -- logout` and interactive
+`team -- --config /workspace/config/team-memory.hermes-local.json login` to
+switch accounts. Login also writes a
 main-agent session into the same file. Hermes reads that main-agent session
 automatically, so a logged-in container does not need a copied agent token.
 `TEAM_MEMORY_TOKEN` remains a low-level one-command override, but the normal
