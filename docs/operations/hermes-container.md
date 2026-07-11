@@ -101,6 +101,13 @@ The status command must show `Provider: team_memory`. Do not ask the chat agent
 to import `HermesTeamMemoryProvider`; the chat process only uses providers
 selected through Hermes' memory plugin system.
 
+`hermes memory status` must report Team Memory as available only after the
+session file contains a valid logged-in main-agent session with
+`memory.catalog` permission. Missing login state, stale sessions, plain user
+tokens, or sessions without read/catalog permission must keep the provider
+unavailable instead of reporting a healthy memory module that later fails at
+tool-call time.
+
 Hermes' own setup flow writes API keys, model settings, and preferences under
 `/root/.hermes`. If it asks you to edit the config file, run:
 

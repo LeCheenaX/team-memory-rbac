@@ -187,6 +187,27 @@ class ContractSchemaTest(unittest.TestCase):
         self.assertEqual(calls[0], ("GET", "identity", None))
         self.assertEqual(calls[2][0], "POST")
 
+    def test_http_client_unwraps_server_identity_payloads(self) -> None:
+        def transport(method: str, path: str, payload: dict | None) -> dict:
+            if path == "identity":
+                return {
+                    "value": {
+                        "sessionId": "session-http",
+                        "userId": "user-http",
+                        "agentId": "agent-http",
+                        "rootEntityId": "root-http",
+                        "taskScope": {"rootEntityId": "root-http"},
+                    }
+                }
+            raise AssertionError(path)
+
+        client = TeamMemoryHttpClient(
+            "https://memory.example",
+            "token",
+            transport=transport,
+        )
+        self.assertEqual(client.identity()["agentId"], "agent-http")
+
     def test_hermes_provider_uses_lifecycle_recall_and_capture(self) -> None:
         calls: list[tuple[str, str, dict | None]] = []
 
@@ -271,6 +292,74 @@ class ContractSchemaTest(unittest.TestCase):
 
         catalog = provider.catalog()
         self.assertEqual(catalog["tags"][0]["tag"], "hermes")
+
+    def test_hermes_provider_validates_agent_identity_and_catalog_tool(self) -> None:
+        def valid_transport(method: str, path: str, payload: dict | None) -> dict:
+            if path == "identity":
+                return {
+                    "sessionId": "session-http",
+                    "userId": "user-http",
+                    "agentId": "agent-http",
+                    "rootEntityId": "root-http",
+                    "taskScope": {"rootEntityId": "root-http"},
+                }
+            if path == "agent/tools":
+                return {"value": [{"name": "memory.catalog"}]}
+            raise AssertionError(path)
+
+        provider = HermesTeamMemoryProvider(
+            TeamMemoryHttpClient(
+                "https://memory.example",
+                "token",
+                transport=valid_transport,
+            )
+        )
+        self.assertEqual(provider.validate_session(), None)
+
+        def user_transport(method: str, path: str, payload: dict | None) -> dict:
+            if path == "identity":
+                return {
+                    "sessionId": "session-http",
+                    "userId": "user-http",
+                    "rootEntityId": "root-http",
+                    "taskScope": {"rootEntityId": "root-http"},
+                }
+            if path == "agent/tools":
+                return {"value": []}
+            raise AssertionError(path)
+
+        user_provider = HermesTeamMemoryProvider(
+            TeamMemoryHttpClient(
+                "https://memory.example",
+                "token",
+                transport=user_transport,
+            )
+        )
+        with self.assertRaisesRegex(RuntimeError, "agent session"):
+            user_provider.validate_session()
+
+        def no_catalog_transport(method: str, path: str, payload: dict | None) -> dict:
+            if path == "identity":
+                return {
+                    "sessionId": "session-http",
+                    "userId": "user-http",
+                    "agentId": "agent-http",
+                    "rootEntityId": "root-http",
+                    "taskScope": {"rootEntityId": "root-http"},
+                }
+            if path == "agent/tools":
+                return {"value": [{"name": "memory.search"}]}
+            raise AssertionError(path)
+
+        no_catalog_provider = HermesTeamMemoryProvider(
+            TeamMemoryHttpClient(
+                "https://memory.example",
+                "token",
+                transport=no_catalog_transport,
+            )
+        )
+        with self.assertRaisesRegex(RuntimeError, "memory.catalog"):
+            no_catalog_provider.validate_session()
 
     def test_local_client_backs_hermes_without_an_http_server(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

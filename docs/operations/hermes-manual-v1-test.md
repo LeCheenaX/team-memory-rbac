@@ -223,6 +223,10 @@ Pass condition:
 - `hermes config` shows a usable Hermes configuration under `/root/.hermes`.
 - `hermes memory status` shows `Provider: team_memory` and reports the plugin
   as installed and available.
+- Team Memory is available only after login/bootstrap created a valid
+  main-agent session. If the session file is missing, stale, a plain user
+  session, or lacks `memory.catalog`, Hermes must report Team Memory as
+  unavailable rather than entering a half-active state.
 
 ### Start The Real Hermes Container
 

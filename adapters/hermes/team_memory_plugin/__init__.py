@@ -39,33 +39,48 @@ def _session_token() -> str:
     return value if isinstance(value, str) else ""
 
 
+def _provider_for_token(token: str) -> HermesTeamMemoryProvider:
+    mode = os.environ.get("TEAM_MEMORY_MODE", "http").strip().lower()
+    if mode == "local":
+        repo_root = os.environ.get("TEAM_MEMORY_REPO_ROOT", "/opt/team-memory-rbac")
+        config_path = os.environ.get(
+            "TEAM_MEMORY_CONFIG_FILE",
+            "/workspace/config/team-memory.hermes-local.json",
+        )
+        return HermesTeamMemoryProvider.from_local(
+            token,
+            repo_root=repo_root,
+            config_path=config_path,
+        )
+    return HermesTeamMemoryProvider.from_http(
+        os.environ.get("TEAM_MEMORY_URL", "http://service:3000"),
+        token,
+    )
+
+
 class TeamMemoryHermesProvider(MemoryProvider):
     @property
     def name(self) -> str:
         return "team_memory"
 
     def is_available(self) -> bool:
-        return bool(_session_token())
+        token = _session_token()
+        if not token:
+            return False
+        try:
+            _provider_for_token(token).validate_session()
+        except Exception:
+            return False
+        return True
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
         token = _session_token()
-        mode = os.environ.get("TEAM_MEMORY_MODE", "http").strip().lower()
-        if mode == "local":
-            repo_root = os.environ.get("TEAM_MEMORY_REPO_ROOT", "/opt/team-memory-rbac")
-            config_path = os.environ.get(
-                "TEAM_MEMORY_CONFIG_FILE",
-                "/workspace/config/team-memory.hermes-local.json",
+        if not token:
+            raise RuntimeError(
+                "Team Memory is not logged in for this Hermes container. Run Team Memory login before enabling the memory provider."
             )
-            self._provider = HermesTeamMemoryProvider.from_local(
-                token,
-                repo_root=repo_root,
-                config_path=config_path,
-            )
-        else:
-            self._provider = HermesTeamMemoryProvider.from_http(
-                os.environ.get("TEAM_MEMORY_URL", "http://service:3000"),
-                token,
-            )
+        self._provider = _provider_for_token(token)
+        self._provider.validate_session()
         self._session_id = session_id
 
     def system_prompt_block(self) -> str:

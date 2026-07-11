@@ -59,6 +59,12 @@ does not receive user-management, role-assignment, root-create, or root-delete
 permissions. Hosts should use the session file by default and should not ask the
 operator to copy an agent token after login.
 
+Host memory providers must validate the session before reporting an active
+memory module. A provider is active only when the session resolves to an agent
+identity and exposes `memory.catalog`. Missing login state, stale sessions,
+plain user sessions, or sessions without read/catalog permission must stay
+unavailable and prompt the operator to log in or fix the user's role.
+
 Log out by clearing the local session file:
 
 ```sh

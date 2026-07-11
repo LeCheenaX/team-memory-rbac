@@ -73,6 +73,8 @@ test("Hermes local compose setup and manual flow do not require server client to
   assert.match(manualFlow, /hermes-b hermes setup/);
   assert.match(manualFlow, /hermes memory setup team_memory/);
   assert.match(manualFlow, /Provider: team_memory/);
+  assert.match(manualFlow, /plain user\s+session/);
+  assert.match(manualFlow, /lacks `memory\.catalog`/);
   assert.match(manualFlow, /entity\/tag catalog/);
   assert.match(manualFlow, /memory\.catalog/);
   assert.match(manualFlow, /tagsAny/);

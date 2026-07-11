@@ -33,7 +33,7 @@ class TeamMemoryHttpClient:
         self._transport = transport
 
     def identity(self) -> dict[str, Any]:
-        return self._request("GET", "identity")
+        return self._value_or_payload(self._request("GET", "identity"))
 
     def list_tools(self) -> list[dict[str, Any]]:
         payload = self._request("GET", "agent/tools")
@@ -98,6 +98,10 @@ class TeamMemoryHttpClient:
                 exc.code,
                 {} if body == "" else json.loads(body),
             ) from exc
+
+    def _value_or_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        value = payload.get("value")
+        return value if isinstance(value, dict) else payload
 
     def _required_string(self, payload: dict[str, Any], key: str) -> str:
         value = payload.get(key)
@@ -246,6 +250,23 @@ class HermesTeamMemoryProvider:
         env: dict[str, str] | None = None,
     ) -> "HermesTeamMemoryProvider":
         return cls(TeamMemoryLocalClient(token, repo_root=repo_root, config_path=config_path, env=env))
+
+    def validate_session(self) -> None:
+        identity = self._client.identity()
+        if not isinstance(identity.get("agentId"), str):
+            raise RuntimeError(
+                "Team Memory requires a logged-in agent session; run Team Memory login for this container."
+            )
+        tools = self._client.list_tools()
+        tool_names = {
+            str(tool.get("name"))
+            for tool in tools
+            if isinstance(tool, dict)
+        }
+        if "memory.catalog" not in tool_names:
+            raise RuntimeError(
+                "Team Memory agent session is missing memory.catalog permission; log in again or ask an administrator to grant read access."
+            )
 
     def recall_context(
         self,
