@@ -446,6 +446,12 @@ test("OpenClaw, Claude Code, and Hermes expose host-specific memory integration 
     openClawReplacement.hostConfiguration.settings["plugins.slots.memory"],
     "team-memory-rbac",
   );
+  assert.equal(
+    (openClawReplacement.hostConfiguration.settings.autoCapture as {
+      event: string;
+    }).event,
+    "agent_end",
+  );
 
   const claudeCode = new ClaudeCodeAgentAdapter(sessions, toolAdapter);
   const claudeParallel = await claudeCode.createMemoryIntegrationPlan(
@@ -457,6 +463,14 @@ test("OpenClaw, Claude Code, and Hermes expose host-specific memory integration 
   assert.equal(
     claudeParallel.hostConfiguration.settings["hooks.UserPromptSubmit"],
     "/host/claude_code/recall",
+  );
+  assert.equal(
+    claudeParallel.hostConfiguration.settings["hooks.SessionEnd"],
+    "/host/claude_code/capture",
+  );
+  assert.equal(
+    claudeParallel.hostConfiguration.settings["hooks.PreCompact"],
+    "/host/claude_code/capture",
   );
   const claudeReplacement = await claudeCode.createMemoryIntegrationPlan(
     session.token,
@@ -485,4 +499,8 @@ test("OpenClaw, Claude Code, and Hermes expose host-specific memory integration 
   );
   assert.equal(hermesReplacement.teamMemory.canRead, true);
   assert.equal(hermesReplacement.teamMemory.canWrite, true);
+  assert.deepEqual(
+    hermesReplacement.hostConfiguration.settings["memory.hooks"],
+    ["prefetch", "sync_turn", "on_pre_compress", "on_session_end"],
+  );
 });

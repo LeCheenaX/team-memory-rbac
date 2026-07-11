@@ -99,6 +99,25 @@ async function writeMemory(client: TeamMemoryHttpClient): Promise<void> {
   });
 }
 
+function searchItems<T>(result: unknown): T[] {
+  if (
+    result !== null &&
+    typeof result === "object" &&
+    "items" in result &&
+    Array.isArray((result as { items: unknown }).items)
+  ) {
+    return (result as { items: T[] }).items;
+  }
+  if (
+    result !== null &&
+    typeof result === "object" &&
+    "value" in result
+  ) {
+    return searchItems<T>((result as { value: unknown }).value);
+  }
+  throw new Error("search result did not include items");
+}
+
 test("host lifecycle recall injects trusted-boundary context and capture writes success and failure paths", async () => {
   const fixture = await setup();
   try {
@@ -122,15 +141,50 @@ test("host lifecycle recall injects trusted-boundary context and capture writes 
       outcome: "failure",
       userPrompt: "Implement Hermes mem0 provider",
       errorSummary: "Provider callback payload was missing",
-    }) as { status: string; branchId: string; extra: Record<string, unknown> };
+    }) as {
+      status: string;
+      entityId: string;
+      branchId: string;
+      extra: Record<string, unknown>;
+    };
     assert.equal(captured.status, "captured");
-    assert.deepEqual(captured.extra, {
-      host: "hermes",
-      sessionId: "hermes-session",
-      outcome: "failure",
-      userPrompt: "Implement Hermes mem0 provider",
-      errorSummary: "Provider callback payload was missing",
-    });
+    assert.equal(captured.extra.host, "hermes");
+    assert.equal(captured.extra.sessionId, "hermes-session");
+    assert.equal(captured.extra.outcome, "failure");
+    assert.equal(captured.extra.userPrompt, "Implement Hermes mem0 provider");
+    assert.equal(captured.extra.errorSummary, "Provider callback payload was missing");
+    assert.deepEqual(captured.extra.captureLayers, [
+      "L3:memory_entity",
+      "L2:memory_entity_branch",
+      "L1:conversation_resource",
+      "L1:resource_chunk",
+      "L2:memory_relation",
+    ]);
+
+    const layerIds = captured.extra.layerIds as Record<string, string>;
+    assert.equal(typeof layerIds.resourceId, "string");
+    assert.equal(typeof layerIds.chunkId, "string");
+    assert.equal(typeof layerIds.relationId, "string");
+
+    const view = fixture.runtime.history.readActiveView("root-host", "main");
+    assert.ok(view.entities.some(({ id }) => id === captured.entityId));
+    assert.ok(view.entityBranches.some(({ id }) => id === captured.branchId));
+    assert.ok(view.resources.some(({ id, sourceType }) =>
+      id === layerIds.resourceId && sourceType === "conversation"
+    ));
+    assert.ok(view.resourceChunks.some(({ id, resourceId, text }) =>
+      id === layerIds.chunkId &&
+      resourceId === layerIds.resourceId &&
+      text.includes("Provider callback payload was missing")
+    ));
+    assert.ok(view.relations.some((relation) =>
+      relation.id === layerIds.relationId &&
+      relation.sourceKind === "memory_entity" &&
+      relation.sourceId === captured.entityId &&
+      relation.targetKind === "resource_chunk" &&
+      relation.targetId === layerIds.chunkId &&
+      relation.relationType === "refers_to"
+    ));
 
     const rerecalled = await client.recallHostMemory("hermes", {
       sessionId: "hermes-session",
@@ -140,6 +194,28 @@ test("host lifecycle recall injects trusted-boundary context and capture writes 
     assert.match(rerecalled.text, /failure/);
     assert.match(rerecalled.text, /Extra:/);
     assert.match(rerecalled.text, /Provider callback payload was missing/);
+
+    const l1 = await client.search({
+      query: "Provider callback payload was missing",
+      layer: "L1",
+    });
+    assert.ok(searchItems<{ kind: string; chunk?: { id: string } }>(l1).some((item) =>
+      item.kind === "resource_chunk" && item.chunk?.id === layerIds.chunkId
+    ));
+    const l2 = await client.search({
+      query: "Provider callback payload was missing",
+      layer: "L2",
+    });
+    assert.ok(searchItems<{ kind: string; relation?: { id: string } }>(l2).some((item) =>
+      item.kind === "relation" && item.relation?.id === layerIds.relationId
+    ));
+    const l3 = await client.search({
+      query: "Provider callback payload was missing",
+      layer: "L3",
+    });
+    assert.ok(searchItems<{ kind: string; entity?: { id: string } }>(l3).some((item) =>
+      item.kind === "entity" && item.entity?.id === captured.entityId
+    ));
   } finally {
     await close(fixture);
   }
@@ -171,8 +247,29 @@ test("Claude Code hooks and OpenClaw plugin call the shared lifecycle endpoints"
     session_id: "claude-session",
     transcript_path: "/tmp/transcript.jsonl",
   });
-  assert.deepEqual(calls.map((call) => call.host), ["claude_code", "claude_code"]);
+  await hooks.sessionEnd({
+    session_id: "claude-session",
+    final_assistant_message: "done",
+  });
+  await hooks.teammateIdle({
+    session_id: "claude-session",
+    prompt: "idle prompt",
+  });
+  await hooks.preCompact({
+    session_id: "claude-session",
+    error_summary: "about to compact",
+  });
+  assert.deepEqual(calls.map((call) => call.host), [
+    "claude_code",
+    "claude_code",
+    "claude_code",
+    "claude_code",
+    "claude_code",
+  ]);
   assert.equal(calls[1]?.input.outcome, "failure");
+  assert.equal(calls[2]?.input.outcome, "success");
+  assert.equal(calls[3]?.input.outcome, "unknown");
+  assert.equal(calls[4]?.input.outcome, "unknown");
 
   const openclawFetch: typeof fetch = async (input, init) => {
     const url = input instanceof URL ? input : new URL(String(input));
@@ -193,9 +290,20 @@ test("Claude Code hooks and OpenClaw plugin call the shared lifecycle endpoints"
     (openclaw.manifest().lifecycle as { recall: string }).recall,
     "host/openclaw/recall",
   );
-  const captured = await openclaw.capturePath({
+  assert.deepEqual(
+    (openclaw.manifest().lifecycle as {
+      autoCapture: { event: string; layers: string[] };
+    }).autoCapture.layers,
+    [
+      "L3:memory_entity",
+      "L2:memory_entity_branch",
+      "L1:conversation_resource",
+      "L1:resource_chunk",
+      "L2:memory_relation",
+    ],
+  );
+  const captured = await openclaw.agentEnd({
     sessionId: "openclaw-session",
-    outcome: "success",
     userPrompt: "finish OpenClaw active memory",
     finalAssistantMessage: "done",
   }) as { status: string };

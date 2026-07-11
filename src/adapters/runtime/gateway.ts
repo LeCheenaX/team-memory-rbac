@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { contentHash } from "../cas/filesystem.ts";
 import { ResourceConflictError, ResourceNotFoundError } from "../../resources/service.ts";
 import {
   CloudAuthorizedViewAdapter,
@@ -181,6 +182,24 @@ function captureDescription(input: HostCaptureInput): string {
       ? ""
       : `Final assistant message: ${input.finalAssistantMessage}`,
     input.errorSummary === undefined ? "" : `Error summary: ${input.errorSummary}`,
+    input.transcriptPath === undefined ? "" : `Transcript: ${input.transcriptPath}`,
+    input.toolEvents === undefined
+      ? ""
+      : `Tool events: ${JSON.stringify(input.toolEvents)}`,
+  ];
+  return lines.filter((line) => line.length > 0).join("\n");
+}
+
+function captureConversationText(input: HostCaptureInput): string {
+  const lines = [
+    `Host: ${input.host}`,
+    `Session: ${input.sessionId}`,
+    `Outcome: ${input.outcome}`,
+    input.userPrompt === undefined ? "" : `User: ${input.userPrompt}`,
+    input.finalAssistantMessage === undefined
+      ? ""
+      : `Assistant: ${input.finalAssistantMessage}`,
+    input.errorSummary === undefined ? "" : `Error: ${input.errorSummary}`,
     input.transcriptPath === undefined ? "" : `Transcript: ${input.transcriptPath}`,
     input.toolEvents === undefined
       ? ""
@@ -1743,8 +1762,21 @@ export class TeamMemoryGateway {
     const id = randomUUID();
     const entityId = `host-capture:${id}`;
     const branchId = `host-capture-branch:${id}`;
-    const entityCommitId = `host-capture-entity-commit:${id}`;
-    const branchCommitId = `host-capture-branch-commit:${id}`;
+    const resourceId = `host-capture-resource:${id}`;
+    const revisionId = `host-capture-revision:${id}`;
+    const chunkId = `host-capture-chunk:${id}`;
+    const relationId = `host-capture-relation:${id}`;
+    const commitId = `host-capture-commit:${id}`;
+    const conversationText = captureConversationText(input);
+    const hash = contentHash(conversationText);
+    await this.runtime.cas.put({ contentHash: hash, content: conversationText });
+    const stored = await this.runtime.cas.get(hash);
+    if (stored === undefined || stored.contentHash !== hash) {
+      throw new TeamMemoryGatewayError(
+        "dependency_unavailable",
+        "capture conversation CAS object is unavailable after write",
+      );
+    }
     const branchExtraInfo = {
       host: input.host,
       sessionId: input.sessionId,
@@ -1757,17 +1789,17 @@ export class TeamMemoryGateway {
       ...(input.errorSummary === undefined ? {} : { errorSummary: input.errorSummary }),
       ...(input.toolEvents === undefined ? {} : { toolEvents: input.toolEvents }),
     };
-    const entityResult = unwrap(await this.writeRouter.execute({
+    const result = unwrap(await this.writeRouter.execute({
       subject: gatewaySubject(session),
       rootEntityId: session.rootEntityId,
       taskScope: session.taskScope,
       branchRef: branch,
-      action: "write_entity",
+      action: "commit",
       resourceKind: "memory_entity",
-      clientMutationId: `host-capture-entity:${id}`,
+      clientMutationId: `host-capture:${id}`,
       commit: {
-        id: entityCommitId,
-        message: `Capture ${input.host} ${input.outcome} path`,
+        id: commitId,
+        message: `Capture ${input.host} ${input.outcome} memory graph`,
       },
       operation: {
         kind: "create_entity",
@@ -1781,52 +1813,132 @@ export class TeamMemoryGateway {
           updatedAt: now,
         },
       },
-    }));
-    if (entityResult.status === "conflict") {
-      throw new TeamMemoryGatewayError("conflict", entityResult.conflict.id);
-    }
-    const branchResult = unwrap(await this.writeRouter.execute({
-      subject: gatewaySubject(session),
-      rootEntityId: session.rootEntityId,
-      taskScope: session.taskScope,
-      branchRef: branch,
-      action: "write_entity_branch",
-      resourceKind: "memory_entity_branch",
-      clientMutationId: `host-capture-branch:${id}`,
-      commit: {
-        id: branchCommitId,
-        message: `Capture ${input.host} ${input.outcome} details`,
-      },
-      operation: {
-        kind: "create_entity_branch",
-        id: `host-capture-branch-operation:${id}`,
-        branch: {
-          id: branchId,
-          entityId,
-          rootEntityId: session.rootEntityId,
-          branchRef: branch,
-          title: input.title ?? captureTitle(input),
-          description: captureDescription(input),
-          tags: ["host-memory", input.host, input.outcome],
-          extraInfo: branchExtraInfo,
-          importance: input.outcome === "failure" ? 0.9 : 0.75,
-          confidence: 0.8,
-          status: "active",
-          createdAt: now,
-          updatedAt: now,
+      operations: [
+        {
+          kind: "create_entity",
+          id: `host-capture-entity-operation:${id}`,
+          entity: {
+            id: entityId,
+            rootEntityId: session.rootEntityId,
+            currentBranchId: branchId,
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          },
         },
-      },
+        {
+          kind: "create_entity_branch",
+          id: `host-capture-branch-operation:${id}`,
+          branch: {
+            id: branchId,
+            entityId,
+            rootEntityId: session.rootEntityId,
+            branchRef: branch,
+            title: input.title ?? captureTitle(input),
+            description: captureDescription(input),
+            tags: ["host-memory", input.host, input.outcome],
+            extraInfo: branchExtraInfo,
+            importance: input.outcome === "failure" ? 0.9 : 0.75,
+            confidence: 0.8,
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+        {
+          kind: "create_resource",
+          id: `host-capture-resource-operation:${id}`,
+          revisionId,
+          resource: {
+            id: resourceId,
+            rootEntityId: session.rootEntityId,
+            sourceType: "conversation",
+            title: `${input.host} ${input.sessionId} conversation capture`,
+            uri: `${input.host}:session:${input.sessionId}`,
+            contentHash: hash,
+            currentRevisionId: revisionId,
+            metadata: {
+              host: input.host,
+              sessionId: input.sessionId,
+              outcome: input.outcome,
+              layer: "L1",
+            },
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+        {
+          kind: "create_resource_chunk",
+          id: `host-capture-chunk-operation:${id}`,
+          chunk: {
+            id: chunkId,
+            rootEntityId: session.rootEntityId,
+            resourceId,
+            chunkIndex: 0,
+            text: conversationText,
+            contentHash: hash,
+            tokenCount: Math.ceil(conversationText.length / 4),
+            metadata: {
+              revisionId,
+              contentHash: hash,
+              host: input.host,
+              sessionId: input.sessionId,
+              outcome: input.outcome,
+              layer: "L1",
+            },
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+        {
+          kind: "create_relation",
+          id: `host-capture-relation-operation:${id}`,
+          relation: {
+            id: relationId,
+            rootEntityId: session.rootEntityId,
+            sourceKind: "memory_entity",
+            sourceId: entityId,
+            targetKind: "resource_chunk",
+            targetId: chunkId,
+            relationType: "refers_to",
+            role: "l1_evidence",
+            weight: 1,
+            confidence: 0.9,
+            branchRef: branch,
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+      ],
     }));
-    if (branchResult.status === "conflict") {
-      throw new TeamMemoryGatewayError("conflict", branchResult.conflict.id);
+    if (result.status === "conflict") {
+      throw new TeamMemoryGatewayError("conflict", result.conflict.id);
     }
     await this.projectMemoryIfEnabled(session.rootEntityId, branch);
     return {
       status: "captured",
       entityId,
       branchId,
-      commitIds: [entityCommitId, branchCommitId],
-      extra: branchExtraInfo,
+      commitIds: [commitId],
+      extra: {
+        ...branchExtraInfo,
+        captureLayers: [
+          "L3:memory_entity",
+          "L2:memory_entity_branch",
+          "L1:conversation_resource",
+          "L1:resource_chunk",
+          "L2:memory_relation",
+        ],
+        layerIds: {
+          entityId,
+          branchId,
+          resourceId,
+          revisionId,
+          chunkId,
+          relationId,
+        },
+      },
     };
   }
 

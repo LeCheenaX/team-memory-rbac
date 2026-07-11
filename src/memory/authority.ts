@@ -528,6 +528,8 @@ export class InMemoryMemoryAuthority
       (
         operation.kind === "create_entity" ||
         operation.kind === "create_entity_branch" ||
+        operation.kind === "create_resource" ||
+        operation.kind === "create_resource_chunk" ||
         operation.kind === "create_relation" ||
         operation.kind === "replace_relation"
       )

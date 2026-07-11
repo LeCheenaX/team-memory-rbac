@@ -334,6 +334,27 @@ function cloneItem<T extends MemoryRetrievalItem>(item: T): T {
   return structuredClone(item);
 }
 
+function relationExpansionObjectIds(item: MemoryRetrievalItem): string[] {
+  if (item.kind === "entity") {
+    return [
+      item.entity.id,
+      ...(item.branch === undefined ? [] : [item.branch.id]),
+    ];
+  }
+  if (item.kind === "resource_chunk") {
+    return [
+      item.chunk.id,
+      item.chunk.resourceId,
+      ...(item.resource === undefined ? [] : [item.resource.id]),
+    ];
+  }
+  return [
+    item.relation.id,
+    item.relation.sourceId,
+    item.relation.targetId,
+  ];
+}
+
 function bm25Parameters(queryTerms: number): {
   midpoint: number;
   steepness: number;
@@ -592,7 +613,6 @@ export class MemoryRetrievalAdapter
       });
     }
 
-    const semanticEntityItems: EntityRetrievalItem[] = [];
     const extractedEntities = this.entityExtractor.extract(query.text).slice(0, 8);
     for (const entityText of extractedEntities) {
       const embedding = await this.embeddings.embed(entityText);
@@ -603,18 +623,16 @@ export class MemoryRetrievalAdapter
       );
       for (const item of semanticItems.filter((candidate) => candidate.score >= 0.5)) {
         addSignal(item, { semantic: item.score });
-        if (item.kind === "entity") {
-          semanticEntityItems.push(item);
-        }
       }
     }
 
     if (layer === "L2") {
-      for (const item of semanticEntityItems) {
-        const objectIds = [
-          item.entity.id,
-          ...(item.branch === undefined ? [] : [item.branch.id]),
-        ];
+      const relationExpansionHits = [...signals.values()].map((entry) => ({
+        item: entry.item,
+        score: fuseScore(entry),
+      }));
+      for (const hit of relationExpansionHits) {
+        const objectIds = [...new Set(relationExpansionObjectIds(hit.item))];
         for (const objectId of objectIds) {
           const relations = await this.source.relationsForObject(scopedContext, {
             objectId,
@@ -632,26 +650,29 @@ export class MemoryRetrievalAdapter
               relation,
               depth: 1,
               score: relation.weight,
-              origin: item.origin,
+              origin: hit.item.origin,
             };
             addSignal(relationItem, {
               entityBoost:
-                item.score *
+                hit.score *
                 relationBoostWeight(relation) *
                 memoryCountWeight(byType.get(relation.relationType)?.length ?? 1),
             });
-            if (relationCanPackFromHit(relation, objectId)) {
+            if (
+              hit.item.kind === "entity" &&
+              relationCanPackFromHit(relation, objectId)
+            ) {
               addSignal(
                 {
-                  ...cloneItem(item),
+                  ...cloneItem(hit.item),
                   packedRelations: [
-                    ...(item.packedRelations ?? []),
+                    ...(hit.item.packedRelations ?? []),
                     relation,
                   ],
                 },
                 {
                   entityBoost:
-                    item.score *
+                    hit.score *
                     relationBoostWeight(relation) *
                     memoryCountWeight(byType.get(relation.relationType)?.length ?? 1),
                 },

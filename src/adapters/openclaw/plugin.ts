@@ -130,6 +130,20 @@ export class OpenClawTeamMemoryPlugin {
     return this.client.captureHostMemory("openclaw", input);
   }
 
+  async agentEnd(input: {
+    sessionId: string;
+    outcome?: "success" | "failure" | "unknown";
+    userPrompt?: string;
+    finalAssistantMessage?: string;
+    errorSummary?: string;
+    toolEvents?: Array<Record<string, unknown>>;
+  }): Promise<unknown> {
+    return this.capturePath({
+      ...input,
+      outcome: input.outcome ?? "success",
+    });
+  }
+
   manifest(): Record<string, unknown> {
     return {
       id: this.id,
@@ -140,6 +154,17 @@ export class OpenClawTeamMemoryPlugin {
       lifecycle: {
         recall: "host/openclaw/recall",
         capture: "host/openclaw/capture",
+        autoCapture: {
+          event: "agent_end",
+          endpoint: "host/openclaw/capture",
+          layers: [
+            "L3:memory_entity",
+            "L2:memory_entity_branch",
+            "L1:conversation_resource",
+            "L1:resource_chunk",
+            "L2:memory_relation",
+          ],
+        },
       },
     };
   }

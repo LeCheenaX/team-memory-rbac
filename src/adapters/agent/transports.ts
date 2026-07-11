@@ -141,9 +141,22 @@ const OPENCLAW_PROFILE: AgentRuntimeProfile = {
             actions: [
               "Install a Team Memory OpenClaw tool plugin",
               "Expose RBAC-protected team_memory.search and team_memory.write tools",
+              "Enable OpenClaw agent_end autoCapture to route session captures through Team Memory",
               "Optionally add an OpenClaw skill that teaches when to call Team Memory",
             ],
-            settings: {},
+            settings: {
+              autoCapture: {
+                event: "agent_end",
+                endpoint: "/host/openclaw/capture",
+                layers: [
+                  "L3:memory_entity",
+                  "L2:memory_entity_branch",
+                  "L1:conversation_resource",
+                  "L1:resource_chunk",
+                  "L2:memory_relation",
+                ],
+              },
+            },
           },
         }
       : {
@@ -160,9 +173,21 @@ const OPENCLAW_PROFILE: AgentRuntimeProfile = {
               "Register Team Memory as the active memory plugin",
               "Expose memory_search and memory_catalog-compatible tools backed by Team Memory",
               "Route promotion and write tools through the Team Memory gateway",
+              "Enable OpenClaw agent_end autoCapture to route session captures through Team Memory",
             ],
             settings: {
               "plugins.slots.memory": "team-memory-rbac",
+              autoCapture: {
+                event: "agent_end",
+                endpoint: "/host/openclaw/capture",
+                layers: [
+                  "L3:memory_entity",
+                  "L2:memory_entity_branch",
+                  "L1:conversation_resource",
+                  "L1:resource_chunk",
+                  "L2:memory_relation",
+                ],
+              },
             },
           },
         },
@@ -195,13 +220,16 @@ const CLAUDE_CODE_PROFILE: AgentRuntimeProfile = {
           hostConfiguration: {
             actions: [
               "Register a Claude Code UserPromptSubmit hook that calls Team Memory recall",
-              "Register Claude Code Stop and StopFailure hooks that call Team Memory capture",
+              "Register Claude Code Stop, StopFailure, SessionEnd, TeammateIdle, and PreCompact hooks that call Team Memory capture",
               "Optionally keep Team Memory MCP tools for explicit agent reads and writes",
             ],
             settings: {
               "hooks.UserPromptSubmit": "/host/claude_code/recall",
               "hooks.Stop": "/host/claude_code/capture",
               "hooks.StopFailure": "/host/claude_code/capture",
+              "hooks.SessionEnd": "/host/claude_code/capture",
+              "hooks.TeammateIdle": "/host/claude_code/capture",
+              "hooks.PreCompact": "/host/claude_code/capture",
             },
           },
         }
@@ -226,6 +254,9 @@ const CLAUDE_CODE_PROFILE: AgentRuntimeProfile = {
               "hooks.UserPromptSubmit": "/host/claude_code/recall",
               "hooks.Stop": "/host/claude_code/capture",
               "hooks.StopFailure": "/host/claude_code/capture",
+              "hooks.SessionEnd": "/host/claude_code/capture",
+              "hooks.TeammateIdle": "/host/claude_code/capture",
+              "hooks.PreCompact": "/host/claude_code/capture",
             },
           },
         },
@@ -252,10 +283,25 @@ const HERMES_PROFILE: AgentRuntimeProfile = {
     hostConfiguration: {
       actions: [
         "Register the Team Memory Hermes provider at the same memory-plugin seam as mem0-style providers",
-        "Use lifecycle recall and capture endpoints for automatic read/write",
+        "Use prefetch, sync_turn, on_pre_compress, and on_session_end lifecycle hooks for automatic read/write",
         "Keep authorization, memory writes, retrieval, and history in the TypeScript core",
       ],
-      settings: {},
+      settings: {
+        "memory.provider": "team_memory",
+        "memory.hooks": [
+          "prefetch",
+          "sync_turn",
+          "on_pre_compress",
+          "on_session_end",
+        ],
+        captureLayers: [
+          "L3:memory_entity",
+          "L2:memory_entity_branch",
+          "L1:conversation_resource",
+          "L1:resource_chunk",
+          "L2:memory_relation",
+        ],
+      },
     },
   }),
 };

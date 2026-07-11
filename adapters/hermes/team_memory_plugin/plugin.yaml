@@ -1,3 +1,8 @@
 name: team_memory
 version: 0.1.0
 description: "Team Memory external provider for Hermes, backed by this repository's RBAC runtime."
+hooks:
+  - prefetch
+  - sync_turn
+  - on_pre_compress
+  - on_session_end

@@ -118,6 +118,50 @@ class TeamMemoryHermesProvider(MemoryProvider):
             session_id=session_id or getattr(self, "_session_id", "hermes"),
         )
 
+    def on_session_end(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        session_id: str = "",
+        outcome: str = "success",
+        **kwargs: Any,
+    ) -> None:
+        self._capture_messages(
+            messages,
+            session_id=session_id,
+            outcome=outcome,
+            error_summary=kwargs.get("error_summary"),
+        )
+
+    def on_pre_compress(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        session_id: str = "",
+        **kwargs: Any,
+    ) -> None:
+        self._capture_messages(
+            messages,
+            session_id=session_id,
+            outcome=str(kwargs.get("outcome") or "unknown"),
+            error_summary=kwargs.get("error_summary"),
+        )
+
+    def _capture_messages(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        session_id: str = "",
+        outcome: str = "success",
+        error_summary: Any = None,
+    ) -> None:
+        metadata: dict[str, Any] = {
+            "session_id": session_id or getattr(self, "_session_id", "hermes"),
+        }
+        if isinstance(error_summary, str) and error_summary:
+            metadata["error_summary"] = error_summary
+        self._provider.add(messages, outcome=outcome, **metadata)
+
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         return [
             {

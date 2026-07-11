@@ -5,6 +5,8 @@ import type { TeamMemoryGateway } from "../runtime/gateway.ts";
 export interface ClaudeCodeHookPayload {
   hook_event_name?: string;
   prompt?: string;
+  final_assistant_message?: string;
+  error_summary?: string;
   session_id?: string;
   transcript_path?: string;
   cwd?: string;
@@ -73,23 +75,49 @@ export class ClaudeCodeTeamMemoryHooks {
     payload: ClaudeCodeHookPayload,
     outcome: "success" | "failure" | "unknown" = "success",
   ): Promise<ClaudeCodeHookResponse> {
+    return this.capture(payload, outcome, payload.hook_event_name ?? "Stop");
+  }
+
+  stopFailure(payload: ClaudeCodeHookPayload): Promise<ClaudeCodeHookResponse> {
+    return this.capture(payload, "failure", payload.hook_event_name ?? "StopFailure");
+  }
+
+  sessionEnd(payload: ClaudeCodeHookPayload): Promise<ClaudeCodeHookResponse> {
+    return this.capture(payload, "success", payload.hook_event_name ?? "SessionEnd");
+  }
+
+  teammateIdle(payload: ClaudeCodeHookPayload): Promise<ClaudeCodeHookResponse> {
+    return this.capture(payload, "unknown", payload.hook_event_name ?? "TeammateIdle");
+  }
+
+  preCompact(payload: ClaudeCodeHookPayload): Promise<ClaudeCodeHookResponse> {
+    return this.capture(payload, "unknown", payload.hook_event_name ?? "PreCompact");
+  }
+
+  private async capture(
+    payload: ClaudeCodeHookPayload,
+    outcome: "success" | "failure" | "unknown",
+    hookEventName: string,
+  ): Promise<ClaudeCodeHookResponse> {
     await this.client.captureHostMemory("claude_code", {
       sessionId: sessionId(payload),
       outcome,
       ...(typeof payload.prompt === "string" ? { userPrompt: payload.prompt } : {}),
+      ...(typeof payload.final_assistant_message === "string"
+        ? { finalAssistantMessage: payload.final_assistant_message }
+        : {}),
+      ...(typeof payload.error_summary === "string"
+        ? { errorSummary: payload.error_summary }
+        : {}),
       ...(typeof payload.transcript_path === "string"
         ? { transcriptPath: payload.transcript_path }
         : {}),
     });
     return {
       hookSpecificOutput: {
-        hookEventName: payload.hook_event_name ?? "Stop",
+        hookEventName,
       },
     };
-  }
-
-  stopFailure(payload: ClaudeCodeHookPayload): Promise<ClaudeCodeHookResponse> {
-    return this.stop(payload, "failure");
   }
 }
 

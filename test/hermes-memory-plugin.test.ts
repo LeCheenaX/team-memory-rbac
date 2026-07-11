@@ -21,6 +21,9 @@ test("Team Memory ships as a real Hermes memory plugin", async () => {
   assert.match(plugin, /agentSessionToken/);
   assert.match(plugin, /validate_session/);
   assert.doesNotMatch(plugin, /return bool\(_session_token\(\)\)/);
+  assert.match(plugin, /def on_session_end/);
+  assert.match(plugin, /def on_pre_compress/);
+  assert.match(plugin, /def _capture_messages/);
   assert.match(plugin, /Variable metadata appears under extra/);
   assert.match(plugin, /names/);
   assert.doesNotMatch(plugin, /entityIds/);
@@ -32,4 +35,6 @@ test("Team Memory ships as a real Hermes memory plugin", async () => {
   assert.doesNotMatch(plugin, /oldClaim/);
   assert.doesNotMatch(plugin, /newClaim/);
   assert.match(metadata, /name: team_memory/);
+  assert.match(metadata, /on_session_end/);
+  assert.match(metadata, /on_pre_compress/);
 });
