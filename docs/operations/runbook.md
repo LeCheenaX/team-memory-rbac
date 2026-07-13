@@ -132,6 +132,15 @@ provider = HermesTeamMemoryProvider.from_http(
 
 The provider exposes `recall_context`, `search`, and `add`; all calls route through the TypeScript lifecycle gateway. The Python adapter does not duplicate RBAC, History, retrieval, sync, or conflict rules.
 
+The Hermes plugin also writes provider-side lifecycle audit entries to
+`$TEAM_MEMORY_HERMES_HOOK_LOG`, or to
+`$HERMES_HOME/team-memory-hooks.jsonl` by default. Use the
+`team_memory_lifecycle_log` tool from Hermes to inspect recent `prefetch`,
+`sync_turn`, `on_session_end`, `on_pre_compress`, explicit capture, and failure
+events. If this log contains explicit `team_memory_capture` entries but no
+`sync_turn` or `on_session_end` entries, Hermes did not invoke the automatic
+provider lifecycle hooks for that session.
+
 ## Claude Code
 
 Use `ClaudeCodeTeamMemoryHooks` for automatic lifecycle integration. Configure `UserPromptSubmit` to call `/host/claude_code/recall`, and configure `Stop` and `StopFailure` to call `/host/claude_code/capture`. MCP remains available for explicit tools, but hooks are the primary zero-main-agent-tool-call path.

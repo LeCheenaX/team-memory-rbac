@@ -57,6 +57,36 @@ function payloadFor(point: VectorMemoryPoint): MemoryVectorPayload {
   };
 }
 
+function vectorSizeFromCollection(payload: unknown): number | undefined {
+  const vectors = (((payload as { result?: unknown }).result as {
+    config?: { params?: { vectors?: unknown } };
+  } | undefined)?.config?.params?.vectors);
+  if (
+    vectors !== null &&
+    typeof vectors === "object" &&
+    !Array.isArray(vectors) &&
+    typeof (vectors as { size?: unknown }).size === "number"
+  ) {
+    return (vectors as { size: number }).size;
+  }
+  if (
+    vectors !== null &&
+    typeof vectors === "object" &&
+    !Array.isArray(vectors)
+  ) {
+    const defaultVector = (vectors as { default?: unknown }).default;
+    if (
+      defaultVector !== null &&
+      typeof defaultVector === "object" &&
+      !Array.isArray(defaultVector) &&
+      typeof (defaultVector as { size?: unknown }).size === "number"
+    ) {
+      return (defaultVector as { size: number }).size;
+    }
+  }
+  return undefined;
+}
+
 function matchCondition(key: string, value: unknown): QdrantCondition {
   return { key, match: { value } };
 }
@@ -264,6 +294,24 @@ export class QdrantVectorMemoryStore implements VectorMemoryStore {
         },
         conflictValue: {},
       });
+    } else if (vectorSizeFromCollection(exists) !== undefined) {
+      const existingSize = vectorSizeFromCollection(exists);
+      if (existingSize !== vectorSize) {
+        await this.request(`collections/${collection}`, {
+          method: "DELETE",
+          notFoundValue: {},
+        });
+        await this.request(`collections/${collection}`, {
+          method: "PUT",
+          body: {
+            vectors: {
+              size: vectorSize,
+              distance: this.distance,
+            },
+          },
+          conflictValue: {},
+        });
+      }
     }
     this.initialized.set(collection, vectorSize);
   }
@@ -312,6 +360,7 @@ export class QdrantVectorMemoryStore implements VectorMemoryStore {
         ? {}
         : { body: JSON.stringify(options.body) }),
     });
+    const text = await response.text();
     if (response.status === 404 && "notFoundValue" in options) {
       return options.notFoundValue;
     }
@@ -320,12 +369,14 @@ export class QdrantVectorMemoryStore implements VectorMemoryStore {
     }
     if (!response.ok) {
       throw new QdrantUnavailableError(
-        `Qdrant request failed: ${response.status} ${response.statusText}`,
+        `Qdrant request failed: ${response.status} ${response.statusText}${
+          text.length === 0 ? "" : `: ${text}`
+        }`,
       );
     }
     if (response.status === 204) {
       return {};
     }
-    return response.json() as Promise<unknown>;
+    return text.length === 0 ? {} : JSON.parse(text) as unknown;
   }
 }

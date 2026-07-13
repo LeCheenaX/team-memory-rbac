@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from typing import Any
 
 from agent.memory_provider import MemoryProvider
@@ -39,6 +40,48 @@ def _session_token() -> str:
     return value if isinstance(value, str) else ""
 
 
+def _hook_log_file() -> str:
+    explicit = os.environ.get("TEAM_MEMORY_HERMES_HOOK_LOG")
+    if explicit:
+        return explicit
+    hermes_home = os.environ.get("HERMES_HOME")
+    if hermes_home:
+        return os.path.join(hermes_home, "team-memory-hooks.jsonl")
+    return os.path.join(os.path.expanduser("~"), ".team-memory", "hermes-hooks.jsonl")
+
+
+def _log_event(event: str, **payload: Any) -> None:
+    try:
+        path = _hook_log_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+            **payload,
+        }
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        return
+
+
+def _read_hook_log(limit: int = 50) -> list[dict[str, Any]]:
+    try:
+        with open(_hook_log_file(), encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except FileNotFoundError:
+        return []
+    entries: list[dict[str, Any]] = []
+    for line in lines[-limit:]:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            entries.append(payload)
+    return entries
+
+
 def _provider_for_token(token: str) -> HermesTeamMemoryProvider:
     mode = os.environ.get("TEAM_MEMORY_MODE", "http").strip().lower()
     if mode == "local":
@@ -66,11 +109,14 @@ class TeamMemoryHermesProvider(MemoryProvider):
     def is_available(self) -> bool:
         token = _session_token()
         if not token:
+            _log_event("is_available", status="unavailable", reason="missing_session_token")
             return False
         try:
             _provider_for_token(token).validate_session()
-        except Exception:
+        except Exception as exc:
+            _log_event("is_available", status="unavailable", error=repr(exc))
             return False
+        _log_event("is_available", status="available")
         return True
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
@@ -82,6 +128,7 @@ class TeamMemoryHermesProvider(MemoryProvider):
         self._provider = _provider_for_token(token)
         self._provider.validate_session()
         self._session_id = session_id
+        _log_event("initialize", status="ok", sessionId=session_id)
 
     def system_prompt_block(self) -> str:
         mode = os.environ.get("TEAM_MEMORY_MODE", "http").strip().lower()
@@ -95,12 +142,32 @@ class TeamMemoryHermesProvider(MemoryProvider):
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         if not query:
+            _log_event("prefetch", status="skipped", reason="empty_query")
             return ""
-        result = self._provider.recall_context(
-            query,
-            session_id=session_id or getattr(self, "_session_id", "hermes"),
+        resolved_session_id = session_id or getattr(self, "_session_id", "hermes")
+        try:
+            result = self._provider.recall_context(
+                query,
+                session_id=resolved_session_id,
+            )
+        except Exception as exc:
+            _log_event("prefetch", status="failed", sessionId=resolved_session_id, error=repr(exc))
+            raise
+        _log_event(
+            "prefetch",
+            status="ok",
+            sessionId=resolved_session_id,
+            memoryIds=result.get("memoryIds", []),
         )
         return str(result.get("content", ""))
+
+    def queue_prefetch(self, query: str, *, session_id: str = "", **kwargs: Any) -> str:
+        _log_event(
+            "queue_prefetch",
+            status="delegated",
+            sessionId=session_id or getattr(self, "_session_id", "hermes"),
+        )
+        return self.prefetch(query, session_id=session_id)
 
     def sync_turn(
         self,
@@ -110,12 +177,16 @@ class TeamMemoryHermesProvider(MemoryProvider):
         session_id: str = "",
         messages: list[dict[str, Any]] | None = None,
     ) -> None:
-        self._provider.add(
-            [
+        resolved_session_id = session_id or getattr(self, "_session_id", "hermes")
+        self._capture_messages(
+            messages
+            or [
                 {"role": "user", "content": user_content},
                 {"role": "assistant", "content": assistant_content},
             ],
-            session_id=session_id or getattr(self, "_session_id", "hermes"),
+            session_id=resolved_session_id,
+            outcome="success",
+            event="sync_turn",
         )
 
     def on_session_end(
@@ -131,6 +202,7 @@ class TeamMemoryHermesProvider(MemoryProvider):
             session_id=session_id,
             outcome=outcome,
             error_summary=kwargs.get("error_summary"),
+            event="on_session_end",
         )
 
     def on_pre_compress(
@@ -145,22 +217,89 @@ class TeamMemoryHermesProvider(MemoryProvider):
             session_id=session_id,
             outcome=str(kwargs.get("outcome") or "unknown"),
             error_summary=kwargs.get("error_summary"),
+            event="on_pre_compress",
         )
+
+    def on_memory_write(self, memory: Any, *, session_id: str = "", **kwargs: Any) -> None:
+        messages = memory if isinstance(memory, list) else str(memory)
+        self._capture_messages(
+            messages,
+            session_id=session_id,
+            outcome=str(kwargs.get("outcome") or "success"),
+            error_summary=kwargs.get("error_summary"),
+            event="on_memory_write",
+        )
+
+    def shutdown(self, **kwargs: Any) -> None:
+        _log_event(
+            "shutdown",
+            status="ok",
+            sessionId=str(kwargs.get("session_id") or getattr(self, "_session_id", "hermes")),
+        )
+
+    def search(
+        self,
+        query: str,
+        user_id: str | None = None,
+        limit: int | None = None,
+        **metadata: Any,
+    ) -> dict[str, Any]:
+        session_id = str(metadata.get("session_id") or user_id or getattr(self, "_session_id", "hermes"))
+        provider_metadata = {
+            key: value
+            for key, value in metadata.items()
+            if key not in {"session_id", "user_id", "limit"}
+        }
+        provider_metadata["session_id"] = session_id
+        try:
+            result = self._provider.search(query, user_id=user_id, limit=limit, **provider_metadata)
+        except Exception as exc:
+            _log_event("search", status="failed", sessionId=session_id, error=repr(exc))
+            raise
+        _log_event("search", status="ok", sessionId=session_id)
+        return result
+
+    def add(
+        self,
+        messages: str | list[dict[str, Any]],
+        user_id: str | None = None,
+        **metadata: Any,
+    ) -> dict[str, Any]:
+        session_id = str(metadata.get("session_id") or user_id or getattr(self, "_session_id", "hermes"))
+        provider_metadata = {
+            key: value
+            for key, value in metadata.items()
+            if key not in {"session_id", "user_id"}
+        }
+        provider_metadata["session_id"] = session_id
+        try:
+            result = self._provider.add(messages, user_id=user_id, **provider_metadata)
+        except Exception as exc:
+            _log_event("add", status="failed", sessionId=session_id, error=repr(exc))
+            raise
+        _log_event("add", status="captured", sessionId=session_id, result=result)
+        return result
 
     def _capture_messages(
         self,
-        messages: list[dict[str, Any]],
+        messages: str | list[dict[str, Any]],
         *,
         session_id: str = "",
         outcome: str = "success",
         error_summary: Any = None,
+        event: str = "capture_messages",
     ) -> None:
         metadata: dict[str, Any] = {
             "session_id": session_id or getattr(self, "_session_id", "hermes"),
         }
         if isinstance(error_summary, str) and error_summary:
             metadata["error_summary"] = error_summary
-        self._provider.add(messages, outcome=outcome, **metadata)
+        try:
+            result = self._provider.add(messages, outcome=outcome, **metadata)
+        except Exception as exc:
+            _log_event(event, status="failed", outcome=outcome, error=repr(exc), **metadata)
+            raise
+        _log_event(event, status="captured", outcome=outcome, result=result, **metadata)
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         return [
@@ -211,6 +350,19 @@ class TeamMemoryHermesProvider(MemoryProvider):
                     "required": ["content"],
                 },
             },
+            {
+                "name": "team_memory_lifecycle_log",
+                "description": (
+                    "Show recent Team Memory Hermes provider lifecycle calls, including prefetch, sync_turn, "
+                    "on_session_end, on_pre_compress, explicit tool captures, and failures. Use this to debug whether Hermes actually invoked automatic memory hooks."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "default": 50},
+                    },
+                },
+            },
         ]
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs: Any) -> str:
@@ -228,12 +380,23 @@ class TeamMemoryHermesProvider(MemoryProvider):
         if tool_name == "team_memory_catalog":
             return json.dumps(self._provider.catalog())
         if tool_name == "team_memory_capture":
-            result = self._provider.add(
-                str(args.get("content", "")),
-                session_id=session_id,
-                outcome=str(args.get("outcome") or "success"),
-            )
+            try:
+                result = self._provider.add(
+                    str(args.get("content", "")),
+                    session_id=session_id,
+                    outcome=str(args.get("outcome") or "success"),
+                )
+            except Exception as exc:
+                _log_event("team_memory_capture", status="failed", sessionId=session_id, error=repr(exc))
+                raise
+            _log_event("team_memory_capture", status="captured", sessionId=session_id, result=result)
             return json.dumps(result)
+        if tool_name == "team_memory_lifecycle_log":
+            limit = args.get("limit")
+            return json.dumps({
+                "logFile": _hook_log_file(),
+                "entries": _read_hook_log(limit if isinstance(limit, int) else 50),
+            })
         return json.dumps({"error": f"unknown Team Memory tool: {tool_name}"})
 
 

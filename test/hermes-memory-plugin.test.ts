@@ -23,6 +23,12 @@ test("Team Memory ships as a real Hermes memory plugin", async () => {
   assert.doesNotMatch(plugin, /return bool\(_session_token\(\)\)/);
   assert.match(plugin, /def on_session_end/);
   assert.match(plugin, /def on_pre_compress/);
+  assert.match(plugin, /def queue_prefetch/);
+  assert.match(plugin, /def on_memory_write/);
+  assert.match(plugin, /def shutdown/);
+  assert.match(plugin, /def search/);
+  assert.match(plugin, /def add/);
+  assert.match(plugin, /def _log_event/);
   assert.match(plugin, /def _capture_messages/);
   assert.match(plugin, /Variable metadata appears under extra/);
   assert.match(plugin, /names/);
@@ -30,11 +36,15 @@ test("Team Memory ships as a real Hermes memory plugin", async () => {
   assert.doesNotMatch(plugin, /tagsNone/);
   assert.match(plugin, /team_memory_catalog/);
   assert.match(plugin, /Pass content and optional outcome/);
+  assert.match(plugin, /team_memory_lifecycle_log/);
   assert.match(plugin, /import the resource into Team Memory\/CAS/);
   assert.doesNotMatch(plugin, /includeHistory/);
   assert.doesNotMatch(plugin, /oldClaim/);
   assert.doesNotMatch(plugin, /newClaim/);
   assert.match(metadata, /name: team_memory/);
+  assert.match(metadata, /queue_prefetch/);
   assert.match(metadata, /on_session_end/);
   assert.match(metadata, /on_pre_compress/);
+  assert.match(metadata, /on_memory_write/);
+  assert.match(metadata, /shutdown/);
 });

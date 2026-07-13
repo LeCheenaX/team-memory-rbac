@@ -283,16 +283,19 @@ const HERMES_PROFILE: AgentRuntimeProfile = {
     hostConfiguration: {
       actions: [
         "Register the Team Memory Hermes provider at the same memory-plugin seam as mem0-style providers",
-        "Use prefetch, sync_turn, on_pre_compress, and on_session_end lifecycle hooks for automatic read/write",
+        "Use prefetch, queue_prefetch, sync_turn, on_pre_compress, on_session_end, on_memory_write, and shutdown lifecycle hooks for automatic read/write and observability",
         "Keep authorization, memory writes, retrieval, and history in the TypeScript core",
       ],
       settings: {
         "memory.provider": "team_memory",
         "memory.hooks": [
           "prefetch",
+          "queue_prefetch",
           "sync_turn",
           "on_pre_compress",
           "on_session_end",
+          "on_memory_write",
+          "shutdown",
         ],
         captureLayers: [
           "L3:memory_entity",

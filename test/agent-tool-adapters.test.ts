@@ -501,6 +501,14 @@ test("OpenClaw, Claude Code, and Hermes expose host-specific memory integration 
   assert.equal(hermesReplacement.teamMemory.canWrite, true);
   assert.deepEqual(
     hermesReplacement.hostConfiguration.settings["memory.hooks"],
-    ["prefetch", "sync_turn", "on_pre_compress", "on_session_end"],
+    [
+      "prefetch",
+      "queue_prefetch",
+      "sync_turn",
+      "on_pre_compress",
+      "on_session_end",
+      "on_memory_write",
+      "shutdown",
+    ],
   );
 });

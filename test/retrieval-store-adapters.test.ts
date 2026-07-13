@@ -98,6 +98,7 @@ function filterMatches(
 
 async function createFakeQdrant() {
   const collections = new Map<string, Map<string, FakeQdrantPoint>>();
+  const vectorSizes = new Map<string, number>();
   const filters: Array<{ collection: string; filter: Record<string, unknown> }> = [];
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
@@ -110,11 +111,34 @@ async function createFakeQdrant() {
     const isPointsRoot = url.pathname.endsWith("/points");
     if (request.method === "GET" && action === undefined) {
       return collections.has(collection)
-        ? send(response, 200, { result: { status: "green" } })
+        ? send(response, 200, {
+            result: {
+              status: "green",
+              config: {
+                params: {
+                  vectors: {
+                    size: vectorSizes.get(collection),
+                    distance: "Cosine",
+                  },
+                },
+              },
+            },
+          })
         : send(response, 404, { status: { error: "not found" } });
     }
     if (request.method === "PUT" && action === undefined && !isPointsRoot) {
+      const payload = await json(request);
+      const size = (payload.vectors as { size?: unknown } | undefined)?.size;
+      if (typeof size !== "number") {
+        return send(response, 400, { status: { error: "missing vector size" } });
+      }
       collections.set(collection, collections.get(collection) ?? new Map());
+      vectorSizes.set(collection, size);
+      return send(response, 200, { result: true });
+    }
+    if (request.method === "DELETE" && action === undefined && !isPointsRoot) {
+      collections.delete(collection);
+      vectorSizes.delete(collection);
       return send(response, 200, { result: true });
     }
     const points = collections.get(collection);
@@ -124,6 +148,13 @@ async function createFakeQdrant() {
     const payload = await json(request);
     if (request.method === "PUT" && isPointsRoot) {
       for (const point of payload.points as FakeQdrantPoint[]) {
+        if (point.vector.length !== vectorSizes.get(collection)) {
+          return send(response, 400, {
+            status: {
+              error: `Vector dimension error: expected dim: ${vectorSizes.get(collection)}, got ${point.vector.length}`,
+            },
+          });
+        }
         points.set(point.id, point);
       }
       return send(response, 200, { result: { operation_id: 1 } });
@@ -368,6 +399,40 @@ test("Qdrant payloads and libSQL relations power authorized retrieval after rest
     );
   } finally {
     client.close();
+    await qdrant.close();
+  }
+});
+
+test("Qdrant adapter rebuilds stale vector-size collections before upsert", async () => {
+  const qdrant = await createFakeQdrant();
+  try {
+    await new QdrantVectorMemoryStore({ url: qdrant.url }).upsert({
+      collection: "memory_entities",
+      id: "entity-old",
+      vector: [1, 0],
+      payload: {
+        rootEntityId: "root-qdrant",
+        entityId: "entity-old",
+      },
+    });
+
+    const restarted = new QdrantVectorMemoryStore({ url: qdrant.url });
+    await restarted.upsert({
+      collection: "memory_entities",
+      id: "entity-new",
+      vector: [1, 0, 0],
+      payload: {
+        rootEntityId: "root-qdrant",
+        entityId: "entity-new",
+      },
+    });
+
+    assert.equal(
+      (await restarted.get("memory_entities", "entity-new"))?.id,
+      "entity-new",
+    );
+    assert.equal(await restarted.get("memory_entities", "entity-old"), undefined);
+  } finally {
     await qdrant.close();
   }
 });
