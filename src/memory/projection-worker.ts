@@ -78,7 +78,15 @@ export class HistoryMemoryProjectionWorker {
         return {
           vectorPoints: [await this.entityPoint(operation.input.entity)],
         };
+      case "update_entity":
+        return {
+          vectorPoints: [await this.entityPoint(operation.input.entity)],
+        };
       case "create_entity_branch":
+        return {
+          vectorPoints: [await this.entityBranchPoint(operation.input.branch)],
+        };
+      case "update_entity_branch_metadata":
         return {
           vectorPoints: [await this.entityBranchPoint(operation.input.branch)],
         };
@@ -156,8 +164,13 @@ export class HistoryMemoryProjectionWorker {
     return {
       collection: "memory_entities",
       id: entity.id,
-      vector: await this.embeddings.embed(
-        [entity.id, entity.currentBranchId ?? "", entity.status].join("\n"),
+      vector: entity.embedding ?? await this.embeddings.embed(
+        [
+          entity.name ?? entity.title ?? entity.id,
+          entity.description ?? "",
+          ...(entity.tags ?? []),
+          entity.status,
+        ].join("\n"),
       ),
       payload: {
         ...entity,
@@ -179,7 +192,7 @@ export class HistoryMemoryProjectionWorker {
     return {
       collection: "memory_entity_branches",
       id: branch.id,
-      vector: await this.embeddings.embed(
+      vector: branch.embedding ?? await this.embeddings.embed(
         [branch.title, description, ...tags].join("\n"),
       ),
       payload: {

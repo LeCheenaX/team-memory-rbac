@@ -10,7 +10,9 @@ import type { PermissionRequest } from "./rbac.ts";
 
 export const MEMORY_OPERATION_KINDS = [
   "create_entity",
+  "update_entity",
   "create_entity_branch",
+  "update_entity_branch_metadata",
   "create_relation",
   "create_resource",
   "create_resource_chunk",
@@ -81,9 +83,23 @@ export type CreateEntityOperation = {
   entity: MemoryEntity;
 };
 
+export type UpdateEntityOperation = {
+  kind: "update_entity";
+  id: string;
+  targetId: string;
+  entity: MemoryEntity;
+};
+
 export type CreateEntityBranchOperation = {
   kind: "create_entity_branch";
   id: string;
+  branch: MemoryEntityBranch;
+};
+
+export type UpdateEntityBranchMetadataOperation = {
+  kind: "update_entity_branch_metadata";
+  id: string;
+  targetId: string;
   branch: MemoryEntityBranch;
 };
 
@@ -154,7 +170,9 @@ export type ResolveConflictOperation = {
 
 export type MemoryOperationInput =
   | CreateEntityOperation
+  | UpdateEntityOperation
   | CreateEntityBranchOperation
+  | UpdateEntityBranchMetadataOperation
   | CreateRelationOperation
   | CreateResourceOperation
   | CreateResourceChunkOperation

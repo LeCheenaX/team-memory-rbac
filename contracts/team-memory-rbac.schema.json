@@ -1261,7 +1261,9 @@
       "type": "string",
       "enum": [
         "create_entity",
+        "update_entity",
         "create_entity_branch",
+        "update_entity_branch_metadata",
         "create_relation",
         "create_resource",
         "create_resource_chunk",

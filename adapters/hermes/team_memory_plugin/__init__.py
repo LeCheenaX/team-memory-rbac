@@ -325,8 +325,8 @@ class TeamMemoryHermesProvider(MemoryProvider):
             {
                 "name": "team_memory_catalog",
                 "description": (
-                    "List the current Team Memory root, visible MemoryEntity identities, their current branch summaries, "
-                    "and available tags. Use this before follow-up searches that should narrow by entity or tags."
+                    "List the current Team Memory root, visible MemoryEntity L3 directory summaries, "
+                    "statuses, tags, and tag counts. It does not expose branch facts, branch ids, L1 chunks, or relations."
                 ),
                 "parameters": {
                     "type": "object",
@@ -337,8 +337,7 @@ class TeamMemoryHermesProvider(MemoryProvider):
                 "name": "team_memory_capture",
                 "description": (
                     "Capture durable conversation memory with stable arguments only. "
-                    "Pass content and optional outcome; Team Memory decides whether to create, merge, conflict, "
-                    "supersede, or relate memory branches, and any variable metadata is returned under extra. "
+                    "Pass content and optional outcome; Team Memory records durable memory updates and returns variable metadata under extra. "
                     "For raw files or documents, import the resource into Team Memory/CAS and trigger resource ingestion instead of using this tool."
                 ),
                 "parameters": {

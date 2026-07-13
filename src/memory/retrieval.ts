@@ -227,7 +227,7 @@ function withinQueryTags(
   if (item.kind !== "entity") {
     return query.kind === "recall" && query.layer === "L1";
   }
-  const tags = item.branch?.tags ?? [];
+  const tags = item.entity.tags ?? item.branch?.tags ?? [];
   const tagsAny = "tagsAny" in query ? query.tagsAny : undefined;
   const tagsNone = "tagsNone" in query ? query.tagsNone : undefined;
   return (
@@ -247,6 +247,9 @@ function withinQueryNames(
     return false;
   }
   const candidates = [
+    item.entity.name,
+    item.entity.title,
+    item.entity.description,
     item.branch?.title,
     item.branch?.description,
     item.entity.id,
@@ -695,7 +698,18 @@ export class MemoryRetrievalAdapter
       })
       .sort((left, right) => right.score - left.score)
       .slice(0, limit);
-    return fused;
+    if (layer !== "L3") {
+      return fused;
+    }
+    const byEntity = new Map<string, EntityRetrievalItem>();
+    for (const item of fused) {
+      if (item.kind !== "entity") continue;
+      const current = byEntity.get(item.entity.id);
+      if (current === undefined || item.score > current.score) {
+        byEntity.set(item.entity.id, item);
+      }
+    }
+    return [...byEntity.values()].slice(0, limit);
   }
 }
 
@@ -798,6 +812,30 @@ function branchFromPoint(point: VectorMemoryPoint): MemoryEntityBranch {
   };
 }
 
+function entityRootFilter(
+  context: MemoryQueryContext,
+  entityIds?: string[],
+): VectorMemoryFilter {
+  const allowedEntityIds = context.taskScope?.allowedEntityIds;
+  const requestEntityIds =
+    entityIds === undefined
+      ? allowedEntityIds
+      : allowedEntityIds === undefined
+        ? entityIds
+        : entityIds.filter((id) => allowedEntityIds.includes(id));
+  return {
+    rootEntityId: context.rootEntityId,
+    status: "active",
+    ...(requestEntityIds === undefined ? {} : { entityId: requestEntityIds }),
+    ...(context.taskScope?.allowedTags === undefined
+      ? {}
+      : { tagsAny: context.taskScope.allowedTags }),
+    ...(context.taskScope?.deniedTags === undefined
+      ? {}
+      : { tagsNone: context.taskScope.deniedTags }),
+  };
+}
+
 function entityFromPoint(point: VectorMemoryPoint): MemoryEntity {
   return {
     ...(point.payload as unknown as MemoryEntity),
@@ -863,7 +901,12 @@ export class StoreBackedAuthorizedQuerySource implements MemoryQuerySource {
     text: string,
     limit = 20,
   ): Promise<MemoryRetrievalItem[]> {
-    const [branches, chunkItems] = await Promise.all([
+    const [entities, branches, chunkItems] = await Promise.all([
+      this.vectors.list({
+        collection: "memory_entities",
+        filter: entityRootFilter(context),
+        limit,
+      }),
       this.vectors.list({
         collection: "memory_entity_branches",
         filter: entityFilter(context),
@@ -871,7 +914,19 @@ export class StoreBackedAuthorizedQuerySource implements MemoryQuerySource {
       }),
       this.keywordChunks(context, text, limit),
     ]);
-    const entityItems = await this.entityItemsForBranches(
+    const entityItems = await this.entityItemsForEntities(
+      context,
+      entities.filter((point) => {
+        const entity = entityFromPoint(point);
+        return (
+          includesText(entity.name ?? "", text) ||
+          includesText(entity.title ?? "", text) ||
+          includesText(entity.description ?? "", text) ||
+          entity.tags?.some((tag) => includesText(tag, text)) === true
+        );
+      }),
+    );
+    const branchEntityItems = await this.entityItemsForBranches(
       context,
       branches.filter((point) => {
         const branch = branchFromPoint(point);
@@ -882,7 +937,7 @@ export class StoreBackedAuthorizedQuerySource implements MemoryQuerySource {
         );
       }),
     );
-    return [...entityItems, ...chunkItems].slice(0, limit);
+    return [...entityItems, ...branchEntityItems, ...chunkItems].slice(0, limit);
   }
 
   async semanticSearch(
@@ -890,7 +945,13 @@ export class StoreBackedAuthorizedQuerySource implements MemoryQuerySource {
     embedding: number[],
     limit = 20,
   ): Promise<MemoryRetrievalItem[]> {
-    const [branchPoints, chunkPoints] = await Promise.all([
+    const [entityPoints, branchPoints, chunkPoints] = await Promise.all([
+      this.vectors.search({
+        collection: "memory_entities",
+        vector: embedding,
+        filter: entityRootFilter(context),
+        limit,
+      }),
       this.vectors.search({
         collection: "memory_entity_branches",
         vector: embedding,
@@ -904,7 +965,10 @@ export class StoreBackedAuthorizedQuerySource implements MemoryQuerySource {
         limit,
       }),
     ]);
-    const entityItems = await this.entityItemsForBranches(context, branchPoints);
+    const entityItems = [
+      ...(await this.entityItemsForEntities(context, entityPoints)),
+      ...(await this.entityItemsForBranches(context, branchPoints)),
+    ];
     const chunkItems: ResourceChunkRetrievalItem[] = chunkPoints
       .map((point) => ({ point, chunk: chunkFromPoint(point) }))
       .filter(({ chunk }) => !isDeniedResource(context, chunk.resourceId))
@@ -927,25 +991,44 @@ export class StoreBackedAuthorizedQuerySource implements MemoryQuerySource {
       limit?: number;
     },
   ): Promise<EntityRetrievalItem[]> {
-    const branches = await this.vectors.list({
-      collection: "memory_entity_branches",
-      filter: entityFilter(context, options.entityIds),
-      ...(options.limit === undefined ? {} : { limit: options.limit }),
-    });
-    return (
-      await this.entityItemsForBranches(
-        context,
-        branches.filter((point) => {
-          const branch = branchFromPoint(point);
-          return (
-            options.text === undefined ||
-            includesText(branch.title, options.text) ||
-            includesText(branch.description, options.text) ||
-            branch.tags.some((tag) => includesText(tag, options.text ?? ""))
-          );
-        }),
-      )
-    ).slice(0, options.limit ?? 20);
+    const [entities, branches] = await Promise.all([
+      this.vectors.list({
+        collection: "memory_entities",
+        filter: entityRootFilter(context, options.entityIds),
+        ...(options.limit === undefined ? {} : { limit: options.limit }),
+      }),
+      this.vectors.list({
+        collection: "memory_entity_branches",
+        filter: entityFilter(context, options.entityIds),
+        ...(options.limit === undefined ? {} : { limit: options.limit }),
+      }),
+    ]);
+    const entityItems = await this.entityItemsForEntities(
+      context,
+      entities.filter((point) => {
+        const entity = entityFromPoint(point);
+        return (
+          options.text === undefined ||
+          includesText(entity.name ?? "", options.text) ||
+          includesText(entity.title ?? "", options.text) ||
+          includesText(entity.description ?? "", options.text) ||
+          entity.tags?.some((tag) => includesText(tag, options.text ?? "")) === true
+        );
+      }),
+    );
+    const branchItems = await this.entityItemsForBranches(
+      context,
+      branches.filter((point) => {
+        const branch = branchFromPoint(point);
+        return (
+          options.text === undefined ||
+          includesText(branch.title, options.text) ||
+          includesText(branch.description, options.text) ||
+          branch.tags.some((tag) => includesText(tag, options.text ?? ""))
+        );
+      }),
+    );
+    return [...entityItems, ...branchItems].slice(0, options.limit ?? 20);
   }
 
   async expandRelations(
@@ -1075,6 +1158,38 @@ export class StoreBackedAuthorizedQuerySource implements MemoryQuerySource {
       }
     }
     return result;
+  }
+
+  private async entityItemsForEntities(
+    context: MemoryQueryContext,
+    points: VectorMemoryPoint[],
+  ): Promise<EntityRetrievalItem[]> {
+    const items: EntityRetrievalItem[] = [];
+    for (const point of points) {
+      const entity = entityFromPoint(point);
+      if (
+        entity.status !== "active" ||
+        entity.rootEntityId === null ||
+        isDeniedEntity(context, entity.id)
+      ) {
+        continue;
+      }
+      const branchPoint = entity.currentBranchId === undefined
+        ? undefined
+        : await this.vectors.get(
+            "memory_entity_branches",
+            entity.currentBranchId,
+          );
+      items.push({
+        kind: "entity",
+        entity,
+        ...(branchPoint === undefined ? {} : { branch: branchFromPoint(branchPoint) }),
+        evidence: [],
+        score: point.score ?? 1,
+        origin: this.origin,
+      });
+    }
+    return items;
   }
 
   private async entityItemsForBranches(
@@ -1233,6 +1348,10 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
     );
     const entityItems = this.entityItems(view).filter(
       (item) =>
+        includesText(item.entity.name ?? "", text) ||
+        includesText(item.entity.title ?? "", text) ||
+        includesText(item.entity.description ?? "", text) ||
+        item.entity.tags?.some((tag) => includesText(tag, text)) === true ||
         includesText(item.branch?.title ?? "", text) ||
         includesText(item.branch?.description ?? "", text) ||
         item.branch?.tags.some((tag) => includesText(tag, text)) === true,
@@ -1268,13 +1387,16 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
     const entities = this.entityItems(view)
       .filter(
         (item) =>
+          item.entity.embedding !== undefined ||
           (item.branch as { embedding?: number[] } | undefined)?.embedding !==
           undefined,
       )
       .map((item) => ({
         ...item,
         score: dotProduct(
-          (item.branch as { embedding?: number[] } | undefined)?.embedding ?? [],
+          item.entity.embedding ??
+            (item.branch as { embedding?: number[] } | undefined)?.embedding ??
+            [],
           embedding,
         ),
       }));
@@ -1323,6 +1445,12 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
           (options.entityIds === undefined ||
             options.entityIds.includes(item.entity.id)) &&
           (options.text === undefined ||
+            includesText(item.entity.name ?? "", options.text) ||
+            includesText(item.entity.title ?? "", options.text) ||
+            includesText(item.entity.description ?? "", options.text) ||
+            item.entity.tags?.some((tag) =>
+              includesText(tag, options.text ?? ""),
+            ) === true ||
             includesText(item.branch?.title ?? "", options.text) ||
             includesText(item.branch?.description ?? "", options.text) ||
             item.branch?.tags.some((tag) =>

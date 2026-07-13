@@ -435,6 +435,18 @@ export class InMemoryMemoryAuthority
       }
       return;
     }
+    if (input.kind === "update_entity") {
+      if (!view.entities.some(({ id }) => id === input.targetId)) {
+        throw new Error(`entity not found: ${input.targetId}`);
+      }
+      return;
+    }
+    if (input.kind === "update_entity_branch_metadata") {
+      if (!view.entityBranches.some(({ id }) => id === input.targetId)) {
+        throw new Error(`entity branch not found: ${input.targetId}`);
+      }
+      return;
+    }
     if (input.kind === "tombstone_resource") {
       if (!view.resources.some(({ id }) => id === input.targetId)) {
         throw new Error(`resource not found: ${input.targetId}`);
@@ -527,7 +539,9 @@ export class InMemoryMemoryAuthority
       request.resourceKind === "memory_entity" &&
       (
         operation.kind === "create_entity" ||
+        operation.kind === "update_entity" ||
         operation.kind === "create_entity_branch" ||
+        operation.kind === "update_entity_branch_metadata" ||
         operation.kind === "create_resource" ||
         operation.kind === "create_resource_chunk" ||
         operation.kind === "create_relation" ||
@@ -539,7 +553,12 @@ export class InMemoryMemoryAuthority
 
     const expected = {
       create_entity: ["write_entity", "memory_entity"],
+      update_entity: ["write_entity", "memory_entity"],
       create_entity_branch: [
+        "write_entity_branch",
+        "memory_entity_branch",
+      ],
+      update_entity_branch_metadata: [
         "write_entity_branch",
         "memory_entity_branch",
       ],
@@ -582,17 +601,21 @@ export class InMemoryMemoryAuthority
     const payloadRoot =
       input.kind === "create_entity"
         ? input.entity.rootEntityId ?? input.entity.id
+        : input.kind === "update_entity"
+          ? rootEntityId
         : input.kind === "create_entity_branch"
           ? input.branch.rootEntityId
-          : input.kind === "create_relation"
-            ? input.relation.rootEntityId
-            : input.kind === "create_resource"
-              ? input.resource.rootEntityId
-              : input.kind === "create_resource_chunk"
-                ? input.chunk.rootEntityId
-                : input.kind === "replace_relation"
-                  ? input.replacement.rootEntityId
-                  : rootEntityId;
+          : input.kind === "update_entity_branch_metadata"
+            ? rootEntityId
+            : input.kind === "create_relation"
+              ? input.relation.rootEntityId
+              : input.kind === "create_resource"
+                ? input.resource.rootEntityId
+                : input.kind === "create_resource_chunk"
+                  ? input.chunk.rootEntityId
+                  : input.kind === "replace_relation"
+                    ? input.replacement.rootEntityId
+                    : rootEntityId;
 
     if (payloadRoot !== rootEntityId) {
       throw new Error(
@@ -699,6 +722,13 @@ export class InMemoryMemoryAuthority
         entities.set(input.entity.id, clone(input.entity));
         return;
       }
+      case "update_entity": {
+        if (!entities.has(input.targetId)) {
+          throw new Error(`entity not found: ${input.targetId}`);
+        }
+        entities.set(input.targetId, clone(input.entity));
+        return;
+      }
       case "create_entity_branch": {
         if (entityBranches.has(input.branch.id)) {
           throw new Error(
@@ -720,6 +750,16 @@ export class InMemoryMemoryAuthority
           entity.currentBranchId = input.branch.id;
           entity.updatedAt = operation.createdAt;
         }
+        return;
+      }
+      case "update_entity_branch_metadata": {
+        if (!entityBranches.has(input.targetId)) {
+          throw new Error(`entity branch not found: ${input.targetId}`);
+        }
+        if (input.branch.extraInfo !== undefined) {
+          assertEntityExtraInfo(input.branch.extraInfo);
+        }
+        entityBranches.set(input.targetId, clone(input.branch));
         return;
       }
       case "create_relation": {

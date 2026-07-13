@@ -119,6 +119,7 @@ test("runtime adapters use stable tools and enforce live read-only delegation", 
         });
         const result = await adapter.invokeTool(session.token, "memory.search", {
           query: `Runtime Note ${index}`,
+          names: [`Runtime Note ${index}`],
           tagsAny: ["runtime"],
         }) as { value: { items: unknown[] } };
         assert.equal(result.value.items.length, 1);

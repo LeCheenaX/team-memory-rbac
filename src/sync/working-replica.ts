@@ -317,7 +317,9 @@ function authorizedHistoryRecords(
     const input = operation.input;
     switch (input.kind) {
       case "create_entity": return entityIds.has(input.entity.id);
+      case "update_entity": return entityIds.has(input.targetId);
       case "create_entity_branch": return branchIds.has(input.branch.id);
+      case "update_entity_branch_metadata": return branchIds.has(input.targetId);
       case "create_relation": return relationIds.has(input.relation.id);
       case "create_resource": return resourceIds.has(input.resource.id);
       case "create_resource_chunk": return chunkIds.has(input.chunk.id);
@@ -403,9 +405,15 @@ function deltaFromRecords(
         case "create_entity":
           entityIds.add(input.entity.id);
           break;
+        case "update_entity":
+          entityIds.add(input.targetId);
+          break;
         case "create_entity_branch":
           branchIds.add(input.branch.id);
           entityIds.add(input.branch.entityId);
+          break;
+        case "update_entity_branch_metadata":
+          branchIds.add(input.targetId);
           break;
         case "create_relation":
           relationIds.add(input.relation.id);

@@ -179,11 +179,25 @@ function operationEffect(operation: MemoryOperationInput): string {
         entity: withoutTimestamps(operation.entity),
       };
       break;
+    case "update_entity":
+      effect = {
+        kind: operation.kind,
+        targetId: operation.targetId,
+        entity: withoutTimestamps(operation.entity),
+      };
+      break;
     case "create_entity_branch": {
       const { id: _id, ...branch } = withoutTimestamps(operation.branch);
       effect = { kind: operation.kind, branch };
       break;
     }
+    case "update_entity_branch_metadata":
+      effect = {
+        kind: operation.kind,
+        targetId: operation.targetId,
+        branch: withoutTimestamps(operation.branch),
+      };
+      break;
     case "create_relation": {
       const { id: _id, ...relation } = withoutTimestamps(
         operation.relation,
@@ -275,10 +289,14 @@ export function conflictKeysForOperation(
   switch (operation.kind) {
     case "create_entity":
       return [`entity:${operation.entity.id}`];
+    case "update_entity":
+      return [`entity:${operation.targetId}`];
     case "create_entity_branch":
       return [
         `entity-branch:${operation.branch.entityId}:${operation.branch.branchRef}`,
       ];
+    case "update_entity_branch_metadata":
+      return [`entity-branch-id:${operation.targetId}`];
     case "create_relation":
       return [
         `relation:${operation.relation.id}`,

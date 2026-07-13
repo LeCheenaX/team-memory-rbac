@@ -45,6 +45,11 @@ export type MemoryOrigin =
 export interface MemoryEntity {
   id: string;
   rootEntityId: string | null;
+  name?: string;
+  title?: string;
+  description?: string;
+  tags?: string[];
+  embedding?: number[];
   status: MemoryEntityStatus;
   currentBranchId?: string;
   createdAt: string;
@@ -61,6 +66,7 @@ export interface MemoryEntityBranch {
   description: string;
   tags: string[];
   extraInfo?: Record<string, unknown>;
+  embedding?: number[];
   importance: number;
   confidence: number;
   status: MemoryEntityBranchStatus;
