@@ -51,6 +51,7 @@ docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm 
 | libSQL | 使用提示给出的 local/libSQL 测试路径 |
 | CAS | 使用提示给出的 local filesystem CAS 路径 |
 | Qdrant | 使用提示给出的 local Qdrant 地址 |
+| recall top-P | 默认 `0.8`；控制 recall 结果覆盖的分数比例，Agent 的 `limit` 仍只是返回数量上限 |
 | optional settings | 没有特殊需求就接受默认值 |
 
 通过条件：

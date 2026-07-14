@@ -212,20 +212,33 @@ test("production v1 architecture and CAS deployment modes are documented", async
   assert.match(notes, /CP distributed\s+systems/);
   assert.match(notes, /not an AP multi-master design/);
 
+  const defaultRetrievalConfig = loadRuntimeConfig({
+    runtimeMode: "unitTest",
+    libsql: { url: "file:prod.db" },
+    cas: { backend: "filesystem", directory: "/var/cas" },
+    qdrant: { url: "http://qdrant" },
+    embedding: { provider: "deterministic", url: "deterministic://test" },
+  });
+  assert.equal(defaultRetrievalConfig.casBackend, "filesystem");
+  assert.equal(defaultRetrievalConfig.recallTopP, 0.8);
+  const customRetrievalConfig = loadRuntimeConfig({
+    runtimeMode: "unitTest",
+    libsql: { url: "file:prod.db" },
+    cas: { backend: "object_store", objectStoreUrl: "http://objects" },
+    qdrant: { url: "http://qdrant" },
+    embedding: { provider: "deterministic", url: "deterministic://test" },
+    retrieval: { recallTopP: 0.6 },
+  });
+  assert.equal(customRetrievalConfig.casBackend, "object_store");
+  assert.equal(customRetrievalConfig.recallTopP, 0.6);
   assert.equal(loadRuntimeConfig({
     runtimeMode: "unitTest",
     libsql: { url: "file:prod.db" },
     cas: { backend: "filesystem", directory: "/var/cas" },
     qdrant: { url: "http://qdrant" },
     embedding: { provider: "deterministic", url: "deterministic://test" },
-  }).casBackend, "filesystem");
-  assert.equal(loadRuntimeConfig({
-    runtimeMode: "unitTest",
-    libsql: { url: "file:prod.db" },
-    cas: { backend: "object_store", objectStoreUrl: "http://objects" },
-    qdrant: { url: "http://qdrant" },
-    embedding: { provider: "deterministic", url: "deterministic://test" },
-  }).casBackend, "object_store");
+    retrieval: { recallTopP: 1 },
+  }).recallTopP, 1);
   assert.throws(() => loadRuntimeConfig({
     runtimeMode: "unitTest",
     libsql: { url: "file:prod.db" },
@@ -233,6 +246,14 @@ test("production v1 architecture and CAS deployment modes are documented", async
     qdrant: { url: "http://qdrant" },
     embedding: { provider: "deterministic", url: "deterministic://test" },
   }), /cas\.backend/);
+  assert.throws(() => loadRuntimeConfig({
+    runtimeMode: "unitTest",
+    libsql: { url: "file:prod.db" },
+    cas: { backend: "filesystem", directory: "/var/cas" },
+    qdrant: { url: "http://qdrant" },
+    embedding: { provider: "deterministic", url: "deterministic://test" },
+    retrieval: { recallTopP: 0 },
+  }), /retrieval\.recallTopP/);
 });
 
 test("CAS-first visibility blocks History commits when CAS is not durably readable", async () => {

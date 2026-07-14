@@ -15,6 +15,9 @@
     "url": "http://host.docker.internal:11434/api/embeddings",
     "model": "nomic-embed-text"
   },
+  "retrieval": {
+    "recallTopP": 0.8
+  },
   "dev": {
     "hermesToolCallLog": {
       "enabled": true

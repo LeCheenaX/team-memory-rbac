@@ -485,6 +485,7 @@ async function assertSetupActivatesMemoryModule(): Promise<void> {
     join(directory, "cas"),
     "http://127.0.0.1:6333",
     "",
+    "0.8",
   ].join("\n");
   try {
     const setup = await runTeamCommand(["--config", configPath, "setup"], envWithoutLogin(), `${setupInput}\n`);
@@ -500,8 +501,10 @@ async function assertSetupActivatesMemoryModule(): Promise<void> {
       model: "test-embed",
       name: "test-provider",
     });
+    assert.equal(activated.retrieval?.recallTopP, 0.8);
 
     const runtime = await TeamMemoryRuntime.create(loadRuntimeConfig(activated));
+    assert.equal(runtime.recallTopP, 0.8);
     runtime.close();
     assert.equal(embeddings.requests.length, 2);
   } finally {

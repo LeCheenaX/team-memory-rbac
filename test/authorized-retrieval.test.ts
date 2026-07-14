@@ -10,7 +10,12 @@ import {
   InMemoryAuthorizedQuerySource,
   MemoryRetrievalAdapter,
   normalizeBm25Score,
+  type EntityRetrievalItem,
   type MemoryActiveView,
+  type MemoryQueryContext,
+  type MemoryQuerySource,
+  type MemoryRetrievalItem,
+  type RelationRetrievalItem,
 } from "../src/memory/index.ts";
 import { PermissionRouter } from "../src/permission-router.ts";
 import { unitTestEmbeddingProvider } from "./support/runtime-config.ts";
@@ -321,6 +326,103 @@ test("stable recall fuses candidates by layer, tags, names, and relation packing
     normalizeBm25Score(5, "short query") >
       normalizeBm25Score(1, "short query"),
     true,
+  );
+});
+
+test("recall uses top-P score coverage with limit as a hard cap", async () => {
+  const candidates = Array.from({ length: 20 }, (_, index): EntityRetrievalItem => {
+    const id = `top-p-${String(index + 1).padStart(2, "0")}`;
+    return {
+      kind: "entity",
+      entity: {
+        id,
+        rootEntityId,
+        status: "active",
+        currentBranchId: `${id}-branch`,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      branch: {
+        id: `${id}-branch`,
+        entityId: id,
+        rootEntityId,
+        branchRef: "main",
+        commitId: "commit-top-p",
+        title: `Top P item ${index + 1}`,
+        description: "Allowed top-P candidate",
+        tags: ["allowed"],
+        embedding: [1, 0],
+        importance: 1,
+        confidence: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      evidence: [],
+      score: 0.5,
+      origin: "local_snapshot",
+    };
+  });
+  const keywordLimits: Array<number | undefined> = [];
+  const semanticLimits: Array<number | undefined> = [];
+  const topPSource: MemoryQuerySource = {
+    async keywordSearch(
+      _context: MemoryQueryContext,
+      _text: string,
+      limit?: number,
+    ): Promise<MemoryRetrievalItem[]> {
+      keywordLimits.push(limit);
+      return candidates.map((candidate) => ({
+        ...structuredClone(candidate),
+        score: 5,
+      }));
+    },
+    async semanticSearch(
+      _context: MemoryQueryContext,
+      _embedding: number[],
+      limit?: number,
+    ): Promise<MemoryRetrievalItem[]> {
+      semanticLimits.push(limit);
+      return candidates.map((candidate) => structuredClone(candidate));
+    },
+    async entitySearch(): Promise<EntityRetrievalItem[]> {
+      return [];
+    },
+    async expandRelations(): Promise<RelationRetrievalItem[]> {
+      return [];
+    },
+    async relationsForObject(): Promise<[]> {
+      return [];
+    },
+    async evidenceFor(): Promise<Map<string, []>> {
+      return new Map();
+    },
+  };
+  const recallRouter = new PermissionRouter(
+    allowPolicy,
+    new MemoryRetrievalAdapter(topPSource, {
+      embeddings: { embed: async () => [1, 0] },
+      entityExtractor: { extract: () => ["top-p"] },
+      recallTopP: 0.8,
+    }),
+  );
+
+  const result = await recallRouter.execute(
+    request({
+      kind: "recall",
+      text: "top-p coverage",
+      layer: "L3",
+      limit: 12,
+    }),
+  );
+
+  if (!("value" in result)) assert.fail("expected top-P recall value");
+  assert.deepEqual(keywordLimits, [48]);
+  assert.deepEqual(semanticLimits, [48]);
+  assert.deepEqual(
+    result.value.items.map((item) =>
+      item.kind === "entity" ? item.entity.id : item.kind,
+    ),
+    candidates.slice(0, 12).map((item) => item.entity.id),
   );
 });
 

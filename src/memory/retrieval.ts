@@ -323,6 +323,14 @@ interface RecallSignals {
   entityBoost: number;
 }
 
+const DEFAULT_RECALL_TOP_P = 0.8;
+
+function assertRecallTopP(value: number): void {
+  if (!Number.isFinite(value) || value <= 0 || value > 1) {
+    throw new Error("recallTopP must be greater than 0 and less than or equal to 1");
+  }
+}
+
 function itemKey(item: MemoryRetrievalItem): string {
   if (item.kind === "entity") {
     return `entity:${item.entity.id}:${item.branch?.id ?? ""}`;
@@ -416,6 +424,26 @@ function fuseScore(signals: RecallSignals): number {
   return Math.min(raw / maxExpected(signals), 1.0);
 }
 
+function selectTopP<T extends MemoryRetrievalItem>(
+  candidates: T[],
+  limit: number,
+  topP: number,
+): T[] {
+  if (limit <= 0) return [];
+  const totalScore = candidates.reduce((total, item) => total + item.score, 0);
+  if (totalScore <= 0) return [];
+  const threshold = totalScore * topP;
+  const selected: T[] = [];
+  let cumulativeScore = 0;
+  for (const candidate of candidates) {
+    if (selected.length >= limit) break;
+    selected.push(candidate);
+    cumulativeScore += candidate.score;
+    if (cumulativeScore >= threshold) break;
+  }
+  return selected;
+}
+
 function relationCanPackFromHit(
   relation: MemoryRelation,
   hitObjectId: string,
@@ -442,17 +470,21 @@ export class MemoryRetrievalAdapter
   private readonly source: MemoryQuerySource;
   private readonly embeddings: EmbeddingProvider;
   private readonly entityExtractor: EntityExtractor;
+  private readonly recallTopP: number;
 
   constructor(
     source: MemoryQuerySource,
     options: {
       embeddings: EmbeddingProvider;
       entityExtractor?: EntityExtractor;
+      recallTopP?: number;
     },
   ) {
     this.source = source;
     this.embeddings = options.embeddings;
     this.entityExtractor = options.entityExtractor ?? new HeuristicEntityExtractor();
+    this.recallTopP = options.recallTopP ?? DEFAULT_RECALL_TOP_P;
+    assertRecallTopP(this.recallTopP);
   }
 
   async execute(
@@ -696,10 +728,14 @@ export class MemoryRetrievalAdapter
         if (layer === "L2") return item.kind === "entity" || item.kind === "relation";
         return item.kind === "resource_chunk";
       })
-      .sort((left, right) => right.score - left.score)
-      .slice(0, limit);
+      .filter((item) =>
+        withinTaskScope(item, context.taskScope) &&
+        withinQueryTags(item, query) &&
+        withinQueryNames(item, query)
+      )
+      .sort((left, right) => right.score - left.score);
     if (layer !== "L3") {
-      return fused;
+      return selectTopP(fused, limit, this.recallTopP);
     }
     const byEntity = new Map<string, EntityRetrievalItem>();
     for (const item of fused) {
@@ -709,7 +745,7 @@ export class MemoryRetrievalAdapter
         byEntity.set(item.entity.id, item);
       }
     }
-    return [...byEntity.values()].slice(0, limit);
+    return selectTopP([...byEntity.values()], limit, this.recallTopP);
   }
 }
 

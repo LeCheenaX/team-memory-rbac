@@ -1029,7 +1029,10 @@ export class TeamMemoryGateway {
                   runtime.history.readActiveView(rootEntityId, branch),
                 "cloud_active",
               ),
-              { embeddings: runtime.embeddings },
+              {
+                embeddings: runtime.embeddings,
+                recallTopP: runtime.recallTopP,
+              },
             ),
           )
         : runtime.retrieval;

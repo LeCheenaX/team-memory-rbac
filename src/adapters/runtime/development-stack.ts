@@ -58,6 +58,9 @@ export interface RuntimeConfigDocument {
     name?: string;
     dimensions?: number;
   };
+  retrieval?: {
+    recallTopP?: number;
+  };
   activation?: {
     status: "active";
     embedding: {
@@ -84,6 +87,7 @@ export interface RuntimeConfig {
   embeddingProviderKind: EmbeddingProviderKind;
   embeddingProviderModel?: string;
   embeddingProviderName?: string;
+  recallTopP: number;
   activation?: RuntimeConfigDocument["activation"];
 }
 
@@ -110,6 +114,7 @@ export function loadRuntimeConfig(document: RuntimeConfigDocument): RuntimeConfi
     embeddingProviderKind: document.embedding.provider,
     ...(optionalString(document.embedding.model) === undefined ? {} : { embeddingProviderModel: document.embedding.model }),
     ...(optionalString(document.embedding.name) === undefined ? {} : { embeddingProviderName: document.embedding.name }),
+    recallTopP: recallTopPFrom(document.retrieval?.recallTopP),
     ...(document.activation === undefined ? {} : { activation: document.activation }),
   };
 }
@@ -135,6 +140,14 @@ function requiredString(value: string | undefined, name: string): string {
 
 function optionalString(value: string | undefined): string | undefined {
   return value === undefined || value.length === 0 ? undefined : value;
+}
+
+function recallTopPFrom(value: number | undefined): number {
+  const recallTopP = value ?? 0.8;
+  if (!Number.isFinite(recallTopP) || recallTopP <= 0 || recallTopP > 1) {
+    throw new Error("retrieval.recallTopP must be greater than 0 and less than or equal to 1");
+  }
+  return recallTopP;
 }
 
 function embeddingsFromDocument(
@@ -286,12 +299,16 @@ export class TeamMemoryRuntime {
       new StoreMemoryProjector(cas, vectors, relations),
       { bm25, embeddings },
     );
-    const retrieval = new PermissionRouter(policy, new MemoryRetrievalAdapter(new StoreBackedAuthorizedQuerySource(vectors, relations, "cloud_active", bm25), { embeddings }));
+    const retrieval = new PermissionRouter(policy, new MemoryRetrievalAdapter(new StoreBackedAuthorizedQuerySource(vectors, relations, "cloud_active", bm25), { embeddings, recallTopP: config.recallTopP }));
     return new TeamMemoryRuntime(client, rbac, history, policy, cas, resources, admin, vectors, relations, bm25, ingestion, projection, retrieval, config, embeddings);
   }
 
   async projectMemory(rootEntityId: string, branchRef: string): Promise<void> {
     await this.projection.project(rootEntityId, branchRef);
+  }
+
+  get recallTopP(): number {
+    return this.config.recallTopP;
   }
 
   async ready(): Promise<void> {

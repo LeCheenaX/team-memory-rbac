@@ -162,8 +162,9 @@ Layer behavior:
 - `L3` returns only `MemoryEntity` results and does not expand relations.
 - `L2` returns `MemoryEntity`, `MemoryEntityBranch`, or relation-packed
   `MemoryEntityBranch` candidates.
-- `L1` may return raw `Resource` / `ResourceChunk` candidates, but reranking does
-  not guarantee that raw resources appear in top K.
+- `L1` may return raw `Resource` / `ResourceChunk` candidates, but reranking and
+  top-P selection do not guarantee that raw resources appear in the final result
+  set.
 
 Agent-updatable resources and fields:
 
@@ -354,7 +355,22 @@ final = min(raw / max_expected, 1.0)
 
 The `semantic + entity` and `semantic + BM25 + entity` divisors are deliberately
 lower than their theoretical maxima so relation boosts remain visible. After
-fusion, recall returns top K candidates.
+fusion, recall uses top-P result selection instead of treating the Agent
+`limit` as top-N.
+
+Top-P defaults to `0.8` and can be changed through runtime configuration as
+`retrieval.recallTopP`. The value is not an Agent-facing recall parameter. The
+candidate set is first deduplicated by item key, so the same item recalled by
+BM25, semantic search, and relation/entity signals contributes only one fused
+score. Relation-packed candidates keep the existing independent reranking
+candidate semantics.
+
+After candidates are layer-shaped and sorted by final fused score, sum every
+candidate score into `total_score`. Accumulate candidates from highest to lowest
+score until the cumulative score reaches or exceeds
+`total_score * retrieval.recallTopP`. If that requires `y` candidates, return
+the first `min(y, limit)` candidates. If `total_score <= 0`, recall returns no
+zero-score candidates.
 
 ## Resource Ingestion Requirement
 

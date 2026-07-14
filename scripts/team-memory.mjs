@@ -76,6 +76,10 @@ async function setupMemory(configPath) {
     : "";
   const qdrantUrl = await promptLine("Qdrant URL", existing.qdrant?.url ?? "http://127.0.0.1:6333");
   const qdrantApiKey = await promptLine("Qdrant API key (optional)", existing.qdrant?.apiKey ?? "");
+  const recallTopP = Number.parseFloat(await promptLine(
+    "recall top-P (0 < p <= 1)",
+    String(existing.retrieval?.recallTopP ?? 0.8),
+  ));
 
   const candidate = {
     runtimeMode,
@@ -97,6 +101,9 @@ async function setupMemory(configPath) {
       ...(withoutEmpty(embeddingApiKey) === undefined ? {} : { apiKey: embeddingApiKey }),
       ...(withoutEmpty(embeddingModel) === undefined ? {} : { model: embeddingModel }),
       ...(withoutEmpty(embeddingName) === undefined ? {} : { name: embeddingName }),
+    },
+    retrieval: {
+      recallTopP,
     },
   };
 
