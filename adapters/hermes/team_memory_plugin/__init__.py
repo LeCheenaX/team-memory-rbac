@@ -16,6 +16,91 @@ if _REPO_ROOT not in sys.path:
 from src.adapters.hermes.http_client import HermesTeamMemoryProvider
 
 
+_NON_EMPTY_STRING_SCHEMA: dict[str, Any] = {"type": "string", "minLength": 1}
+_STRING_ARRAY_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "items": {"type": "string"},
+    "uniqueItems": True,
+}
+_RELATION_ENDPOINT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["target", "name"],
+    "properties": {
+        "target": {
+            "enum": ["memory_entity", "memory_entity_branch", "resource", "resource_chunk"],
+        },
+        "name": _NON_EMPTY_STRING_SCHEMA,
+        "parent": _NON_EMPTY_STRING_SCHEMA,
+    },
+}
+_CAPTURE_OPERATION_PROPERTIES_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "name": _NON_EMPTY_STRING_SCHEMA,
+        "desc": {"type": "string"},
+        "tags": _STRING_ARRAY_SCHEMA,
+        "status": {"type": "string"},
+        "extra": {"type": "object"},
+    },
+}
+_CAPTURE_OPERATION_SCHEMA: dict[str, Any] = {
+    "oneOf": [
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["target", "op", "properties"],
+            "properties": {
+                "target": {"const": "memory_entity"},
+                "op": {"enum": ["create", "update", "refresh"]},
+                "properties": _CAPTURE_OPERATION_PROPERTIES_SCHEMA,
+            },
+        },
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["target", "op", "subject", "properties"],
+            "properties": {
+                "target": {"const": "memory_entity_branch"},
+                "op": {"enum": ["create", "update_metadata"]},
+                "subject": {
+                    "oneOf": [
+                        _NON_EMPTY_STRING_SCHEMA,
+                        _RELATION_ENDPOINT_SCHEMA,
+                    ],
+                },
+                "properties": _CAPTURE_OPERATION_PROPERTIES_SCHEMA,
+            },
+        },
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["target", "op", "type", "subject", "object"],
+            "properties": {
+                "target": {"const": "memory_relation"},
+                "op": {"enum": ["create", "replace"]},
+                "type": {
+                    "enum": ["has", "depends_on", "relates_to", "refers_to", "contradicts", "supersedes", "next_is"],
+                },
+                "subject": _RELATION_ENDPOINT_SCHEMA,
+                "object": _RELATION_ENDPOINT_SCHEMA,
+            },
+        },
+    ],
+}
+
+
+def _tool_schema(name: str, description: str, parameters: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": name,
+        "description": description,
+        "parameters": parameters,
+        "input_schema": parameters,
+        "inputSchema": parameters,
+    }
+
+
 def _session_file() -> str:
     explicit = os.environ.get("TEAM_MEMORY_SESSION_FILE")
     if explicit:
@@ -234,6 +319,7 @@ class TeamMemoryHermesProvider(MemoryProvider):
             "# Team Memory\n"
             f"Active Hermes external memory provider in {mode} mode. "
             "Use Team Memory recall before answering. For ordinary semantic writes, extract entity summaries, atomic branch facts, and explicit relations into operations[] before calling team_memory_capture. "
+            "Each operation must use target plus op fields, for example target=memory_entity and op=create; never send an action field. "
             "Automatic hooks capture raw conversation history as L1 Resource/CAS evidence first. "
             "Do not pass identity fields, generated ids, raw transcript-as-memory, Agent-authored ResourceChunk, outcome-as-semantic-content, or top-level payload.conflict."
         )
@@ -401,14 +487,14 @@ class TeamMemoryHermesProvider(MemoryProvider):
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         return [
-            {
-                "name": "team_memory_search",
-                "description": (
+            _tool_schema(
+                "team_memory_search",
+                (
                     "Search Team Memory for durable context relevant to the current task. "
                     "Use the natural-language query, optional limit, and stable entity/tag filters; the query determines whether history, "
                     "facts, resources, or relations are recalled. Variable metadata appears under extra when returned."
                 ),
-                "parameters": {
+                {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string"},
@@ -419,49 +505,52 @@ class TeamMemoryHermesProvider(MemoryProvider):
                     },
                     "required": ["query"],
                 },
-            },
-            {
-                "name": "team_memory_catalog",
-                "description": (
+            ),
+            _tool_schema(
+                "team_memory_catalog",
+                (
                     "List the current Team Memory root, visible MemoryEntity L3 directory summaries, "
                     "statuses, tags, and tag counts. It does not expose branch facts, branch ids, L1 chunks, or relations."
                 ),
-                "parameters": {
+                {
                     "type": "object",
                     "properties": {},
                 },
-            },
-            {
-                "name": "team_memory_capture",
-                "description": (
+            ),
+            _tool_schema(
+                "team_memory_capture",
+                (
                     "Capture durable semantic memory using structured operations[]. "
-                    "Few-shot: memory_entity/create plus memory_entity_branch/create for a new project; "
-                    "memory_entity/refresh for summary refresh; memory_entity_branch/create for duplicate facts so branch vector dedupe can update metadata; "
-                    "memory_relation/create with type relates_to for related facts; memory_entity_branch/create plus memory_relation/create with type contradicts between old/new natural-name endpoints for conflicts. "
+                    "Each operation item must use target and op fields, not action. Correct entity JSON is {\"target\":\"memory_entity\",\"op\":\"create\",\"properties\":{\"name\":\"Riverfront\",\"desc\":\"...\"}}. "
+                    "Correct branch JSON is {\"target\":\"memory_entity_branch\",\"op\":\"create\",\"subject\":\"Riverfront\",\"properties\":{\"name\":\"Riverfront naming preference\",\"desc\":\"...\"}}. "
+                    "Correct relation JSON is {\"target\":\"memory_relation\",\"op\":\"create\",\"type\":\"relates_to\",\"subject\":{\"target\":\"memory_entity\",\"name\":\"Riverfront\"},\"object\":{\"target\":\"memory_entity\",\"name\":\"OpenClaw\"}}. "
+                    "Use target=memory_entity with op=refresh for summary refresh; target=memory_entity_branch with op=create for duplicate facts so branch vector dedupe can update metadata; "
+                    "target=memory_relation with op=create and type=relates_to for related facts; target=memory_entity_branch with op=create plus target=memory_relation with op=create and type=contradicts between old/new natural-name endpoints for conflicts. "
+                    "Never use action/title/content/entity_key/source/target as the old action-style operation shape. "
                     "Never send raw transcript-as-memory, Agent-authored ResourceChunk, clientMutationId, branchRef, expectedHeadCommitId, top-level payload.conflict, generated ids, identity/root fields, or outcome-as-semantic-content."
                 ),
-                "parameters": {
+                {
                     "type": "object",
                     "properties": {
-                        "operations": {"type": "array", "items": {"type": "object"}},
+                        "operations": {"type": "array", "minItems": 1, "items": _CAPTURE_OPERATION_SCHEMA},
                     },
                     "required": ["operations"],
                     "additionalProperties": False,
                 },
-            },
-            {
-                "name": "team_memory_lifecycle_log",
-                "description": (
+            ),
+            _tool_schema(
+                "team_memory_lifecycle_log",
+                (
                     "Show recent Team Memory Hermes provider lifecycle calls, including prefetch, sync_turn, "
                     "on_session_end, on_pre_compress, explicit tool captures, and failures. Use this to debug whether Hermes actually invoked automatic memory hooks."
                 ),
-                "parameters": {
+                {
                     "type": "object",
                     "properties": {
                         "limit": {"type": "integer", "default": 50},
                     },
                 },
-            },
+            ),
         ]
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs: Any) -> str:
@@ -494,6 +583,12 @@ class TeamMemoryHermesProvider(MemoryProvider):
         if tool_name == "team_memory_capture":
             if not isinstance(args.get("operations"), list):
                 raise ValueError("team_memory_capture requires operations[]")
+            for index, operation in enumerate(args["operations"]):
+                if isinstance(operation, dict) and "action" in operation:
+                    raise ValueError(
+                        "team_memory_capture operations use target/op fields; "
+                        f"operations[{index}] must not provide action"
+                    )
             payload: dict[str, Any] = {
                 "operations": args["operations"],
             }

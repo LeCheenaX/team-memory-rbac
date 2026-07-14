@@ -2,6 +2,8 @@ import unittest
 import sys
 import tempfile
 import textwrap
+import types
+import importlib.util
 from pathlib import Path
 
 from src.adapters.hermes.contract_schema import load_contract_schema
@@ -440,6 +442,49 @@ class ContractSchemaTest(unittest.TestCase):
                 user_id="hermes-local",
             )
             self.assertEqual(captured["status"], "captured")
+
+    def test_hermes_plugin_exposes_capture_schema_under_hermes_aliases(self) -> None:
+        class MemoryProvider:
+            pass
+
+        agent_module = types.ModuleType("agent")
+        memory_provider_module = types.ModuleType("agent.memory_provider")
+        memory_provider_module.MemoryProvider = MemoryProvider
+        sys.modules.setdefault("agent", agent_module)
+        sys.modules["agent.memory_provider"] = memory_provider_module
+
+        plugin_path = (
+            Path(__file__).resolve().parents[2]
+            / "adapters"
+            / "hermes"
+            / "team_memory_plugin"
+            / "__init__.py"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "team_memory_plugin_under_test",
+            plugin_path,
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        provider = module.TeamMemoryHermesProvider()
+        schemas = provider.get_tool_schemas()
+        capture = next(
+            schema for schema in schemas if schema["name"] == "team_memory_capture"
+        )
+
+        self.assertIn("parameters", capture)
+        self.assertIn("input_schema", capture)
+        self.assertIn("inputSchema", capture)
+        self.assertEqual(capture["input_schema"], capture["parameters"])
+        self.assertEqual(capture["inputSchema"], capture["parameters"])
+        self.assertEqual(capture["parameters"]["properties"]["operations"]["minItems"], 1)
+        operation_schema = capture["parameters"]["properties"]["operations"]["items"]
+        self.assertIn("oneOf", operation_schema)
+        self.assertNotIn("action", str(operation_schema))
+        self.assertIn("Never use action/title/content/entity_key/source/target", capture["description"])
 
 
 if __name__ == "__main__":

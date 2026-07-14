@@ -44,6 +44,13 @@ test("Team Memory ships as a real Hermes memory plugin", async () => {
   assert.doesNotMatch(plugin, /tagsNone/);
   assert.match(plugin, /team_memory_catalog/);
   assert.match(plugin, /Capture durable semantic memory using structured operations/);
+  assert.match(plugin, /"oneOf"/);
+  assert.match(plugin, /"target": \{"const": "memory_entity"\}/);
+  assert.match(plugin, /"target": \{"const": "memory_entity_branch"\}/);
+  assert.match(plugin, /"target": \{"const": "memory_relation"\}/);
+  assert.match(plugin, /"required": \["target", "op", "type", "subject", "object"\]/);
+  assert.doesNotMatch(plugin, /"contentBase64"/);
+  assert.doesNotMatch(plugin, /"replaceMode"/);
   assert.match(plugin, /team_memory_lifecycle_log/);
   assert.match(plugin, /toolCallLogFile/);
   assert.match(plugin, /toolCallEntries/);
