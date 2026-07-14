@@ -69,6 +69,7 @@ export interface TeamMemoryGatewayOptions {
   permissionWatermarks?: PermissionWatermarkProvider;
   projectWrites?: boolean;
   branchDedupeThreshold?: number;
+  branchRelationHintThreshold?: number;
 }
 
 const forbiddenPayloadFields = new Set([
@@ -623,6 +624,23 @@ interface StableWriteResult {
   extra: Record<string, unknown>;
 }
 
+interface RelatedMemoryCandidate {
+  kind: "memory_entity_branch";
+  parent: string;
+  name: string;
+  desc: string;
+  tags: string[];
+  similarity: number;
+  extra?: Record<string, unknown>;
+  recommendation: {
+    action: "create_memory_relation";
+    reason: "similarity_below_dedupe_threshold";
+    suggestedTypes: Array<Extract<MemoryRelationType, "relates_to" | "supersedes" | "contradicts">>;
+    subject: CanonicalMemoryEndpoint;
+    object: CanonicalMemoryEndpoint;
+  };
+}
+
 type CanonicalMemoryOperationTarget =
   | "memory_entity"
   | "memory_entity_branch"
@@ -901,6 +919,10 @@ function stableName(branch: MemoryEntityBranch | undefined, fallback: string): s
   return branch?.title ?? fallback;
 }
 
+function normalizedBranchTitle(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLocaleLowerCase();
+}
+
 function entityVisibleName(
   entity: MemoryEntity,
   branch?: MemoryEntityBranch,
@@ -983,6 +1005,7 @@ export class TeamMemoryGateway {
   >;
   private readonly projectWrites: boolean;
   private readonly branchDedupeThreshold: number;
+  private readonly branchRelationHintThreshold: number;
 
   constructor(
     runtime: TeamMemoryRuntime,
@@ -991,6 +1014,10 @@ export class TeamMemoryGateway {
     this.runtime = runtime;
     this.projectWrites = options.projectWrites ?? true;
     this.branchDedupeThreshold = options.branchDedupeThreshold ?? 0.92;
+    this.branchRelationHintThreshold = Math.min(
+      options.branchRelationHintThreshold ?? 0.82,
+      this.branchDedupeThreshold,
+    );
     this.writeRouter = new PermissionRouter(runtime.policy, runtime.history);
     this.retrievalRouter =
       options.retrieval === "active-view"
@@ -2258,6 +2285,8 @@ export class TeamMemoryGateway {
     let lastBranchId: string | undefined;
     let lastRelationId: string | undefined;
     const applied: string[] = [];
+    const systemCompletedOperations: string[] = [];
+    const relatedMemoryCandidates: RelatedMemoryCandidate[] = [];
 
     const branchById = () => new Map([...branches.values()].map((item) => [item.id, item]));
     const exactEntitiesByName = (name: string): MemoryEntity[] => {
@@ -2326,6 +2355,80 @@ export class TeamMemoryGateway {
       }
       return matches[0] as MemoryEntityBranch;
     };
+    const ensureHasRelation = (
+      entity: MemoryEntity,
+      memoryBranch: MemoryEntityBranch,
+      parentName: string,
+    ): void => {
+      const existing = [...relations.values()].find((candidate) =>
+        candidate.sourceKind === "memory_entity" &&
+        candidate.sourceId === entity.id &&
+        candidate.targetKind === "memory_entity_branch" &&
+        candidate.targetId === memoryBranch.id &&
+        candidate.relationType === "has" &&
+        candidate.status === "active"
+      );
+      if (existing !== undefined) return;
+      const relation: MemoryRelation = {
+        id: `relation:${randomUUID()}`,
+        rootEntityId: session.rootEntityId,
+        sourceKind: "memory_entity",
+        sourceId: entity.id,
+        targetKind: "memory_entity_branch",
+        targetId: memoryBranch.id,
+        relationType: "has",
+        weight: 1,
+        confidence: 0.9,
+        branchRef: branch,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      };
+      relations.set(relation.id, relation);
+      operations.push({
+        kind: "create_relation",
+        id: `operation:${commitId}:${operations.length}`,
+        relation,
+      });
+      systemCompletedOperations.push(
+        `memory_relation/create:has:${parentName}->${memoryBranch.title}`,
+      );
+    };
+    const relatedBranchCandidates = (
+      entityName: string,
+      newBranchTitle: string,
+      scoredBranches: Array<{ branch: MemoryEntityBranch; score: number }>,
+    ): RelatedMemoryCandidate[] =>
+      scoredBranches
+        .filter(({ score }) =>
+          score >= this.branchRelationHintThreshold &&
+          score < this.branchDedupeThreshold
+        )
+        .slice(0, 3)
+        .map(({ branch: candidate, score }) => ({
+          kind: "memory_entity_branch",
+          parent: entityName,
+          name: candidate.title,
+          desc: candidate.description,
+          tags: candidate.tags,
+          similarity: Number(score.toFixed(6)),
+          ...(candidate.extraInfo === undefined ? {} : { extra: candidate.extraInfo }),
+          recommendation: {
+            action: "create_memory_relation",
+            reason: "similarity_below_dedupe_threshold",
+            suggestedTypes: ["relates_to", "supersedes", "contradicts"],
+            subject: {
+              target: "memory_entity_branch",
+              name: newBranchTitle,
+              parent: entityName,
+            },
+            object: {
+              target: "memory_entity_branch",
+              name: candidate.title,
+              parent: entityName,
+            },
+          },
+        }));
     const endpointId = (endpoint: StructuredEndpoint): string | StableWriteResult => {
       assertNoSystemManagedInput(endpoint as unknown as Record<string, unknown>, "operation endpoint");
       if (
@@ -2437,6 +2540,9 @@ export class TeamMemoryGateway {
         const title = operation.title ?? operation.name ?? operation.description.slice(0, 80);
         const embedding = await this.runtime.embeddings.embed(description);
         const entityBranches = [...branches.values()].filter((candidate) => candidate.entityId === entity.id);
+        const exactTitleDuplicate = entityBranches.find((candidate) =>
+          normalizedBranchTitle(candidate.title) === normalizedBranchTitle(title)
+        );
         const scored = entityBranches
           .filter((candidate) => candidate.embedding !== undefined)
           .map((candidate) => ({
@@ -2444,7 +2550,9 @@ export class TeamMemoryGateway {
             score: cosineSimilarity(embedding, candidate.embedding ?? []),
           }))
           .sort((left, right) => right.score - left.score);
-        const duplicate = scored[0];
+        const duplicate = exactTitleDuplicate === undefined
+          ? scored[0]
+          : { branch: exactTitleDuplicate, score: 1 };
         if (duplicate !== undefined && duplicate.score >= this.branchDedupeThreshold) {
           const existing = duplicate.branch;
           const next: MemoryEntityBranch = {
@@ -2468,9 +2576,13 @@ export class TeamMemoryGateway {
           });
           lastEntityId = entity.id;
           lastBranchId = existing.id;
+          ensureHasRelation(entity, next, operation.entityName);
           applied.push("memory_entity_branch/update_metadata");
           continue;
         }
+        relatedMemoryCandidates.push(
+          ...relatedBranchCandidates(operation.entityName, title, scored),
+        );
         const branchId = `branch:${randomUUID()}`;
         const memoryBranch: MemoryEntityBranch = {
           id: branchId,
@@ -2494,6 +2606,7 @@ export class TeamMemoryGateway {
           id: `operation:${commitId}:${operations.length}`,
           branch: memoryBranch,
         });
+        ensureHasRelation(entity, memoryBranch, operation.entityName);
         lastEntityId = entity.id;
         lastBranchId = branchId;
         applied.push("memory_entity_branch/create");
@@ -2596,6 +2709,14 @@ export class TeamMemoryGateway {
       );
     }
 
+    const extra: Record<string, unknown> = { operationsApplied: applied };
+    if (systemCompletedOperations.length > 0) {
+      extra.systemCompletedOperations = systemCompletedOperations;
+    }
+    if (relatedMemoryCandidates.length > 0) {
+      extra.relatedMemoryCandidates = relatedMemoryCandidates;
+    }
+
     return {
       status: "ready",
       commitId,
@@ -2603,7 +2724,7 @@ export class TeamMemoryGateway {
       ...(lastEntityId === undefined ? {} : { entityId: lastEntityId }),
       ...(lastBranchId === undefined ? {} : { branchId: lastBranchId }),
       ...(lastRelationId === undefined ? {} : { relationId: lastRelationId }),
-      extra: { operationsApplied: applied },
+      extra,
     };
   }
 

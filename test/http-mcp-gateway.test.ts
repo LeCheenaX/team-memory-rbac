@@ -66,12 +66,19 @@ function branchOperation(
   title: string,
   description: string,
   tags: string[] = [],
+  extra?: Record<string, unknown>,
 ): Record<string, unknown> {
   return {
     target: "memory_entity_branch",
     op: "create",
     subject: entityName,
-    properties: { name: title, title, description, tags },
+    properties: {
+      name: title,
+      title,
+      description,
+      tags,
+      ...(extra === undefined ? {} : { extra }),
+    },
   };
 }
 
@@ -515,7 +522,24 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     assert.ok(commitIds.some((commitId) =>
       /^commit:import-gateway-resource:auto-ingest:chunk:/.test(commitId)
     ));
-    assert.equal(historyPayload.value.records[1]?.operations.length, 4);
+    const firstMemoryOperations = historyPayload.value.records[1]?.operations as
+      | Array<{
+        input?: {
+          kind?: string;
+          relation?: {
+            sourceKind?: string;
+            targetKind?: string;
+            relationType?: string;
+          };
+        };
+      }>
+      | undefined;
+    assert.ok(firstMemoryOperations?.some((operation) =>
+      operation.input?.kind === "create_relation" &&
+      operation.input.relation?.sourceKind === "memory_entity" &&
+      operation.input.relation?.targetKind === "memory_entity_branch" &&
+      operation.input.relation?.relationType === "has"
+    ));
 
     const legacyTargetPatch = await post(base, "/memory/write", writeSession.token, {
       target: { kind: "memory_entity", name: "Gateway Guide" },
@@ -613,13 +637,18 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       operations: [
         branchOperation(
           "Gateway Guide",
-          "Gateway Guide stable tools",
+          "Gateway Guide release checklist",
           "Gateway Guide keeps operational deployment notes for a separate release checklist.",
           ["guide", "release"],
+          { category: "release-checklist" },
         ),
       ],
     });
-    assert.equal(newFact.status, 200, await newFact.text());
+    const newFactText = await newFact.text();
+    assert.equal(newFact.status, 200, newFactText);
+    const newFactValue = JSON.parse(newFactText) as {
+      value: { branchId: string };
+    };
     assert.equal(
       runtime.history
         .readActiveView("root-gateway", "main")
@@ -629,6 +658,124 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
         .length,
       branchCountBeforeNewFact + 1,
     );
+    const sameTitleDuplicate = await post(base, "/memory/write", writeSession.token, {
+      operations: [
+        branchOperation(
+          "Gateway Guide",
+          "Gateway Guide release checklist",
+          "Gateway Guide release checklist details were mentioned again with different wording.",
+          ["guide", "release", "seen-again"],
+        ),
+      ],
+    });
+    const sameTitleDuplicateText = await sameTitleDuplicate.text();
+    assert.equal(sameTitleDuplicate.status, 200, sameTitleDuplicateText);
+    const sameTitleDuplicateValue = JSON.parse(sameTitleDuplicateText) as {
+      value: { branchId: string; extra: { operationsApplied: string[] } };
+    };
+    assert.equal(sameTitleDuplicateValue.value.branchId, newFactValue.value.branchId);
+    assert.equal(
+      sameTitleDuplicateValue.value.extra.operationsApplied[0],
+      "memory_entity_branch/update_metadata",
+    );
+    assert.equal(
+      runtime.history
+        .readActiveView("root-gateway", "main")
+        .entityBranches.filter((branch) =>
+          branch.entityId === summaryUpdateValue.value.entityId
+        )
+        .length,
+      branchCountBeforeNewFact + 1,
+    );
+    assert.equal(
+      runtime.history
+        .readActiveView("root-gateway", "main")
+        .entityBranches.find((branch) => branch.id === newFactValue.value.branchId)
+        ?.description,
+      "Gateway Guide keeps operational deployment notes for a separate release checklist.",
+    );
+
+    const branchCountBeforeRelatedFact = runtime.history
+      .readActiveView("root-gateway", "main")
+      .entityBranches
+      .filter((branch) =>
+        branch.entityId === summaryUpdateValue.value.entityId
+      )
+      .length;
+    const relatedFact = await post(base, "/memory/write", writeSession.token, {
+      operations: [
+        branchOperation(
+          "Gateway Guide",
+          "Gateway Guide deployment readiness notes",
+          "Gateway Guide keeps deployment runbook notes for release readiness and approvals.",
+          ["guide", "release", "readiness"],
+        ),
+      ],
+    });
+    const relatedFactText = await relatedFact.text();
+    assert.equal(relatedFact.status, 200, relatedFactText);
+    const relatedFactValue = JSON.parse(relatedFactText) as {
+      value: {
+        branchId: string;
+        extra: {
+          operationsApplied: string[];
+          relatedMemoryCandidates: Array<{
+            name: string;
+            desc: string;
+            tags: string[];
+            similarity: number;
+            extra?: Record<string, unknown>;
+            recommendation: {
+              action: string;
+              reason: string;
+              suggestedTypes: string[];
+              subject: Record<string, unknown>;
+              object: Record<string, unknown>;
+            };
+          }>;
+        };
+      };
+    };
+    assert.equal(
+      runtime.history
+        .readActiveView("root-gateway", "main")
+        .entityBranches.filter((branch) =>
+          branch.entityId === summaryUpdateValue.value.entityId
+        )
+        .length,
+      branchCountBeforeRelatedFact + 1,
+    );
+    assert.equal(
+      relatedFactValue.value.extra.operationsApplied[0],
+      "memory_entity_branch/create",
+    );
+    const releaseCandidate = relatedFactValue.value.extra.relatedMemoryCandidates
+      .find((candidate) => candidate.name === "Gateway Guide release checklist");
+    assert.ok(releaseCandidate);
+    assert.equal(
+      releaseCandidate.desc,
+      "Gateway Guide keeps operational deployment notes for a separate release checklist.",
+    );
+    assert.equal(releaseCandidate.extra?.category, "release-checklist");
+    assert.equal(typeof releaseCandidate.extra?.duplicateMentions, "number");
+    assert.equal(typeof releaseCandidate.extra?.dedupeSimilarity, "number");
+    assert.equal(releaseCandidate.recommendation.action, "create_memory_relation");
+    assert.equal(
+      releaseCandidate.recommendation.reason,
+      "similarity_below_dedupe_threshold",
+    );
+    assert.deepEqual(releaseCandidate.recommendation.subject, {
+      target: "memory_entity_branch",
+      name: "Gateway Guide deployment readiness notes",
+      parent: "Gateway Guide",
+    });
+    assert.deepEqual(releaseCandidate.recommendation.object, {
+      target: "memory_entity_branch",
+      name: "Gateway Guide release checklist",
+      parent: "Gateway Guide",
+    });
+    assert.ok(releaseCandidate.recommendation.suggestedTypes.includes("relates_to"));
+    assert.ok(releaseCandidate.similarity < 0.999);
 
     const secondSameName = await post(base, "/memory/write", writeSession.token, {
       operations: [
@@ -687,7 +834,10 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
         entityId: string;
         branchId: string;
         commitIds: string[];
-        extra: { operationsApplied: string[] };
+        extra: {
+          operationsApplied: string[];
+          systemCompletedOperations: string[];
+        };
       };
     };
     assert.equal(branchFirstPayload.value.status, "captured");
@@ -695,7 +845,27 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       "memory_entity/create",
       "memory_entity_branch/create",
     ]);
+    assert.deepEqual(branchFirstPayload.value.extra.systemCompletedOperations, [
+      "memory_relation/create:has:Riverfront->Riverfront is the Nova CRM churn pilot",
+    ]);
     assert.equal(branchFirstPayload.value.commitIds.length, 1);
+    const branchFirstCommit = runtime.history
+      .listCommitRecords("root-gateway", "main")
+      .find((record) => record.commit.id === branchFirstPayload.value.commitIds[0]);
+    assert.ok(branchFirstCommit);
+    assert.deepEqual(
+      branchFirstCommit.operations.map((operation) => operation.input.kind),
+      ["create_entity", "create_entity_branch", "create_relation"],
+    );
+    const branchFirstHasOperation = branchFirstCommit.operations.find((operation) =>
+      operation.input.kind === "create_relation"
+    );
+    assert.equal(
+      branchFirstHasOperation?.input.kind === "create_relation"
+        ? branchFirstHasOperation.input.relation.relationType
+        : undefined,
+      "has",
+    );
     const branchFirstView = runtime.history.readActiveView("root-gateway", "main");
     const riverfront = branchFirstView.entities.find((entity) => entity.title === "Riverfront");
     assert.ok(riverfront);
@@ -704,6 +874,13 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       branch.id === branchFirstPayload.value.branchId &&
       branch.entityId === riverfront.id &&
       branch.title === "Riverfront is the Nova CRM churn pilot"
+    ));
+    assert.ok(branchFirstView.relations.some((relation) =>
+      relation.sourceKind === "memory_entity" &&
+      relation.sourceId === riverfront.id &&
+      relation.targetKind === "memory_entity_branch" &&
+      relation.targetId === branchFirstPayload.value.branchId &&
+      relation.relationType === "has"
     ));
 
     const unsafe = await post(base, "/memory/search", readSession.token, {

@@ -132,6 +132,24 @@ search may narrow by stable human-readable `names` and `tagsAny`; root identity
 continues to come from the trusted session rather than from model-supplied
 payload fields.
 
+When an Agent creates a `MemoryEntityBranch`, it supplies the parent
+`MemoryEntity` as the operation `subject`. Team Memory must attach the branch to
+that parent and create the internal graph edge
+`MemoryEntity has MemoryEntityBranch` in the same commit. The Agent must not
+hand-author this `has` relation as a separate `memory_relation` operation; the
+edge is a system-maintained invariant of branch creation. Duplicate branch
+captures update system metadata on the existing branch and do not create a new
+branch. Within the same parent entity, an exact normalized branch title match is
+a duplicate signal even when description embeddings are below the semantic
+dedupe threshold.
+
+When a same-parent branch is highly similar but still below the dedupe
+threshold, Team Memory does not infer replacement, contradiction, or an ordinary
+relationship by itself. The write result returns the candidate's key
+agent-facing fields, including name, description, tags, extra metadata, and
+similarity, and recommends that the Agent create an explicit relation such as
+`relates_to`, `supersedes`, or `contradicts` if the semantics warrant one.
+
 Agent-facing recall has one required parameter, `query`. Optional parameters are
 `limit`, `layer`, `names`, and `tagsAny`. `layer` defaults to `L3`.
 
@@ -224,9 +242,12 @@ statements make the memory more important.
 
 If the related-memory similarity is below the deduplication threshold, the
 update is new concrete fact content/details. Team Memory creates a new
-`MemoryEntityBranch`. It may create a relation only when the Agent supplies a
-`memory_relation` operation such as `type: "relates_to"`. It must not invoke an
-LLM merge and must not directly rewrite the old branch.
+`MemoryEntityBranch` and the system-owned `has` relation from the parent entity
+to that branch. It may create other semantic relations only when the Agent
+supplies a `memory_relation` operation such as `type: "relates_to"`. For high
+similarity below the dedupe threshold, the write response should surface the
+related candidate and relation recommendation to the Agent. It must not invoke
+an LLM merge and must not directly rewrite the old branch.
 
 Only an explicit `memory_relation` operation with `type: "contradicts"` from
 the agent/user capture path may create a contradiction. Textual similarity or a
