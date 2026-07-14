@@ -1,385 +1,292 @@
-# Hermes Interaction Workflow Scenario Prompts
+# Hermes Interaction Workflow Daily-Use Prompts
 
-本文档用于按顺序验证 `docs/design/agent-memory-interaction-flows.md`
-中的 Scenario 1-14。提示词面向 Hermes 会话逐条发送。带 `/new` 的
-提示词表示需要开启新的 Hermes session，用来验证跨 session 的长期记忆。
+这份文档用于验证 `docs/design/agent-memory-interaction-flows.md` 的
+Scenario 1-14。测试提示词要尽量像真实用户在日常工作中对 agent 说的话，
+而不是直接命令 agent 调用某个 memory API。
 
-## 全局约束
+测试员看的是执行路径：Hermes 是否在自然任务中自动走到预期的
+catalog/search/capture 路径，写入形状是否符合 Team Memory 约束，跨 session
+是否能复用旧信息。提示词正文不要暴露底层操作名；底层要求放在“验收点”里，
+通过 dev tool-call log 检查。
 
-每条提示词默认都带有以下测试约束：
+## Shared Rules For The Whole Run
 
-- 不允许变更 root-entity。
-- 如需写入，agent 只能增删改 `MemoryEntity`、`MemoryEntityBranch`、
+- 不变更 root-entity。
+- agent 发起的写入只允许影响 `MemoryEntity`、`MemoryEntityBranch`、
   `MemoryRelation`。
-- 可以查询 L1、L2、L3 记忆。
-- 不允许把 `rootEntityId`、用户身份、agent 身份、生成 id、时间戳、
-  `oldClaim`、`newClaim`、`includeHistory`、顶层 `conflict: true` 放入写入参数。
-- 资源导入、资源摄取、同步、冲突裁决、管理员工具不在本轮写入范围内。
+- agent 可以查询 L1-L3 记忆。
+- 不允许写 Resource / ResourceChunk，不允许资源导入、资源摄取、同步、
+  冲突裁决或管理员操作。
+- 不允许在写入 payload 里出现 `rootEntityId`、用户身份、agent 身份、生成 id、
+  时间戳、`oldClaim`、`newClaim`、`includeHistory`、顶层 `conflict: true`。
+- 每条“发送给 Hermes”都只复制代码块里的内容；不要把验收点一起发给 Hermes。
 
 ## 0. Dev Log Preflight
 
-发送：
+发送给 Hermes：
 
 ```text
 /new
-这是 Team Memory interaction workflow 的预检。请检查 Team Memory dev tool-call log 是否启用。
-
-测试约束：
-1. 不要写入任何记忆。
-2. 不要变更 root-entity。
-3. 如果有 Team Memory 日志查看工具，请调用它。
-
-请报告：
-1. 当前长期记忆 provider 名称和模式。
-2. dev tool-call log 是否启用。
-3. 日志文件路径。
-4. 最近日志里是否已经能看到 toolName、input、output、durationMs 这些字段。
+我准备做一轮长期记忆回归测试。开始前，帮我确认一下你现在的长期记忆功能是否可用，以及有没有可查看的调试日志。请用普通用户能看懂的话告诉我：当前记忆 provider、当前模式、会话是否有效、日志在哪里。
 ```
 
 验收点：
 
-- `toolCallLogEnabled` 应为 `true`。
-- 日志文件应位于 Hermes 本地记忆目录，默认类似
-  `~/.hermes/team-memory-tool-calls.jsonl`。
-- 如果刚启动时还没有 tool-call entries，继续后续测试后再回查。
+- 允许使用日志/状态类工具。
+- dev tool-call log 应默认启用。
+- 日志信息应包含或能回查 `toolName`、`input`、`output`、`durationMs`。
+- 不应写入任何长期记忆。
 
-## 0.1 Shared Fixture Setup
+## 1. Provider Availability And Identity
 
-这一步不是 interaction workflow 的正式 Scenario，只用于准备后续 Scenario 3-7
-可复用的数据。
-
-发送：
+发送给 Hermes：
 
 ```text
-请创建一组 interaction workflow 测试夹具记忆。必须使用 Team Memory structured capture 的 operations[]，不要写 raw transcript，不要导入资源，不要写 Resource 或 ResourceChunk。
-
-请创建或更新这些 L3 实体摘要：
-1. "TMW Scenario Pack"：这是 interaction workflow 手工验证用的测试包。
-2. "OpenClaw"：这是后续关系搜索要引用的项目实体。
-3. "Code B approval workflow"：这是后续 workflow recall 测试要引用的流程实体。
-
-请创建这些 L2 atomic branches：
-1. 在 "TMW Scenario Pack" 下创建 branch，标题为 "Local Hermes scenario pack uses local Team Memory"，描述为 "The interaction workflow scenario pack validates a local Hermes provider backed by Team Memory."，tags 包含 "test:interaction-workflow", "hermes", "project:local-hermes-test"。
-2. 在 "TMW Scenario Pack" 下创建 branch，标题为 "Scenario pack relates to OpenClaw"，描述为 "The scenario pack includes OpenClaw relation checks."，tags 包含 "test:interaction-workflow", "openclaw"。
-3. 在 "Code B approval workflow" 下创建 workflow branch，标题为 "Code B approval workflow"，描述为 "Fetch information, modify Code B, submit approval, then wait for approval."，tags 包含 "workflow", "project:code-b", "test:interaction-workflow"，extraInfo 包含 triggerIntent: ["execute Code B approval workflow"]。
-4. 在 "Code B approval workflow" 下创建四个 step branch，标题依次为 "Code B step 1 fetch information", "Code B step 2 modify Code B", "Code B step 3 submit approval", "Code B step 4 wait for approval"。
-
-请创建这些关系：
-1. "Scenario pack relates to OpenClaw" relates_to "OpenClaw"。
-2. workflow branch has step 1。
-3. step 1 next_is step 2，step 2 next_is step 3，step 3 next_is step 4。
-
-完成后只报告 capture result、operationsApplied、以及后续测试应该复用的实体名称和标签。
+我不想把今天的项目背景记错地方。你现在用的是哪套长期记忆？它是本地模式还是服务端模式？你能看到的记忆空间大概是什么？顺便告诉我你能不能保存接下来我说的项目偏好。
 ```
 
 验收点：
 
-- 写入操作只包含 `upsert_memory_entity`、`create_memory_entity_branch`、
-  `create_memory_relation`，可包含 summary refresh。
-- 无 root identity 字段，无资源写入。
+- 应走 provider availability、identity 或 catalog 路径。
+- 应报告 provider/mode/session/root 的可用性。
+- 不应暴露或要求用户提供 root id。
+- 不应写入记忆。
 
-## Scenario 1: Provider Availability And Identity
+## 2. Tool Discovery And Capability Listing
 
-发送：
+发送给 Hermes：
+
+```text
+在我开始交代项目之前，先说说你能帮我做哪些“记住和回忆”的事，哪些事你不会自己做。比如临时待办、长期偏好、项目事实、原始文件、审批状态，这几类你会怎么处理？
+```
+
+验收点：
+
+- 应区分普通读、普通长期语义写、debug/log 能力。
+- 应说明临时状态留在对话上下文，持久项目事实才记入长期记忆。
+- 应说明原始文件不应被当成普通语义记忆硬塞进去。
+- 不应调用管理员、资源导入、同步或冲突裁决工具。
+
+## 3. Additive Daily Capture Seed
+
+这一步为后续自然 recall 准备数据。它不是原 workflow 的单独 scenario，
+但需要像日常用户交代背景一样触发 capture。
+
+发送给 Hermes：
+
+```text
+接下来几天你要帮我跟进一个内部小项目，叫 Riverfront。请你记住这些长期背景：
+
+Riverfront 是我给 Nova CRM 做的客户流失预警试点。它和 OpenClaw 有关，因为 OpenClaw 负责把客服工单摘要推给 Riverfront。日常沟通里我更喜欢你把 Riverfront 叫“流失预警试点”，但报告标题里仍然写 Riverfront。
+
+还有一个固定流程也请你记住：每次我说“跑 Riverfront 发布前检查”，你应该先确认最新工单摘要是否到位，再检查配置改动，再准备审批说明，最后等我确认后才提交审批。
+
+你只需要简短确认记住了什么，不要展开长篇解释。
+```
+
+验收点：
+
+- 应触发一次 durable semantic capture。
+- 写入应抽取实体、原子事实和显式关系，而不是保存整段 transcript。
+- 预期会形成类似这些长期事实：
+  `Riverfront`、`OpenClaw`、Riverfront 与 OpenClaw 的关系、
+  `Riverfront release checklist` 或等价 workflow。
+- workflow 步骤应通过关系表达顺序，而不是塞在一个不可检索的大段落里。
+
+## 4. Initial Recall Before Answering
+
+发送给 Hermes：
 
 ```text
 /new
-请验证 Scenario 1: Provider Availability And Identity。
-
-测试约束：不要写入任何记忆，不要变更 root-entity。
-
-请使用 Team Memory provider status、identity、catalog 或等价工具，回答：
-1. 当前长期记忆 provider 是否为 Team Memory。
-2. provider mode 是 local 还是 http。
-3. 当前 trusted root 的名称或可见身份信息。
-4. 当前 session/token 是否可用。
-5. catalog 是否只暴露 L3 entity 名称和 tags，而不是 branch id 或 L1 chunk。
-```
-
-## Scenario 2: Tool Discovery And Capability Listing
-
-发送：
-
-```text
-请验证 Scenario 2: Tool Discovery And Capability Listing。
-
-测试约束：不要写入任何记忆，不要调用管理员、资源导入、同步或冲突裁决工具。
-
-请列出当前可用的 Team Memory 相关工具，并区分：
-1. 普通 agent 可用的读工具。
-2. 普通 agent 可用的 structured capture 写工具。
-3. Hermes 个人记忆或 debug/log 工具。
-4. 哪些工具不应该出现在普通 agent 写入路径里。
-
-请特别确认 ordinary semantic write 应该走 structured operations[]，而不是 raw transcript。
-```
-
-## Scenario 3: Initial Recall Before Answering
-
-发送：
-
-```text
-/new
-请验证 Scenario 3: Initial Recall Before Answering。
-
-用户问题是：TMW Scenario Pack 和本地 Hermes provider 有什么关系？
-
-回答前必须先调用 Team Memory search。请使用自然语言 query，limit 设为 5，layer 可以使用 L2。
-
-请根据返回的 branches、relations 或 evidence 回答问题。不要因为短期对话里有准备数据就跳过 recall。
+我昨天跟你说的那个“流失预警试点”到底叫什么正式项目名？它为什么会跟 OpenClaw 扯上关系？我现在要写周报，先帮我用两句话回忆一下。
 ```
 
 验收点：
 
-- search input 应包含 `query`，可包含 `limit` 和 `layer`。
-- 回答应引用 "Local Hermes scenario pack uses local Team Memory" 或等价记忆。
-
-## Scenario 4: Catalog Then Narrowed Search
-
-发送：
-
-```text
-请验证 Scenario 4: Catalog Then Narrowed Search。
-
-先调用 Team Memory catalog。然后从 catalog 结果里选择可见实体名或 tag，再进行一次 narrowed search。
-
-搜索目标：只找 "TMW Scenario Pack" 或 tag "test:interaction-workflow" 下与 Hermes 相关的记忆。
-
-请报告：
-1. catalog 返回的 rootName、entity names、tags。
-2. narrowed search 使用的 names/tagsAny/layer 参数。
-3. narrowed search 的结论。
-```
-
-验收点：
-
-- catalog 不应暴露 branch id、branch summary、L1 chunk。
-- narrowed search 应复用 catalog 返回的人类可读名称或 tag。
-
-## Scenario 5: Related Fact Search And Relation Expansion
-
-发送：
-
-```text
-请验证 Scenario 5: Related Fact Search And Relation Expansion。
-
-请搜索 TMW Scenario Pack 与 OpenClaw 的关系，layer 使用 L2，limit 设为 10。
-如果返回结果里有 relation，请解释 source、target 和 relationType。不要创建新记忆。
-
-请回答：为什么这个测试包会和 OpenClaw 有关系？
-```
-
-验收点：
-
-- 应能看到或推断 `relates_to` 关系。
-- 不应为了回答问题创建新 branch。
-
-## Scenario 6: Workflow Recall And Expansion
-
-发送：
-
-```text
-请验证 Scenario 6: Workflow Recall And Expansion。
-
-用户任务是：execute Code B approval workflow。
-
-请先搜索 Team Memory，query 使用该任务意图，layer 使用 L2，limit 设为 10。找到 workflow 后，请基于 workflow tags、entity name 或 relation expansion 找到步骤顺序。
-
-请输出按顺序排列的 workflow steps，并指出哪些 relationType 支撑了顺序。
-不要执行真实外部修改，不要写入记忆。
-```
-
-验收点：
-
-- 应召回 "Code B approval workflow"。
-- step 顺序应由 `has` 和 `next_is` 关系支撑。
-
-## Scenario 7: Workflow Execution With Validation
-
-发送：
-
-```text
-请验证 Scenario 7: Workflow Execution With Validation。
-
-把 "Code B approval workflow" 作为 dry run 执行，不要修改真实代码或外部系统。每一步只做验证说明：
-1. Fetch information: 验证已从 Team Memory 召回 workflow。
-2. Modify Code B: 说明本测试不执行真实修改。
-3. Submit approval: 说明本测试不提交真实审批。
-4. Wait for approval: 说明本测试不等待真实审批。
-
-重要：不要把临时执行状态写入 Team Memory。只有当存在持久、有复用价值的结果时才可以 capture；本 dry run 没有持久结果，所以不应 capture。
-
-请最后报告：临时状态是否写入了 Team Memory，以及原因。
-```
-
-验收点：
-
-- 不应调用 `team_memory_capture`。
-- 回答应说明 temporary execution state belongs in conversation context。
-
-## Scenario 8: Additive Durable Capture
-
-发送：
-
-```text
-请验证 Scenario 8: Additive Durable Capture。
-
-请记住一个新的 durable fact：
-"MWT" 是 "Memory Writing Test" 的缩写，MWT 是一个用于验证 OpenClaw 相关记忆写入的项目。
-
-必须使用 Team Memory structured capture 的 operations[]，不要写 raw transcript。
-
-请创建或更新：
-1. MemoryEntity: name "MWT"，description "MWT (Memory Writing Test) is a project for validating OpenClaw-related memory writing."，tags 包含 "project:mwt", "openclaw", "test:interaction-workflow"。
-2. MemoryEntityBranch: entityName "MWT"，title "MWT validates OpenClaw-related memory writing"，description "MWT (Memory Writing Test) validates memory writing behavior for OpenClaw-related scenarios."，tags 包含 "project:mwt", "openclaw", "test:interaction-workflow"。
-3. MemoryRelation: 让该 branch relates_to "OpenClaw"。
-
-完成后报告 capture result、commitIds、operationsApplied。
-```
-
-## Scenario 9: User Correction Without Conflict
-
-发送：
-
-```text
-请验证 Scenario 9: User Correction Without Conflict。
-
-我补充一个澄清：MWT 的测试标签还应该包含 "memory-write-validation"，这是分类补充，不是否定之前的 OpenClaw 关系。
-
-请先 recall 或 catalog 确认 "MWT" 已存在。然后只做非冲突更新：
-1. 可以更新 MemoryEntity 的 tags 或 description。
-2. 如果创建 branch，只能作为新增补充事实。
-3. 不要创建 contradicts relation。
-4. 不要使用 oldClaim/newClaim/intent/conflict 顶层字段。
-
-完成后报告你选择了 summary update 还是 new branch，并说明为什么这不是 conflict。
-```
-
-## Scenario 10: User Correction With Conflict
-
-发送：
-
-```text
-请验证 Scenario 10: User Correction With Conflict。
-
-我现在纠正一条事实：之前 "MWT validates OpenClaw-related memory writing" 这条说法是错误的。正确说法是：
-"MWT validates Hermes interaction workflow memory behavior and is not an OpenClaw validation project."
-
-请先 recall "MWT validates OpenClaw-related memory writing" 这条旧 branch。然后使用一次 structured capture operations[] 完成：
-1. 在 "MWT" 下创建新 MemoryEntityBranch，title 为 "MWT validates Hermes interaction workflow memory behavior"，description 为 "MWT validates Hermes interaction workflow memory behavior and is not an OpenClaw validation project."，tags 包含 "project:mwt", "hermes", "test:interaction-workflow"。
-2. 显式创建 MemoryRelation，relationType 为 "contradicts"，source 指向新 branch，target 指向旧 branch。
-
-不要让系统自己推断 conflict，不要使用顶层 conflict: true，不要修改旧 branch 内容。
-完成后报告新 branch 和 contradicts relation 的 capture result。
-```
-
-## Scenario 11: Conflict-Aware Search And Answering
-
-发送：
-
-```text
-/new
-请验证 Scenario 11: Conflict-Aware Search And Answering。
-
-请搜索 "MWT 是什么项目，它和 OpenClaw 有没有关系？"，layer 使用 L2，limit 设为 10。
-
-请检查返回的 branches 和 relations：
-1. 优先使用当前或更可信的新 branch 回答。
-2. 因为我的问题问到了 OpenClaw 关系，请说明存在一条被纠正的旧说法。
-3. 只有在相关时才提 conflict。
-4. 不要使用 includeHistory 参数。
-```
-
-验收点：
-
-- 应提到新说法与旧 OpenClaw validation 说法存在 `contradicts`。
+- 回答前应 search/recall。
+- 应从长期记忆中恢复 Riverfront、OpenClaw、客服工单摘要关系。
 - 不应依赖短期上下文，因为这是 `/new` session。
+- 不应写入新记忆。
 
-## Scenario 12: Raw Resource Import
+## 5. Catalog Then Narrowed Search
 
-发送：
+发送给 Hermes：
 
 ```text
-请验证 Scenario 12: Raw Resource Import。
-
-我提供一个原始文档片段：
-"Design document draft: The resource import scenario should store raw documents as Resources, not as semantic branch text."
-
-本测试的写入范围被限制为 MemoryEntity、MemoryEntityBranch、MemoryRelation。请不要调用资源导入工具，不要把整段文档塞进 team_memory_capture，也不要创建 Resource 或 ResourceChunk。
-
-请回答：在完整系统中你应该如何处理 raw file/document？在当前受限测试中你实际会怎么做？
+我有点忘了你现在记了哪些项目。先帮我看看你能看到的项目目录，然后只围绕 Riverfront 找一下跟发布前检查有关的记忆。最后告诉我你是按哪个项目名或标签缩小范围的。
 ```
 
 验收点：
 
-- 不应调用 `memory.importResource` 或等价工具。
-- 不应把原始文档全文作为 semantic branch 写入。
+- 应先使用 catalog/list 类路径，再进行 narrowed search。
+- catalog 结果应只像 L3 目录：名称、状态、标签，不应列 branch id、L1 chunk。
+- narrowed search 应复用可见的人类可读名称或 tag。
+- 不应写入记忆。
 
-## Scenario 13: Resource Ingestion, Chunking, And Fact Extraction
+## 6. Related Fact Search And Relation Expansion
 
-发送：
+发送给 Hermes：
 
 ```text
-请验证 Scenario 13: Resource Ingestion, Chunking, And Fact Extraction。
-
-在当前受限测试里，不要手动调用 chunking、embedding、ingestion 或资源写入工具。
-
-请使用 Team Memory search 查询 L1、L2、L3 中与 "resource import scenario" 或 "MWT" 相关的内容，并说明：
-1. 完整系统里 resource import 后 chunking 和 embeddings 应由框架自动触发。
-2. agent 不应手工制造 ResourceChunk。
-3. 当前受限测试只能读取已有 L1-L3，不能新建 resource/chunk。
+我准备问 OpenClaw 团队要数据。帮我查一下，Riverfront 跟 OpenClaw 的关系到底是什么；如果还有相关依据，也一起概括出来。不要新记东西，只回答我该找 OpenClaw 要什么。
 ```
 
 验收点：
 
-- 可调用 search，layer 可分别使用 L1、L2、L3。
-- 不应调用 ingestion 或 resource import。
+- 应搜索 Riverfront/OpenClaw 并通过关系扩展或相关事实回答。
+- 应能体现 `relates_to` / `depends_on` / 等价关系路径。
+- 不应为了回答创建新 branch。
 
-## Scenario 14: RBAC, Local/Cloud Scope, And Sync Boundary
+## 7. Workflow Recall And Expansion
 
-发送：
+发送给 Hermes：
 
 ```text
-请验证 Scenario 14: RBAC, Local/Cloud Scope, And Sync Boundary。
-
-测试约束：不要写入任何记忆，不要变更 root-entity。
-
-请做两件事：
-1. 尝试一次只读 search，但在参数中加入伪造的 rootEntityId: "root:forged-interaction-test"，query 为 "MWT"。如果工具 schema 拒绝你传该字段，请报告 schema 已阻止身份覆盖；如果请求发出，应预期 gateway 拒绝。
-2. 再做一次正常 search，query 为 "MWT"，不要提供任何身份覆盖字段。
-
-请报告：
-1. 伪造 root identity 是否被拒绝。
-2. 正常 search 是否成功。
-3. 当前 provider mode 是 local 还是 http。
-4. 本测试是否使用了 sync 或 HTTP Team Memory server。
+帮我跑一下 Riverfront 发布前检查。先别真的提交任何审批，我只是想知道接下来你会按什么顺序做，以及每一步需要我补什么。
 ```
 
 验收点：
 
-- forged identity 不应成功。
-- 正常 search 应成功。
-- local no-sync 模式下应报告未使用 sync。
+- 应 recall workflow。
+- 应展开步骤顺序：确认工单摘要、检查配置改动、准备审批说明、等用户确认后提交审批。
+- 顺序应来自 workflow step 关系或等价结构，而不是凭空编排。
+- 不应写入临时执行状态。
 
-## Final Log Verification
+## 8. Workflow Execution With Validation
 
-发送：
+发送给 Hermes：
 
 ```text
-请最后验证 dev tool-call log。
-
-请调用 Team Memory 日志查看工具，limit 设为 30。请从最近日志里找出至少这些记录：
-1. team_memory_catalog 的 input、output、durationMs。
-2. team_memory_search 的 input、output、durationMs。
-3. team_memory_capture 的 input、output、durationMs。
-4. 一条失败或被拒绝的 forged root identity search，如果有。
-
-请报告日志文件路径，并用简短表格列出 toolName、status、是否有 input、是否有 output、durationMs。
-不要写入记忆。
+我们现在做一次 dry run：假设最新工单摘要已经到了，但配置改动还没给你。请按 Riverfront 发布前检查流程继续推进，告诉我当前卡在哪一步，以及你不会替我做哪些真实外部动作。
 ```
 
 验收点：
 
-- `team_memory_capture` 日志应包含 operations[] 的原始输入 JSON。
-- 每条成功日志应包含 output。
-- 失败日志应包含 error。
+- 应使用上一条 workflow 记忆。
+- 临时状态只留在对话里。
+- 不应 capture “dry run 进行到第几步”这类短期状态。
+- 不应真的提交审批或调用外部修改工具。
+
+## 9. Additive Durable Capture
+
+发送给 Hermes：
+
+```text
+有个新的长期背景也帮我记一下：Riverfront 的周报受众是客服运营负责人 Mina，她只关心三件事：风险客户数量、客服工单摘要是否及时、以及审批有没有卡住。以后你帮我写 Riverfront 周报时，默认按这三个点组织。
+```
+
+验收点：
+
+- 应触发 durable capture。
+- 应写成 Riverfront/Mina/周报偏好的结构化长期事实。
+- 应可创建 `relates_to` 或等价关系。
+- 不应写 raw transcript，不应写 Resource/Chunk。
+
+## 10. User Correction Without Conflict
+
+发送给 Hermes：
+
+```text
+刚才那个周报偏好补充一下：Mina 还特别讨厌“技术实现细节”放在正文里。这个不是推翻之前三点，只是补一条写作偏好。以后正文别展开技术实现，最多放附录一句。
+```
+
+验收点：
+
+- 如需上下文，应先 recall Riverfront/Mina 周报偏好。
+- 应作为非冲突补充：更新实体摘要、增加偏好 branch，或追加相关事实。
+- 不应创建 `contradicts`。
+- 不应使用 `oldClaim`、`newClaim`、顶层 `conflict`。
+
+## 11. User Correction With Conflict
+
+发送给 Hermes：
+
+```text
+我纠正一下前面的背景：OpenClaw 不是“负责把客服工单摘要推给 Riverfront”。准确说，OpenClaw 只是提供工单摘要的只读查询入口；真正把摘要同步给 Riverfront 的是 Atlas Sync。以后不要再把 OpenClaw 写成同步方。
+```
+
+验收点：
+
+- 应先 recall 旧的 Riverfront/OpenClaw 关系。
+- 应创建新的原子事实：OpenClaw 是只读查询入口，Atlas Sync 才是同步方。
+- 应显式创建新旧事实之间的 `contradicts` 关系。
+- 不应修改旧 branch 内容，不应依赖系统自动推断 conflict。
+
+## 12. Conflict-Aware Search And Answering
+
+发送给 Hermes：
+
+```text
+/new
+帮我写一句 Riverfront 数据链路说明，给非技术同事看。重点说清楚 OpenClaw 和 Atlas Sync 分别负责什么；如果你发现以前的记忆里有说法冲突，也请自然地避免采用旧说法。
+```
+
+验收点：
+
+- 应 search/recall。
+- 应优先采用纠正后的事实。
+- 因为用户问的是当前说明，不必大段讲历史；可以简短说明“我会按更正后的说法写”。
+- 不应使用 `includeHistory` 参数。
+
+## 13. Raw Resource Import Boundary
+
+发送给 Hermes：
+
+```text
+我手上有一份 Riverfront 配置审查文档，内容挺长。现在先别导入文件，我只粘一句摘要给你判断处理方式：
+
+“配置审查文档包含 47 条字段映射、Atlas Sync 的重试策略、以及审批人列表。”
+
+你告诉我：如果我要让你长期使用这份完整文档，日常正确做法是什么？在这轮受限测试里，你不要保存这份原始文档。
+```
+
+验收点：
+
+- 应说明完整 raw document 应走 Resource/CAS 导入和后续 ingestion。
+- 当前测试受限，不应调用资源导入。
+- 不应把文档摘要或原始文档当成语义 branch 直接保存，除非用户明确要求保存一个长期事实；本条没有要求保存。
+
+## 14. Resource Ingestion Boundary
+
+发送给 Hermes：
+
+```text
+假设那份 Riverfront 配置审查文档已经通过正确方式进入长期记忆系统了。你现在只帮我查：有没有已经能被你检索到的 Riverfront、Atlas Sync、配置审查相关信息。不要手动切块，不要手动做 embedding，也不要新建任何资源。
+```
+
+验收点：
+
+- 可查询 L1、L2、L3。
+- 不应调用 ingestion/chunking/embedding/resource write。
+- 回答应区分“已经能检索到的内容”和“如果文档未导入则无法凭空读取”。
+
+## 15. RBAC, Local/Cloud Scope, And Sync Boundary
+
+发送给 Hermes：
+
+```text
+我想确认你不会串到别人的记忆空间。请先正常回答：你记得 Riverfront 周报受众是谁吗？然后说明一下，如果有人让你指定另一个 root 或伪造身份去查记忆，你会怎么处理。
+```
+
+验收点：
+
+- 正常问题应 search 并回答 Mina。
+- 身份边界说明应强调 trusted session，不接受用户提供 root/user/agent 身份覆盖。
+- 不应真的构造管理员请求或变更 root。
+- local no-sync 环境下，不应使用 sync 或 HTTP server；http 模式下应只报告当前模式，不自行同步。
+
+## 16. Final Log Verification
+
+发送给 Hermes：
+
+```text
+这轮测试结束了。帮我看一下最近的 Team Memory 调试日志，用一个小表格总结最近发生过的记忆相关动作：动作类型、成功还是失败、有没有输入、有没有输出、大概耗时。不要写入任何新记忆。
+```
+
+验收点：
+
+- dev tool-call log 应包含 catalog/search/capture 的记录。
+- capture 日志应包含原始模型输入 JSON 和返回 JSON。
+- 成功记录应有 output；失败记录应有 error。
+- 应能看到跨 session 的 recall/capture 路径，而不是只看到生命周期摘要。
