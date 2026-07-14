@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from time import perf_counter
 from datetime import datetime, timezone
 from typing import Any
 
@@ -50,6 +51,52 @@ def _hook_log_file() -> str:
     return os.path.join(os.path.expanduser("~"), ".team-memory", "hermes-hooks.jsonl")
 
 
+def _load_runtime_config() -> dict[str, Any]:
+    config_path = os.environ.get("TEAM_MEMORY_CONFIG_FILE")
+    if not config_path:
+        return {}
+    try:
+        with open(config_path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _dev_tool_call_log_config() -> dict[str, Any]:
+    config = _load_runtime_config()
+    dev = config.get("dev")
+    if isinstance(dev, dict):
+        tool_call_log = dev.get("hermesToolCallLog")
+        if isinstance(tool_call_log, dict):
+            return tool_call_log
+    return {}
+
+
+def _dev_tool_call_log_enabled() -> bool:
+    explicit = os.environ.get("TEAM_MEMORY_HERMES_TOOL_CALL_LOG")
+    if explicit is not None:
+        return explicit.strip().lower() not in {"0", "false", "no", "off"}
+    configured = _dev_tool_call_log_config().get("enabled")
+    if isinstance(configured, bool):
+        return configured
+    config = _load_runtime_config()
+    return str(config.get("runtimeMode", "Dev")).lower() == "dev"
+
+
+def _tool_call_log_file() -> str:
+    explicit = os.environ.get("TEAM_MEMORY_HERMES_TOOL_CALL_LOG_FILE")
+    if explicit:
+        return explicit
+    configured = _dev_tool_call_log_config().get("file")
+    if isinstance(configured, str) and configured:
+        return configured
+    hermes_home = os.environ.get("HERMES_HOME")
+    if hermes_home:
+        return os.path.join(hermes_home, "team-memory-tool-calls.jsonl")
+    return os.path.join(os.path.expanduser("~"), ".team-memory", "hermes-tool-calls.jsonl")
+
+
 def _log_event(event: str, **payload: Any) -> None:
     try:
         path = _hook_log_file()
@@ -65,9 +112,60 @@ def _log_event(event: str, **payload: Any) -> None:
         return
 
 
+def _log_tool_call(
+    tool_name: str,
+    args: dict[str, Any],
+    *,
+    session_id: str,
+    started_at: float,
+    result: Any = None,
+    error: BaseException | None = None,
+) -> None:
+    if not _dev_tool_call_log_enabled():
+        return
+    try:
+        path = _tool_call_log_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        entry: dict[str, Any] = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event": "hermes_tool_call",
+            "toolName": tool_name,
+            "sessionId": session_id,
+            "input": args,
+            "durationMs": round((perf_counter() - started_at) * 1000, 3),
+        }
+        if error is None:
+            entry["status"] = "ok"
+            entry["output"] = result
+        else:
+            entry["status"] = "failed"
+            entry["error"] = repr(error)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        return
+
+
 def _read_hook_log(limit: int = 50) -> list[dict[str, Any]]:
     try:
         with open(_hook_log_file(), encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except FileNotFoundError:
+        return []
+    entries: list[dict[str, Any]] = []
+    for line in lines[-limit:]:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            entries.append(payload)
+    return entries
+
+
+def _read_tool_call_log(limit: int = 50) -> list[dict[str, Any]]:
+    try:
+        with open(_tool_call_log_file(), encoding="utf-8") as handle:
             lines = handle.readlines()
     except FileNotFoundError:
         return []
@@ -370,18 +468,31 @@ class TeamMemoryHermesProvider(MemoryProvider):
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], **kwargs: Any) -> str:
         session_id = str(kwargs.get("session_id") or getattr(self, "_session_id", "hermes"))
+        started_at = perf_counter()
+        result: Any = None
         if tool_name == "team_memory_search":
-            result = self._provider.search(
-                str(args.get("query", "")),
-                session_id=session_id,
-                limit=args.get("limit"),
-                layer=args.get("layer"),
-                names=args.get("names"),
-                tagsAny=args.get("tagsAny"),
-            )
+            try:
+                result = self._provider.search(
+                    str(args.get("query", "")),
+                    session_id=session_id,
+                    limit=args.get("limit"),
+                    layer=args.get("layer"),
+                    names=args.get("names"),
+                    tagsAny=args.get("tagsAny"),
+                )
+            except Exception as exc:
+                _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, error=exc)
+                raise
+            _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, result=result)
             return json.dumps(result)
         if tool_name == "team_memory_catalog":
-            return json.dumps(self._provider.catalog())
+            try:
+                result = self._provider.catalog()
+            except Exception as exc:
+                _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, error=exc)
+                raise
+            _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, result=result)
+            return json.dumps(result)
         if tool_name == "team_memory_capture":
             if isinstance(args.get("operations"), list):
                 payload: dict[str, Any] = {
@@ -393,8 +504,10 @@ class TeamMemoryHermesProvider(MemoryProvider):
                     result = self._provider.write_memory(payload)
                 except Exception as exc:
                     _log_event("team_memory_capture", status="failed", sessionId=session_id, error=repr(exc))
+                    _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, error=exc)
                     raise
                 _log_event("team_memory_capture", status="captured", sessionId=session_id, result=result)
+                _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, result=result)
                 return json.dumps(result)
             try:
                 result = self._provider.add(
@@ -404,15 +517,22 @@ class TeamMemoryHermesProvider(MemoryProvider):
                 )
             except Exception as exc:
                 _log_event("team_memory_capture", status="failed", sessionId=session_id, error=repr(exc))
+                _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, error=exc)
                 raise
             _log_event("team_memory_capture", status="captured", sessionId=session_id, result=result)
+            _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, result=result)
             return json.dumps(result)
         if tool_name == "team_memory_lifecycle_log":
             limit = args.get("limit")
-            return json.dumps({
-                "logFile": _hook_log_file(),
+            result = {
+                "hookLogFile": _hook_log_file(),
+                "toolCallLogFile": _tool_call_log_file(),
+                "toolCallLogEnabled": _dev_tool_call_log_enabled(),
                 "entries": _read_hook_log(limit if isinstance(limit, int) else 50),
-            })
+                "toolCallEntries": _read_tool_call_log(limit if isinstance(limit, int) else 50),
+            }
+            _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, result=result)
+            return json.dumps(result)
         return json.dumps({"error": f"unknown Team Memory tool: {tool_name}"})
 
 

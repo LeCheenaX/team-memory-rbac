@@ -12,6 +12,7 @@ test("Hermes local compose setup and manual flow do not require server client to
   ) as {
     runtimeMode: string;
     embedding: { provider: string; url: string; model?: string };
+    dev?: { hermesToolCallLog?: { enabled?: boolean; file?: string } };
     activation?: unknown;
   };
 
@@ -40,6 +41,7 @@ test("Hermes local compose setup and manual flow do not require server client to
   assert.equal(hermesConfig.embedding.provider, "http");
   assert.match(hermesConfig.embedding.url, /^http:\/\//);
   assert.equal(typeof hermesConfig.embedding.model, "string");
+  assert.equal(hermesConfig.dev?.hermesToolCallLog?.enabled, true);
   assert.equal(hermesConfig.activation, undefined);
   assert.match(manualFlow, /Dev` and `Production` must use a real HTTP embedding provider/);
   assert.match(manualFlow, /team-memory setup --config <config-path>/);
