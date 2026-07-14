@@ -119,6 +119,10 @@ export class TeamMemoryHttpClient {
     return this.request("POST", "conflicts/resolve", input);
   }
 
+  migrateLegacyHostCaptures(input: Record<string, unknown> = {}): Promise<unknown> {
+    return this.request("POST", "admin/migrations/legacy-host-captures", input);
+  }
+
   syncPull(input: Record<string, unknown>): Promise<unknown> {
     return this.request("POST", "sync/pull", input, false);
   }

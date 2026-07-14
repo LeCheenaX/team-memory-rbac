@@ -320,6 +320,9 @@ class HermesTeamMemoryProvider:
         value = result.get("value") if isinstance(result, dict) else None
         return value if isinstance(value, dict) else result
 
+    def write_memory(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._client.call_tool("memory.write", payload)
+
     def add(
         self,
         messages: str | list[dict[str, str]],

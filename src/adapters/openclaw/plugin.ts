@@ -41,6 +41,15 @@ export interface OpenClawToolDefinition {
   };
 }
 
+function structuredWriteToolDescription(): string {
+  return [
+    "Write durable Team Memory using structured operations[].",
+    "Extract entity summaries, atomic branch facts, and MemoryRelation edges before writing.",
+    "Few-shot: upsert_memory_entity plus create_memory_entity_branch for a new project; refresh_memory_entity_summary for summary refresh; create_memory_entity_branch for duplicate facts so branch vector dedupe can update metadata; create_memory_relation relates_to for related facts; create_memory_entity_branch plus create_memory_relation contradicts between branch natural-name endpoints for conflicts.",
+    "Never send raw transcript-as-memory, Agent-authored ResourceChunk, top-level payload.conflict, generated ids, identity/root fields, or outcome-as-semantic-content.",
+  ].join(" ");
+}
+
 /** Host-facing OpenClaw adapter for both tool-plugin and active-memory modes. */
 export class OpenClawTeamMemoryPlugin {
   readonly id = "team-memory-rbac";
@@ -67,15 +76,15 @@ export class OpenClawTeamMemoryPlugin {
 
   tools(): OpenClawToolDefinition[] {
     const common = [
-      this.tool("team_memory.search", "Search RBAC-protected Team Memory"),
-      this.tool("team_memory.catalog", "List visible Team Memory names and tags"),
-      this.tool("team_memory.write", "Write RBAC-protected Team Memory"),
+      this.tool("team_memory.search", "Search RBAC-protected Team Memory with query, optional layer, names, tagsAny, and limit. Do not send identity fields, generated ids, history toggles, or conflict flags."),
+      this.tool("team_memory.catalog", "List visible Team Memory names and tags from the trusted session root without exposing generated ids."),
+      this.tool("team_memory.write", structuredWriteToolDescription()),
     ];
     if (this.mode === "parallel_native_team_memory") return common;
     return [
-      this.tool("memory_search", "OpenClaw active-memory recall through Team Memory"),
-      this.tool("memory_catalog", "OpenClaw active-memory catalog through Team Memory"),
-      this.tool("memory_write", "OpenClaw active-memory write through Team Memory"),
+      this.tool("memory_search", "OpenClaw active-memory recall through Team Memory with query, optional layer, names, tagsAny, and limit. Do not send identity fields, generated ids, history toggles, or conflict flags."),
+      this.tool("memory_catalog", "OpenClaw active-memory catalog through Team Memory without exposing generated ids."),
+      this.tool("memory_write", structuredWriteToolDescription()),
     ];
   }
 
@@ -158,11 +167,9 @@ export class OpenClawTeamMemoryPlugin {
           event: "agent_end",
           endpoint: "host/openclaw/capture",
           layers: [
-            "L3:memory_entity",
-            "L2:memory_entity_branch",
             "L1:conversation_resource",
             "L1:resource_chunk",
-            "L2:memory_relation",
+            "candidate:structured_memory_operations",
           ],
         },
       },

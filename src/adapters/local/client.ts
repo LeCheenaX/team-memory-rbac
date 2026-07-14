@@ -81,6 +81,10 @@ export class LocalTeamMemoryClient {
     return this.gateway.resolveConflict(this.token, input);
   }
 
+  migrateLegacyHostCaptures(input: Record<string, unknown> = {}): Promise<unknown> {
+    return this.gateway.migrateLegacyHostCaptures(this.token, input);
+  }
+
   syncPull(input: Record<string, unknown>): Promise<unknown> {
     return this.gateway.pullSync(this.token, input);
   }

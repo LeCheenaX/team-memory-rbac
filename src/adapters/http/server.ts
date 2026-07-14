@@ -35,6 +35,7 @@ interface GatewayLike {
   createDelegation(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   revokeDelegation(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   onboardAgent(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
+  migrateLegacyHostCaptures(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   importResource(token: string | undefined, payload: Record<string, unknown>): Promise<unknown>;
   reviseResource(token: string | undefined, resourceId: string, payload: Record<string, unknown>): Promise<unknown>;
   ingestResource(token: string | undefined, resourceId: string, payload: Record<string, unknown>): Promise<unknown>;
@@ -251,6 +252,9 @@ async function handleRequest(
   }
   if (request.method === "POST" && url.pathname === "/admin/agents/onboard") {
     return responseValue(201, await gateway.onboardAgent(bearer, await body(request, bodyLimitBytes)));
+  }
+  if (request.method === "POST" && url.pathname === "/admin/migrations/legacy-host-captures") {
+    return responseValue(200, await gateway.migrateLegacyHostCaptures(bearer, await body(request, bodyLimitBytes)));
   }
   if (request.method === "POST" && url.pathname === "/resources/import") {
     return responseValue(201, await gateway.importResource(bearer, await body(request, bodyLimitBytes)));

@@ -6,9 +6,11 @@ surface.
 
 ## Model Boundaries
 
-- `MemoryEntity` is a stable identity for a group of related atomic facts. It
-  has a human-readable `name` / `title`, a `description`, tags, status, and an
-  embedding. It answers "what things exist in memory" at the summary layer.
+- `MemoryEntity` is a stable identity and summary for a group of related atomic
+  facts. It has a human-readable `name` / `title`, a `description` summary,
+  tags, status, and an embedding. It answers "what things exist in memory" and
+  summarizes what the related atomic facts collectively say. It is not itself an
+  atomic fact.
 - `MemoryEntityBranch` is concrete atomic fact content/details. It has a
   human-readable `name` / `title`, description, tags, extraInfo, embedding,
   importance, confidence, and branch / commit projection state.
@@ -51,9 +53,12 @@ Catalog:
 
 Catalog/list has no required parameters and no Agent-supplied id parameters in
 v1. It lists the trusted session root name, visible `MemoryEntity` names, and
-visible tags.
+visible tags. Catalog is an L3 directory, not an L2 fact browser: it must not
+list `MemoryEntityBranch` atomic facts, branch ids, branch summaries, L1 chunks,
+or relation details. Returning `rootName` separately is allowed because root
+identity comes from the trusted session.
 
-Update:
+Single-object update:
 
 ```json
 {
@@ -85,13 +90,64 @@ Memory returns an ambiguity result and the Agent should search/catalog first.
 
 Optional update mechanics are limited to `lineRange` for line-addressable
 Resource edits, `replaceMode: "whole_resource"` for whole Resource replacement,
-and an explicit conflict signal when the Agent/user intentionally records a
-contradiction.
+and structured operation batches for logical memory captures.
+
+Structured capture/update:
+
+```json
+{
+  "operations": [
+    {
+      "op": "upsert_memory_entity",
+      "name": "MWT",
+      "description": "MWT (Memory Writing Test) is a project related to OpenClaw.",
+      "tags": ["project:mwt", "openclaw"]
+    },
+    {
+      "op": "create_memory_entity_branch",
+      "entityName": "MWT",
+      "title": "MWT is related to OpenClaw",
+      "description": "The project MWT (Memory Writing Test) is related to OpenClaw.",
+      "tags": ["project:mwt", "openclaw"]
+    },
+    {
+      "op": "create_memory_relation",
+      "relationType": "relates_to",
+      "source": { "kind": "memory_entity", "name": "MWT" },
+      "target": { "kind": "memory_entity", "name": "OpenClaw" },
+      "description": "MWT is related to OpenClaw."
+    }
+  ]
+}
+```
+
+`target` / `patch` remains the compact single-object form. `operations[]` is the
+preferred capture form when an Agent has extracted one logical memory update
+that spans an entity summary, one or more atomic facts, and relations. One
+structured capture call maps to one History commit. Operations should be planned
+in this order when applicable: L3 `MemoryEntity` upsert/update, L2
+`MemoryEntityBranch` atomic fact creation or duplicate metadata update, L1
+evidence link to an already ingested Resource/ResourceChunk, L2
+`MemoryRelation` creation/replacement, and optional L3 summary refresh.
+
+Structured capture supports these operation families:
+
+```ts
+type MemoryCaptureOperation =
+  | UpsertMemoryEntityOperation
+  | UpdateMemoryEntityOperation
+  | CreateMemoryEntityBranchOperation
+  | UpdateMemoryEntityBranchMetadataOperation
+  | CreateMemoryRelationOperation
+  | ReplaceMemoryRelationOperation
+  | LinkEvidenceOperation
+  | RefreshMemoryEntitySummaryOperation
+```
 
 Agents do not pass `includeHistory`, `oldClaim`, `newClaim`, `intent`,
 relationship intent, user identity, subject, task scope, root identity, source
 metadata, outcome, session provenance, fact keywords, embeddings, BM25 fields,
-timestamps, or generated ids.
+timestamps, generated ids, or a top-level `conflict: true` flag.
 
 ## Memory Update, Recall, And Reranking Rules
 
@@ -101,23 +157,39 @@ tombstoning; RBAC controls who can tombstone memory or adjudicate conflicts.
 
 Agent-facing update does not run recall inside the same call. If an Agent needs
 context, it calls recall first, receives memory context, and then sends a
-separate update. When applying the update, Team Memory may compare the
-target/update against existing memory for deduplication. If the best matching
+separate update.
+
+`MemoryEntity` writes update the entity summary and metadata. If
+`target.kind = memory_entity` or an operation addresses an existing entity by an
+exact visible name, Team Memory must not create a new `MemoryEntityBranch`
+merely because the supplied summary differs. The Agent may update the
+`MemoryEntity.description` directly, or it may recall all branches under the
+entity first and then write a refreshed summary.
+
+`MemoryEntityBranch` writes are atomic fact writes. When applying a branch write,
+Team Memory compares the proposed atomic fact description against existing
+branches under the same entity using vector similarity. If the best matching
 atomic fact is above the deduplication threshold, the write is a duplicate
 signal. It must not rewrite or merge fact content. It may only update ranking
-metadata such as recency, importance, weight, or timestamps.
+metadata such as recency, importance, weight, timestamps, or last-seen data.
 
-If similarity is below the deduplication threshold, the write is new concrete
-fact content/details. Without an explicit conflict signal from the agent/user capture,
-Team Memory creates a new `MemoryEntityBranch` and may create
-`MemoryRelation(relates_to)`. It must not call an LLM merge and must not
-directly modify the old branch. Only an explicit conflict signal may create
-`MemoryRelation(contradicts)`.
+If branch similarity is below the deduplication threshold, the write is new
+concrete fact content/details. Team Memory creates a new `MemoryEntityBranch`.
+It must not call an LLM merge and must not directly modify the old branch.
+
+A semantic contradiction is represented by an explicit
+`create_memory_relation` operation with `relationType: "contradicts"` between
+the old and new branches. Team Memory must not infer `contradicts` merely
+because two values differ, and ordinary Agent tools must not expose a top-level
+`payload.conflict: true` shortcut. If the Agent wants to mark a conflict, it
+recalls the old branch if needed, creates the new branch, and creates the
+`contradicts` relation in the same structured capture call.
 
 A commit represents one agent or user operation. One tool call may contain
 multiple atomic actions, such as creating a branch, creating a relation,
-replacing a relation, or changing metadata. Atomic actions that form one logical
-memory update should be recorded under one commit.
+replacing a relation, linking evidence, refreshing an entity summary, or
+changing metadata. Atomic actions that form one logical memory update should be
+recorded under one commit.
 
 Agent-updatable resources and fields:
 
@@ -469,40 +541,42 @@ Memory result:
 Agent:
 
 1. User asks to remember a durable fact or useful outcome.
-2. Agent calls update/capture with stable target fields and patch content.
-3. Agent does not provide relationship payloads.
+2. Agent extracts durable entity summaries, atomic facts, and relations from the
+   conversation.
+3. Agent calls update/capture with structured operations rather than raw
+   transcript text.
 
 Real path:
 
-1. `team_memory_capture` -> provider `.add(...)`, or explicit memory update.
+1. `team_memory_capture` or `memory.write` receives an `operations[]` batch.
 2. Provider calls the trusted local/http memory interface.
-3. Gateway authenticates and writes through the memory update path.
-4. After the memory system has been called, background processing may extract
-   atomic facts and compare them to related memories by vector similarity.
-5. If similarity is above the dedupe threshold, memory deduplicates: it does not
+3. Gateway authenticates and validates operation shapes and natural-language
+   endpoints under the trusted root.
+4. Entity operations upsert or update `MemoryEntity` summaries without creating
+   branches for summary changes.
+5. Branch operations compare the proposed atomic fact to existing branches under
+   the same entity by vector similarity.
+6. If similarity is above the dedupe threshold, memory deduplicates: it does not
    modify the existing branch content, and only updates recency / access weight /
    importance signals.
-6. If similarity is below the dedupe threshold and the agent did not explicitly
-   mark the content as conflicting, memory treats it as new fact content/details:
-   appends a new `MemoryEntityBranch` and may add a `relates_to` relation.
-7. Normal capture does not trigger LLM merge and does not directly modify an old
-   branch.
+7. If similarity is below the dedupe threshold, memory treats it as new fact
+   content/details and appends a new `MemoryEntityBranch`.
+8. Relation operations explicitly create links such as `relates_to` or
+   `contradicts`. Normal capture does not infer contradictions from different
+   values and does not directly modify old branch content.
 
 Memory result:
 
 ```json
 {
   "status": "captured",
-  "entityId": "66666666-6666-4666-8666-666666666666",
-  "branchId": "77777777-7777-4777-8777-777777777777",
-  "commitIds": [
-    "host-capture-entity-commit:uuid",
-    "host-capture-branch-commit:uuid"
-  ],
+  "commitIds": ["commit:mwt-capture"],
   "extra": {
-    "host": "hermes",
-    "sessionId": "20260708_040112_127de3",
-    "outcome": "success"
+    "operationsApplied": [
+      "upsert_memory_entity",
+      "create_memory_entity_branch",
+      "create_memory_relation"
+    ]
   }
 }
 ```
@@ -513,22 +587,25 @@ Agent:
 
 1. User gives a correction or clarification.
 2. If context is needed, agent first calls recall.
-3. Agent calls update/capture with the corrected durable target and patch.
-3. Agent does not invent `oldClaim`, `newClaim`, `intent`, or relation
-   arguments.
+3. Agent writes either an entity-summary update or a branch atomic fact
+   operation, depending on what changed.
+4. Agent does not invent `oldClaim`, `newClaim`, `intent`, generated ids, or
+   top-level conflict flags.
 
 Real path:
 
 1. Update enters the stable memory update path with trusted session context.
-2. Memory applies the target/patch and may compare the update with existing
-   memory to enforce dedupe rules.
-3. If similarity is above the dedupe threshold, memory treats the content as a
+2. If the write targets `memory_entity`, memory updates only the entity summary
+   and metadata.
+3. If the write creates a `MemoryEntityBranch`, memory compares the atomic fact
+   with existing branches under the same entity.
+4. If similarity is above the dedupe threshold, memory treats the content as a
    duplicate mention and only updates recency / access weight / importance
    signals.
-4. If similarity is below the dedupe threshold, memory appends a new
+5. If similarity is below the dedupe threshold, memory appends a new
    `MemoryEntityBranch` under the relevant entity identity and may add a
-   `relates_to` relation to nearby branches.
-5. Memory does not run an LLM merge and does not modify old branch content.
+   `relates_to` relation when the Agent supplied that relation operation.
+6. Memory does not run an LLM merge and does not modify old branch content.
 
 Memory result:
 
@@ -559,21 +636,53 @@ Agent:
 1. User states that an existing remembered fact is wrong or belongs to a
    different thing.
 2. If context is needed, agent first calls recall.
-3. Agent calls update/capture with stable target and patch content that
-   explicitly marks the new memory as conflicting with the remembered fact.
+3. Agent calls update/capture with a structured operation batch that creates the
+   new branch and explicitly creates a `MemoryRelation(contradicts)` to the
+   remembered branch.
 4. Agent can later search by corrected name or tags.
 
 Real path:
 
 1. Update enters the stable memory update path with trusted session context.
-2. Memory recognizes the explicit conflict signal from the agent/user wording or
-   update mode.
-3. In one commit, memory creates a new `MemoryEntityBranch` and a
+2. Memory validates that the referenced old branch and new branch endpoint names
+   resolve uniquely under the trusted root.
+3. In one commit, memory creates the new `MemoryEntityBranch` and a
    `MemoryRelation` with `relationType: "contradicts"` from the new branch to
    the old branch.
-4. Without an explicit conflict signal, this path must not create
-   `contradicts`; the non-conflict path creates a new branch and may create
-   `relates_to`.
+4. Without an explicit `create_memory_relation` operation, this path must not
+   create `contradicts`; the non-conflict path creates a new branch and only
+   creates `relates_to` when such a relation operation is supplied.
+
+Agent call:
+
+```json
+{
+  "operations": [
+    {
+      "op": "create_memory_entity_branch",
+      "entityName": "Test 1",
+      "title": "Test 1 is about OpenClaw",
+      "description": "Test 1 is another test regarding OpenClaw.",
+      "tags": ["project:test-1", "openclaw"]
+    },
+    {
+      "op": "create_memory_relation",
+      "relationType": "contradicts",
+      "source": {
+        "kind": "memory_entity_branch",
+        "entityName": "Test 1",
+        "name": "Test 1 is about OpenClaw"
+      },
+      "target": {
+        "kind": "memory_entity_branch",
+        "entityName": "Test 1",
+        "name": "Test 1 local Hermes is running in a container"
+      },
+      "description": "The OpenClaw interpretation contradicts the older local Hermes/container interpretation."
+    }
+  ]
+}
+```
 
 Memory result:
 
@@ -689,8 +798,9 @@ Real path:
    revision.
 3. Ingestion chunks or rechunks the resource.
 4. Ingestion writes `ResourceChunk` objects, embeddings, and BM25 rows.
-5. Background or explicit extraction can create memory entities/branches and
-   relations referring to chunks.
+5. Background or explicit extraction can create `MemoryEntity` summaries,
+   `MemoryEntityBranch` atomic facts, and `MemoryRelation` links referring to
+   chunks.
 
 Memory result:
 

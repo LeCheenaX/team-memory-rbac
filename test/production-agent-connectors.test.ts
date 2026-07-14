@@ -155,6 +155,7 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     assert.ok(identity.provider.visibleTools.includes("memory.write"));
     const tools = await client.listTools() as Array<{
       name: string;
+      description: string;
       inputSchema: { required?: string[]; additionalProperties?: boolean };
     }>;
     assert.ok(tools.some((tool) => tool.name === "memory.catalog"));
@@ -165,6 +166,10 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     const writeTool = tools.find((tool) => tool.name === "memory.write");
     assert.equal(writeTool?.inputSchema.required, undefined);
     assert.equal(writeTool?.inputSchema.additionalProperties, false);
+    assert.match(writeTool?.description ?? "", /operations\[\]/);
+    assert.match(writeTool?.description ?? "", /contradicts/);
+    assert.match(writeTool?.description ?? "", /top-level payload\.conflict/);
+    assert.match(writeTool?.description ?? "", /raw transcript-as-memory/);
 
     const openclaw = new OpenClawTeamMemoryPlugin({
       baseUrl: fixture.baseUrl,
@@ -176,6 +181,10 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
       openclaw.tools().map((tool) => tool.name),
       ["memory_search", "memory_catalog", "memory_write"],
     );
+    const openclawWrite = openclaw.tools().find((tool) => tool.name === "memory_write");
+    assert.match(openclawWrite?.description ?? "", /operations\[\]/);
+    assert.match(openclawWrite?.description ?? "", /contradicts/);
+    assert.match(openclawWrite?.description ?? "", /top-level payload\.conflict/);
 
     await openclaw.call("memory_write", {
       clientMutationId: "openclaw-write",

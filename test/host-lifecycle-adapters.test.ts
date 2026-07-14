@@ -41,7 +41,7 @@ async function setup() {
   assert.ok(address !== null && typeof address !== "string");
   const baseUrl = `http://127.0.0.1:${address.port}`;
   const token = await onboard(baseUrl, admin.token);
-  return { directory, runtime, server, baseUrl, token };
+  return { directory, runtime, server, baseUrl, token, admin };
 }
 
 async function close(fixture: Awaited<ReturnType<typeof setup>>): Promise<void> {
@@ -143,78 +143,237 @@ test("host lifecycle recall injects trusted-boundary context and capture writes 
       errorSummary: "Provider callback payload was missing",
     }) as {
       status: string;
-      entityId: string;
-      branchId: string;
+      resourceId: string;
+      revisionId: string;
+      chunkIds: string[];
+      extractionCandidates: Array<Record<string, unknown>>;
       extra: Record<string, unknown>;
     };
     assert.equal(captured.status, "captured");
+    assert.match(captured.resourceId, /^host-capture-resource:/);
+    assert.match(captured.revisionId, /^host-capture-revision:/);
+    assert.ok(captured.chunkIds.length > 0);
+    assert.ok(captured.extractionCandidates.some((operation) =>
+      operation.op === "upsert_memory_entity"
+    ));
+    assert.ok(captured.extractionCandidates.some((operation) =>
+      operation.op === "create_memory_entity_branch"
+    ));
+    assert.ok(captured.extractionCandidates.some((operation) =>
+      operation.op === "link_evidence"
+    ));
     assert.equal(captured.extra.host, "hermes");
     assert.equal(captured.extra.sessionId, "hermes-session");
     assert.equal(captured.extra.outcome, "failure");
     assert.equal(captured.extra.userPrompt, "Implement Hermes mem0 provider");
     assert.equal(captured.extra.errorSummary, "Provider callback payload was missing");
     assert.deepEqual(captured.extra.captureLayers, [
-      "L3:memory_entity",
-      "L2:memory_entity_branch",
       "L1:conversation_resource",
       "L1:resource_chunk",
-      "L2:memory_relation",
+      "candidate:structured_memory_operations",
     ]);
 
     const layerIds = captured.extra.layerIds as Record<string, string>;
-    assert.equal(typeof layerIds.resourceId, "string");
-    assert.equal(typeof layerIds.chunkId, "string");
-    assert.equal(typeof layerIds.relationId, "string");
+    assert.equal(layerIds.resourceId, captured.resourceId);
+    assert.equal(layerIds.revisionId, captured.revisionId);
 
     const view = fixture.runtime.history.readActiveView("root-host", "main");
-    assert.ok(view.entities.some(({ id }) => id === captured.entityId));
-    assert.ok(view.entityBranches.some(({ id }) => id === captured.branchId));
+    assert.ok(!view.entities.some(({ id }) => id.startsWith("host-capture:")));
+    assert.ok(!view.entityBranches.some(({ title }) =>
+      title.includes("hermes failure path:")
+    ));
     assert.ok(view.resources.some(({ id, sourceType }) =>
-      id === layerIds.resourceId && sourceType === "conversation"
+      id === captured.resourceId && sourceType === "conversation"
     ));
     assert.ok(view.resourceChunks.some(({ id, resourceId, text }) =>
-      id === layerIds.chunkId &&
-      resourceId === layerIds.resourceId &&
+      captured.chunkIds.includes(id) &&
+      resourceId === captured.resourceId &&
       text.includes("Provider callback payload was missing")
     ));
-    assert.ok(view.relations.some((relation) =>
-      relation.id === layerIds.relationId &&
-      relation.sourceKind === "memory_entity" &&
-      relation.sourceId === captured.entityId &&
-      relation.targetKind === "resource_chunk" &&
-      relation.targetId === layerIds.chunkId &&
-      relation.relationType === "refers_to"
-    ));
-
-    const rerecalled = await client.recallHostMemory("hermes", {
-      sessionId: "hermes-session",
-      userPrompt: "Provider callback payload was missing",
-    }) as { text: string; memoryIds: string[] };
-    assert.ok(rerecalled.memoryIds.includes(captured.branchId));
-    assert.match(rerecalled.text, /failure/);
-    assert.match(rerecalled.text, /Extra:/);
-    assert.match(rerecalled.text, /Provider callback payload was missing/);
 
     const l1 = await client.search({
       query: "Provider callback payload was missing",
       layer: "L1",
     });
     assert.ok(searchItems<{ kind: string; chunk?: { id: string } }>(l1).some((item) =>
-      item.kind === "resource_chunk" && item.chunk?.id === layerIds.chunkId
+      item.kind === "resource_chunk" &&
+      item.chunk?.id !== undefined &&
+      captured.chunkIds.includes(item.chunk.id)
     ));
     const l2 = await client.search({
       query: "Provider callback payload was missing",
       layer: "L2",
     });
-    assert.ok(searchItems<{ kind: string; relation?: { id: string } }>(l2).some((item) =>
-      item.kind === "relation" && item.relation?.id === layerIds.relationId
-    ));
+    assert.equal(searchItems<{ kind: string }>(l2).some((item) =>
+      item.kind === "relation"
+    ), false);
     const l3 = await client.search({
       query: "Provider callback payload was missing",
       layer: "L3",
     });
     assert.ok(searchItems<{ kind: string; entity?: { id: string } }>(l3).some((item) =>
-      item.kind === "entity" && item.entity?.id === captured.entityId
+      item.kind === "entity" && item.entity?.id?.startsWith("host-capture:") === true
+    ) === false);
+  } finally {
+    await close(fixture);
+  }
+});
+
+test("legacy host-capture migration tombstones fake entities and preserves L1 evidence", async () => {
+  const fixture = await setup();
+  try {
+    const imported = await fixture.runtime.resources.import(fixture.admin, {
+      clientMutationId: "legacy-resource",
+      resourceId: "resource-legacy-host",
+      revisionId: "revision-legacy-host",
+      commitId: "commit-legacy-resource",
+      title: "Legacy Hermes conversation",
+      sourceType: "conversation",
+      content: "User: Project Atlas stores corrected facts\nAssistant: Corrected fact conflicts with the older branch.",
+      metadata: {
+        host: "hermes",
+        sessionId: "legacy-hermes",
+        outcome: "success",
+        layer: "L1",
+      },
+    });
+    assert.equal(imported.resource.id, "resource-legacy-host");
+    const ingestion = await fixture.runtime.ingestion.ingest(fixture.admin, {
+      resourceId: "resource-legacy-host",
+      revisionId: "revision-legacy-host",
+      clientMutationId: "legacy-resource-ingest",
+    });
+    const chunkId = ingestion.chunks[0]?.id;
+    assert.equal(typeof chunkId, "string");
+
+    await fixture.runtime.history.execute({
+      subject: { kind: "user", userId: "user-host" },
+      rootEntityId: "root-host",
+      taskScope: { rootEntityId: "root-host" },
+      branchRef: "main",
+      action: "commit",
+      resourceKind: "memory_entity",
+      clientMutationId: "seed-legacy-host-capture",
+      commit: {
+        id: "commit-legacy-host-capture",
+        message: "Seed old host capture shape",
+      },
+      operation: {
+        kind: "create_entity",
+        id: "operation-legacy-entity",
+        entity: {
+          id: "host-capture:legacy",
+          rootEntityId: "root-host",
+          currentBranchId: "host-capture-branch:legacy",
+          status: "active",
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+      operations: [
+        {
+          kind: "create_entity",
+          id: "operation-legacy-entity",
+          entity: {
+            id: "host-capture:legacy",
+            rootEntityId: "root-host",
+            currentBranchId: "host-capture-branch:legacy",
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+        {
+          kind: "create_entity_branch",
+          id: "operation-legacy-branch",
+          branch: {
+            id: "host-capture-branch:legacy",
+            entityId: "host-capture:legacy",
+            rootEntityId: "root-host",
+            branchRef: "main",
+            title: "hermes success path: Project Atlas facts",
+            description: [
+              "Host: hermes",
+              "Session: legacy-hermes",
+              "Outcome: success",
+              "User prompt: Project Atlas stores corrected facts",
+              "Final assistant message: Corrected fact conflicts with the older branch.",
+            ].join("\n"),
+            tags: ["host-memory", "hermes", "success"],
+            importance: 0.8,
+            confidence: 0.75,
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+        {
+          kind: "create_relation",
+          id: "operation-legacy-evidence",
+          relation: {
+            id: "relation-legacy-evidence",
+            rootEntityId: "root-host",
+            sourceKind: "memory_entity",
+            sourceId: "host-capture:legacy",
+            targetKind: "resource_chunk",
+            targetId: chunkId as string,
+            relationType: "refers_to",
+            role: "l1_evidence",
+            weight: 1,
+            confidence: 0.9,
+            branchRef: "main",
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+      ],
+      authorization: {
+        allowed: true,
+        reason: "test",
+        subjectId: "user-host",
+        subjectKind: "user",
+        rootEntityId: "root-host",
+        action: "commit",
+        resourceKind: "memory_entity",
+        matchedRoles: ["role-root-admin"],
+        missingActions: [],
+        constraints: {},
+      },
+    });
+
+    const client = new TeamMemoryHttpClient({
+      baseUrl: fixture.baseUrl,
+      token: fixture.admin.token,
+      fetch: connectorFetch,
+    });
+    const migrated = await client.migrateLegacyHostCaptures({
+      clientMutationId: "migrate-legacy-host-capture",
+    }) as {
+      migratedEntityIds: string[];
+      tombstonedEntityIds: string[];
+      commitIds: string[];
+      operations: Array<Record<string, unknown>>;
+    };
+    assert.deepEqual(migrated.migratedEntityIds, ["host-capture:legacy"]);
+    assert.deepEqual(migrated.tombstonedEntityIds, ["host-capture:legacy"]);
+    assert.ok(migrated.commitIds.length >= 2);
+    assert.ok(migrated.operations.some((operation) =>
+      operation.op === "link_evidence"
+    ));
+
+    const view = fixture.runtime.history.readActiveView("root-host", "main");
+    assert.ok(!view.entities.some((entity) => entity.id === "host-capture:legacy"));
+    assert.ok(view.resources.some((resource) => resource.id === "resource-legacy-host"));
+    assert.ok(view.resourceChunks.some((chunk) => chunk.id === chunkId));
+    const realEntity = view.entities.find((entity) => entity.name === "Project Atlas facts");
+    assert.ok(realEntity);
+    assert.ok(view.entityBranches.some((branch) =>
+      branch.entityId === realEntity.id &&
+      branch.description.includes("Corrected fact conflicts")
+    ));
+    assert.ok(fixture.runtime.history.listCommitRecords("root-host", "main").some((record) =>
+      record.commit.id === "commit-legacy-host-capture"
     ));
   } finally {
     await close(fixture);
@@ -295,11 +454,9 @@ test("Claude Code hooks and OpenClaw plugin call the shared lifecycle endpoints"
       autoCapture: { event: string; layers: string[] };
     }).autoCapture.layers,
     [
-      "L3:memory_entity",
-      "L2:memory_entity_branch",
       "L1:conversation_resource",
       "L1:resource_chunk",
-      "L2:memory_relation",
+      "candidate:structured_memory_operations",
     ],
   );
   const captured = await openclaw.agentEnd({

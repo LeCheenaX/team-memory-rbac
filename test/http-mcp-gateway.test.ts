@@ -203,6 +203,83 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       ).status,
       200,
     );
+    const rejectedConflictShortcut = await post(base, "/memory/write", writeSession.token, {
+      clientMutationId: "write-conflict-shortcut",
+      conflict: true,
+      operations: [
+        {
+          op: "create_memory_entity_branch",
+          entityName: "Gateway Guide",
+          title: "Invalid conflict shortcut",
+          description: "Top-level conflict must not be accepted.",
+        },
+      ],
+    });
+    assert.equal(rejectedConflictShortcut.status, 400);
+
+    const conflictBatch = await post(base, "/memory/write", writeSession.token, {
+      clientMutationId: "write-explicit-contradiction",
+      operations: [
+        {
+          op: "create_memory_entity_branch",
+          entityName: "Gateway Guide",
+          title: "Gateway Guide corrected stable tools",
+          description: "HTTP exposes stable Team Memory behavior; MCP does not expose generated ids.",
+          tags: ["guide", "correction"],
+        },
+        {
+          op: "create_memory_relation",
+          relationType: "contradicts",
+          source: {
+            kind: "memory_entity_branch",
+            entityName: "Gateway Guide",
+            name: "Gateway Guide corrected stable tools",
+          },
+          target: {
+            kind: "memory_entity_branch",
+            entityName: "Gateway Guide",
+            name: "Gateway Guide stable tools",
+          },
+          description: "The corrected branch contradicts the older generated-id wording.",
+        },
+      ],
+    });
+    const conflictText = await conflictBatch.text();
+    assert.equal(conflictBatch.status, 200, conflictText);
+    assert.ok(
+      runtime.history.readActiveView("root-gateway", "main").relations.some((relation) =>
+        relation.relationType === "contradicts" &&
+        relation.sourceKind === "memory_entity_branch" &&
+        relation.targetKind === "memory_entity_branch"
+      ),
+    );
+
+    const beforeAutoContradicts = runtime.history
+      .readActiveView("root-gateway", "main")
+      .relations
+      .filter((relation) => relation.relationType === "contradicts")
+      .length;
+    const nonConflictBranch = await post(base, "/memory/write", writeSession.token, {
+      clientMutationId: "write-non-conflict-branch",
+      target: {
+        kind: "memory_entity_branch",
+        name: "Gateway Guide stable tools",
+      },
+      patch: {
+        title: "Gateway Guide stable tools variant",
+        description: "HTTP and MCP expose stable behavior with updated phrasing.",
+      },
+    });
+    const nonConflictText = await nonConflictBranch.text();
+    assert.equal(nonConflictBranch.status, 200, nonConflictText);
+    assert.equal(
+      runtime.history
+        .readActiveView("root-gateway", "main")
+        .relations
+        .filter((relation) => relation.relationType === "contradicts")
+        .length,
+      beforeAutoContradicts,
+    );
     await gateway.importResource(adminSession.token, {
       clientMutationId: "import-gateway-resource",
       resourceId: "resource-gateway",
@@ -293,8 +370,10 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     const commitIds = historyPayload.value.records.map(({ commit }) => commit.id);
     assert.equal(commitIds[0], "bootstrap-root-commit:root-gateway");
     assert.match(commitIds[1] ?? "", /^commit:memory-write:/);
-    assert.equal(commitIds[2], "commit:import-gateway-resource");
-    assert.match(commitIds[3] ?? "", /^commit:import-gateway-resource:auto-ingest:chunk:/);
+    assert.ok(commitIds.includes("commit:import-gateway-resource"));
+    assert.ok(commitIds.some((commitId) =>
+      /^commit:import-gateway-resource:auto-ingest:chunk:/.test(commitId)
+    ));
     assert.equal(historyPayload.value.records[1]?.operations.length, 4);
 
     const duplicate = await post(base, "/memory/write", writeSession.token, {
@@ -320,6 +399,10 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     });
     assert.equal(unsafeConflict.status, 400, await unsafeConflict.text());
 
+    const branchCountBeforeSummary = runtime.history
+      .readActiveView("root-gateway", "main")
+      .entityBranches
+      .length;
     const summaryUpdate = await post(base, "/memory/write", writeSession.token, {
       clientMutationId: "write-guide-summary",
       target: { kind: "memory_entity", name: "Gateway Guide" },
@@ -336,12 +419,11 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     assert.equal(
       runtime.history
         .readActiveView("root-gateway", "main")
-        .entityBranches.filter((branch) =>
-          branch.entityId === summaryUpdateValue.value.entityId
-        )
+        .entityBranches
         .length,
-      1,
+      branchCountBeforeSummary,
     );
+    assert.ok(summaryUpdateValue.value.entityId);
     const duplicateFact = await post(base, "/memory/write", writeSession.token, {
       clientMutationId: "write-guide-duplicate-fact",
       operations: [

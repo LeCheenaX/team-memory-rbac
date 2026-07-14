@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { contentHash } from "../cas/filesystem.ts";
 import { ResourceConflictError, ResourceNotFoundError } from "../../resources/service.ts";
 import {
   CloudAuthorizedViewAdapter,
@@ -209,6 +208,120 @@ function captureConversationText(input: HostCaptureInput): string {
   return lines.filter((line) => line.length > 0).join("\n");
 }
 
+function compactTitle(value: string | undefined, fallback: string): string {
+  const cleaned = value?.replace(/\s+/g, " ").trim();
+  if (cleaned === undefined || cleaned.length === 0) return fallback;
+  return cleaned.slice(0, 80);
+}
+
+function extractLifecycleStructuredOperations(
+  input: HostCaptureInput,
+  chunkIds: string[],
+): Array<Record<string, unknown>> {
+  const semanticText = [
+    input.userPrompt,
+    input.finalAssistantMessage,
+    input.errorSummary,
+  ].filter((value): value is string => value !== undefined && value.trim().length > 0)
+    .join("\n");
+  if (semanticText.length === 0) return [];
+  const entityName = compactTitle(
+    input.title ?? input.userPrompt ?? input.finalAssistantMessage,
+    `${input.host} lifecycle memory`,
+  );
+  const branchName = compactTitle(
+    input.finalAssistantMessage ?? input.errorSummary ?? input.userPrompt,
+    `${entityName} lifecycle fact`,
+  );
+  const operations: Array<Record<string, unknown>> = [
+    {
+      op: "upsert_memory_entity",
+      name: entityName,
+      title: entityName,
+      description: semanticText.slice(0, 500),
+      tags: ["lifecycle-extracted", input.host],
+    },
+    {
+      op: "create_memory_entity_branch",
+      entityName,
+      name: branchName,
+      title: branchName,
+      description: semanticText,
+      tags: ["lifecycle-extracted", input.host, input.outcome],
+      extraInfo: {
+        extractedFrom: "host_lifecycle",
+        host: input.host,
+        sessionId: input.sessionId,
+        outcome: input.outcome,
+      },
+    },
+    ...chunkIds.map((chunkId) => ({
+      op: "link_evidence",
+      source: {
+        kind: "memory_entity",
+        name: entityName,
+      },
+      target: {
+        kind: "resource_chunk",
+        name: chunkId,
+      },
+      description: "lifecycle_l1_evidence",
+    })),
+  ];
+  if (/\b(contradict|contradicts|conflict|conflicts|corrected|correction)\b/i.test(semanticText)) {
+    operations.push({
+      op: "create_memory_relation",
+      relationType: "contradicts",
+      source: {
+        kind: "memory_entity_branch",
+        entityName,
+        name: branchName,
+      },
+      target: {
+        kind: "memory_entity_branch",
+        entityName,
+        name: "previous recalled branch",
+      },
+      description: "Candidate conflict extracted from lifecycle evidence; resolve the target branch name before writing.",
+      confidence: 0.5,
+    });
+  }
+  return operations;
+}
+
+function semanticDescriptionFromLegacyBranch(branch: MemoryEntityBranch): string {
+  return branch.description
+    .split(/\r?\n/)
+    .filter((line) =>
+      !/^(Host|Session|Outcome|Transcript|Tool events):/.test(line)
+    )
+    .map((line) => line.replace(/^User prompt:\s*/, "User: ").replace(/^Final assistant message:\s*/, "Assistant: "))
+    .join("\n")
+    .trim();
+}
+
+function legacyEntityName(branch: MemoryEntityBranch): string {
+  return branch.title
+    .replace(/^(claude_code|openclaw|hermes)\s+(success|failure|unknown)\s+path:\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80) || "Migrated host memory";
+}
+
+function isLegacyHostCaptureEntity(
+  entity: MemoryEntity,
+  branches: MemoryEntityBranch[],
+): boolean {
+  if (entity.id.startsWith("host-capture:")) return true;
+  return branches.some((branch) =>
+    branch.entityId === entity.id &&
+    (
+      branch.tags.includes("host-memory") ||
+      /^(claude_code|openclaw|hermes)\s+(success|failure|unknown)\s+path:/i.test(branch.title)
+    )
+  );
+}
+
 function numberValue(
   payload: Record<string, unknown>,
   key: string,
@@ -248,9 +361,29 @@ function defaultAgentPermissions(ownerPermissions: readonly Permission[]): Permi
 }
 
 const agentToolCatalog = [
-  { name: "memory.catalog", description: "List visible memory entities and tags", action: "read", resourceKind: "memory_entity" },
-  { name: "memory.search", description: "Search memory", action: "search", resourceKind: "memory_entity" },
-  { name: "memory.write", description: "Capture or update memory", action: "commit", resourceKind: "memory_entity" },
+  {
+    name: "memory.catalog",
+    description: "List the trusted session root name plus visible MemoryEntity names and tags. Does not expose generated ids.",
+    action: "read",
+    resourceKind: "memory_entity",
+  },
+  {
+    name: "memory.search",
+    description: "Search Team Memory with natural-language query plus optional limit, layer, names, and tagsAny. Identity, root, history toggles, conflict flags, and generated ids are not accepted.",
+    action: "search",
+    resourceKind: "memory_entity",
+  },
+  {
+    name: "memory.write",
+    description: [
+      "Capture durable semantic memory with either target/patch or the preferred operations[] batch.",
+      "Extract entity summaries, atomic MemoryEntityBranch facts, and MemoryRelation edges before writing.",
+      "Few-shot: new project -> upsert_memory_entity then create_memory_entity_branch; summary refresh -> refresh_memory_entity_summary; duplicate fact -> create_memory_entity_branch lets branch vector dedupe update metadata; related fact -> create_memory_relation with relationType relates_to; conflict -> create_memory_entity_branch for the new fact plus create_memory_relation relationType contradicts between old/new branch natural-name endpoints in the same call.",
+      "Do not send raw transcript-as-memory, Agent-authored ResourceChunk, top-level payload.conflict, generated ids, identity/root fields, or outcome-as-semantic-content.",
+    ].join(" "),
+    action: "commit",
+    resourceKind: "memory_entity",
+  },
 ] as const;
 
 function stableToolSchema(toolName: string): {
@@ -295,8 +428,81 @@ function stableToolSchema(toolName: string): {
           additionalProperties: false,
         },
         patch: { type: "object" },
-        operations: { type: "array", items: { type: "object" } },
+        operations: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              op: {
+                type: "string",
+                enum: [
+                  "upsert_memory_entity",
+                  "update_memory_entity",
+                  "refresh_memory_entity_summary",
+                  "create_memory_entity_branch",
+                  "update_memory_entity_branch_metadata",
+                  "create_memory_relation",
+                  "replace_memory_relation",
+                  "link_evidence",
+                ],
+              },
+              name: { type: "string" },
+              entityName: { type: "string" },
+              title: { type: "string" },
+              description: { type: "string" },
+              tags: { type: "array", items: { type: "string" } },
+              relationType: {
+                type: "string",
+                enum: [
+                  "has",
+                  "depends_on",
+                  "relates_to",
+                  "refers_to",
+                  "contradicts",
+                  "supersedes",
+                  "next_is",
+                ],
+              },
+              source: {
+                type: "object",
+                properties: {
+                  kind: {
+                    type: "string",
+                    enum: [
+                      "memory_entity",
+                      "memory_entity_branch",
+                      "resource",
+                      "resource_chunk",
+                    ],
+                  },
+                  name: { type: "string" },
+                  entityName: { type: "string" },
+                },
+              },
+              target: {
+                type: "object",
+                properties: {
+                  kind: {
+                    type: "string",
+                    enum: [
+                      "memory_entity",
+                      "memory_entity_branch",
+                      "resource",
+                      "resource_chunk",
+                    ],
+                  },
+                  name: { type: "string" },
+                  entityName: { type: "string" },
+                },
+              },
+            },
+            required: ["op"],
+            additionalProperties: true,
+          },
+        },
         clientMutationId: { type: "string" },
+        branchRef: { type: "string" },
+        expectedHeadCommitId: { type: "string" },
       },
       additionalProperties: false,
     };
@@ -380,8 +586,15 @@ type StableTargetKind =
   | "resource"
   | "memory_relation";
 
+type AmbiguousTargetKind = StableTargetKind | "resource_chunk";
+
 interface StableTarget {
   kind: StableTargetKind;
+  name: string;
+}
+
+interface AmbiguousTarget {
+  kind: AmbiguousTargetKind;
   name: string;
 }
 
@@ -1131,7 +1344,7 @@ export class TeamMemoryGateway {
 
   private async requireHumanAdmin(
     token: string | undefined,
-    action: "assign_user_role" | "revoke_user_role",
+    action: MemoryAction,
   ): Promise<AuthenticatedSession> {
     const session = await this.authenticate(token);
     if (session.subject.kind !== "user") {
@@ -1154,6 +1367,189 @@ export class TeamMemoryGateway {
       );
     }
     return session;
+  }
+
+  async migrateLegacyHostCaptures(
+    token: string | undefined,
+    payload: Record<string, unknown>,
+  ): Promise<{
+    status: "migrated";
+    migratedEntityIds: string[];
+    tombstonedEntityIds: string[];
+    commitIds: string[];
+    operations: Array<Record<string, unknown>>;
+  }> {
+    assertNoIdentityOverride(payload);
+    const session = await this.requireHumanAdmin(token, "tombstone_entity");
+    const branch = branchRef(payload);
+    const view = this.runtime.history.readActiveView(session.rootEntityId, branch);
+    const legacyEntities = view.entities
+      .filter((entity) => entity.rootEntityId !== null && entity.status === "active")
+      .filter((entity) => isLegacyHostCaptureEntity(entity, view.entityBranches));
+    if (legacyEntities.length === 0) {
+      return {
+        status: "migrated",
+        migratedEntityIds: [],
+        tombstonedEntityIds: [],
+        commitIds: [],
+        operations: [],
+      };
+    }
+
+    const relationTargetsByEntityId = new Map<string, string[]>();
+    for (const relation of view.relations) {
+      if (
+        relation.sourceKind === "memory_entity" &&
+        relation.targetKind === "resource_chunk" &&
+        relation.status === "active"
+      ) {
+        const targets = relationTargetsByEntityId.get(relation.sourceId) ?? [];
+        targets.push(relation.targetId);
+        relationTargetsByEntityId.set(relation.sourceId, targets);
+      }
+    }
+
+    const structuredOperations: Array<Record<string, unknown>> = [];
+    const seenBranchByEntityName = new Map<string, string>();
+    for (const entity of legacyEntities) {
+      const branches = view.entityBranches.filter((candidate) => candidate.entityId === entity.id);
+      for (const legacyBranch of branches) {
+        const description = semanticDescriptionFromLegacyBranch(legacyBranch);
+        if (description.length === 0) continue;
+        const entityName = legacyEntityName(legacyBranch);
+        const branchName = compactTitle(description, legacyBranch.title);
+        structuredOperations.push(
+          {
+            op: "upsert_memory_entity",
+            name: entityName,
+            title: entityName,
+            description: description.slice(0, 500),
+            tags: legacyBranch.tags.filter((tag) =>
+              tag !== "host-memory" &&
+              tag !== "success" &&
+              tag !== "failure" &&
+              tag !== "unknown"
+            ),
+          },
+          {
+            op: "create_memory_entity_branch",
+            entityName,
+            name: branchName,
+            title: branchName,
+            description,
+            tags: ["migrated-host-capture"],
+            extraInfo: {
+              migratedFromEntityId: entity.id,
+              migratedFromBranchId: legacyBranch.id,
+            },
+            confidence: legacyBranch.confidence,
+            importance: legacyBranch.importance,
+          },
+        );
+        for (const chunkId of relationTargetsByEntityId.get(entity.id) ?? []) {
+          structuredOperations.push({
+            op: "link_evidence",
+            source: {
+              kind: "memory_entity",
+              name: entityName,
+            },
+            target: {
+              kind: "resource_chunk",
+              name: chunkId,
+            },
+            description: "legacy_host_capture_l1_evidence",
+          });
+        }
+        const previousBranch = seenBranchByEntityName.get(entityName);
+        if (
+          previousBranch !== undefined &&
+          /\b(contradict|contradicts|conflict|conflicts|corrected|correction)\b/i.test(description)
+        ) {
+          structuredOperations.push({
+            op: "create_memory_relation",
+            relationType: "contradicts",
+            source: {
+              kind: "memory_entity_branch",
+              entityName,
+              name: branchName,
+            },
+            target: {
+              kind: "memory_entity_branch",
+              entityName,
+              name: previousBranch,
+            },
+            description: "Migrated explicit conflict from legacy host capture.",
+            confidence: 0.65,
+          });
+        }
+        seenBranchByEntityName.set(entityName, branchName);
+      }
+    }
+
+    const commitIds: string[] = [];
+    if (structuredOperations.length > 0) {
+      const structured = await this.writeMemory(token, {
+        clientMutationId: optionalString(payload, "clientMutationId") ??
+          `migrate-legacy-host-capture:${randomUUID()}`,
+        branchRef: branch,
+        operations: structuredOperations,
+      });
+      commitIds.push(...structured.commitIds);
+    }
+
+    const tombstoneCommitId = `commit:migrate-legacy-host-capture:tombstone:${randomUUID()}`;
+    const tombstoneOperations: MemoryOperationInput[] = legacyEntities.map((entity, index) => ({
+      kind: "tombstone_entity",
+      id: `operation:${tombstoneCommitId}:${index}`,
+      targetId: entity.id,
+    }));
+    const decision = await this.runtime.policy.decide({
+      subject: session.subject,
+      rootEntityId: session.rootEntityId,
+      taskScope: session.taskScope,
+      branchRef: branch,
+      action: "tombstone_entity",
+      resourceKind: "memory_entity",
+    });
+    if (!decision.allowed) {
+      throw new TeamMemoryGatewayError(
+        "permission_denied",
+        decision.reason,
+        decision as PermissionDecision & { allowed: false },
+      );
+    }
+    const tombstone = await this.runtime.history.execute({
+      subject: session.subject,
+      rootEntityId: session.rootEntityId,
+      taskScope: session.taskScope,
+      branchRef: branch,
+      ...(() => {
+        const head = this.runtime.history.headCommitId(session.rootEntityId, branch);
+        return head === undefined ? {} : { expectedHeadCommitId: head };
+      })(),
+      action: "tombstone_entity",
+      resourceKind: "memory_entity",
+      clientMutationId: `migrate-legacy-host-capture:tombstone:${randomUUID()}`,
+      commit: {
+        id: tombstoneCommitId,
+        message: "Tombstone legacy host-capture entities",
+      },
+      operation: tombstoneOperations[0] as MemoryOperationInput,
+      operations: tombstoneOperations,
+      authorization: decision as typeof decision & { allowed: true },
+    });
+    if (tombstone.status === "conflict") {
+      throw new TeamMemoryGatewayError("conflict", tombstone.conflict.id);
+    }
+    commitIds.push(tombstone.write.commit.id);
+    await this.projectMemoryIfEnabled(session.rootEntityId, branch);
+    return {
+      status: "migrated",
+      migratedEntityIds: legacyEntities.map((entity) => entity.id),
+      tombstonedEntityIds: legacyEntities.map((entity) => entity.id),
+      commitIds,
+      operations: structuredOperations,
+    };
   }
 
   async importResource(
@@ -1595,6 +1991,17 @@ export class TeamMemoryGateway {
     };
     const endpointId = (endpoint: StructuredEndpoint): string | StableWriteResult => {
       assertNoSystemManagedInput(endpoint as unknown as Record<string, unknown>, "operation endpoint");
+      if (
+        endpoint.kind !== "memory_entity" &&
+        endpoint.kind !== "memory_entity_branch" &&
+        endpoint.kind !== "resource" &&
+        endpoint.kind !== "resource_chunk"
+      ) {
+        throw new TeamMemoryGatewayError(
+          "validation_failed",
+          "relation endpoints must be memory_entity, memory_entity_branch, resource, or resource_chunk",
+        );
+      }
       if (endpoint.kind === "memory_entity") {
         if (typeof endpoint.name !== "string") {
           throw new TeamMemoryGatewayError("validation_failed", "memory_entity endpoint requires name");
@@ -1618,7 +2025,7 @@ export class TeamMemoryGateway {
       );
       if (matches.length !== 1) {
         return this.ambiguousResult(
-          { kind: endpoint.kind === "resource" ? "resource" : "resource", name: endpoint.name },
+          { kind: endpoint.kind, name: endpoint.name },
           matches.map((candidate) => "title" in candidate ? candidate.title : candidate.id),
         );
       }
@@ -1777,6 +2184,15 @@ export class TeamMemoryGateway {
         if (typeof sourceId !== "string") return sourceId;
         const targetId = endpointId(target);
         if (typeof targetId !== "string") return targetId;
+        const relationType = operation.op === "link_evidence"
+          ? "refers_to"
+          : optionalRelationType(operation.relationType);
+        if (relationType === undefined) {
+          throw new TeamMemoryGatewayError(
+            "validation_failed",
+            `${surface}.relationType is required`,
+          );
+        }
         const relationId = `relation:${randomUUID()}`;
         const relation: MemoryRelation = {
           id: relationId,
@@ -1785,7 +2201,7 @@ export class TeamMemoryGateway {
           sourceId,
           targetKind: target.kind,
           targetId,
-          relationType: operation.op === "link_evidence" ? "refers_to" : operation.relationType,
+          relationType,
           ...(operation.description === undefined ? {} : { role: operation.description }),
           ...(operation.op !== "link_evidence" && operation.role !== undefined ? { role: operation.role } : {}),
           ...(operation.op !== "link_evidence" && operation.ordinal !== undefined ? { ordinal: operation.ordinal } : {}),
@@ -2071,7 +2487,7 @@ export class TeamMemoryGateway {
   }
 
   private ambiguousResult(
-    target: StableTarget,
+    target: AmbiguousTarget,
     candidates: string[],
   ): StableWriteResult {
     return {
@@ -2233,27 +2649,10 @@ export class TeamMemoryGateway {
     assertNoIdentityOverride(payload);
     const input = hostCaptureInput(payload);
     const session = await this.authenticate(token);
-    const now = new Date().toISOString();
     const branch = input.branchRef ?? "main";
     const id = randomUUID();
-    const entityId = `host-capture:${id}`;
-    const branchId = `host-capture-branch:${id}`;
-    const resourceId = `host-capture-resource:${id}`;
-    const revisionId = `host-capture-revision:${id}`;
-    const chunkId = `host-capture-chunk:${id}`;
-    const relationId = `host-capture-relation:${id}`;
-    const commitId = `host-capture-commit:${id}`;
     const conversationText = captureConversationText(input);
-    const hash = contentHash(conversationText);
-    await this.runtime.cas.put({ contentHash: hash, content: conversationText });
-    const stored = await this.runtime.cas.get(hash);
-    if (stored === undefined || stored.contentHash !== hash) {
-      throw new TeamMemoryGatewayError(
-        "dependency_unavailable",
-        "capture conversation CAS object is unavailable after write",
-      );
-    }
-    const branchExtraInfo = {
+    const provenance = {
       host: input.host,
       sessionId: input.sessionId,
       outcome: input.outcome,
@@ -2265,155 +2664,77 @@ export class TeamMemoryGateway {
       ...(input.errorSummary === undefined ? {} : { errorSummary: input.errorSummary }),
       ...(input.toolEvents === undefined ? {} : { toolEvents: input.toolEvents }),
     };
-    const result = unwrap(await this.writeRouter.execute({
-      subject: gatewaySubject(session),
-      rootEntityId: session.rootEntityId,
-      taskScope: session.taskScope,
-      branchRef: branch,
-      action: "commit",
-      resourceKind: "memory_entity",
+    const resourceId = `host-capture-resource:${id}`;
+    const revisionId = `host-capture-revision:${id}`;
+    const commitId = `host-capture-commit:${id}`;
+    const imported = await this.runtime.resources.import(session, {
       clientMutationId: `host-capture:${id}`,
-      commit: {
-        id: commitId,
-        message: `Capture ${input.host} ${input.outcome} memory graph`,
+      resourceId,
+      revisionId,
+      commitId,
+      branchRef: branch,
+      title: input.title ?? captureTitle(input),
+      sourceType: "conversation",
+      content: conversationText,
+      uri: `${input.host}:session:${input.sessionId}`,
+      metadata: {
+        ...provenance,
+        layer: "L1",
+        captureKind: "host_lifecycle",
       },
-      operation: {
-        kind: "create_entity",
-        id: `host-capture-entity-operation:${id}`,
-        entity: {
-          id: entityId,
-          rootEntityId: session.rootEntityId,
-          currentBranchId: branchId,
-          status: "active",
-          createdAt: now,
-          updatedAt: now,
-        },
+    });
+    const lifecycleLog: Array<Record<string, unknown>> = [
+      {
+        event: "lifecycle.resource_imported",
+        resourceId,
+        revisionId,
       },
-      operations: [
-        {
-          kind: "create_entity",
-          id: `host-capture-entity-operation:${id}`,
-          entity: {
-            id: entityId,
-            rootEntityId: session.rootEntityId,
-            currentBranchId: branchId,
-            status: "active",
-            createdAt: now,
-            updatedAt: now,
-          },
-        },
-        {
-          kind: "create_entity_branch",
-          id: `host-capture-branch-operation:${id}`,
-          branch: {
-            id: branchId,
-            entityId,
-            rootEntityId: session.rootEntityId,
-            branchRef: branch,
-            title: input.title ?? captureTitle(input),
-            description: captureDescription(input),
-            tags: ["host-memory", input.host, input.outcome],
-            extraInfo: branchExtraInfo,
-            importance: input.outcome === "failure" ? 0.9 : 0.75,
-            confidence: 0.8,
-            status: "active",
-            createdAt: now,
-            updatedAt: now,
-          },
-        },
-        {
-          kind: "create_resource",
-          id: `host-capture-resource-operation:${id}`,
-          revisionId,
-          resource: {
-            id: resourceId,
-            rootEntityId: session.rootEntityId,
-            sourceType: "conversation",
-            title: `${input.host} ${input.sessionId} conversation capture`,
-            uri: `${input.host}:session:${input.sessionId}`,
-            contentHash: hash,
-            currentRevisionId: revisionId,
-            metadata: {
-              host: input.host,
-              sessionId: input.sessionId,
-              outcome: input.outcome,
-              layer: "L1",
-            },
-            createdAt: now,
-            updatedAt: now,
-          },
-        },
-        {
-          kind: "create_resource_chunk",
-          id: `host-capture-chunk-operation:${id}`,
-          chunk: {
-            id: chunkId,
-            rootEntityId: session.rootEntityId,
-            resourceId,
-            chunkIndex: 0,
-            text: conversationText,
-            contentHash: hash,
-            tokenCount: Math.ceil(conversationText.length / 4),
-            metadata: {
-              revisionId,
-              contentHash: hash,
-              host: input.host,
-              sessionId: input.sessionId,
-              outcome: input.outcome,
-              layer: "L1",
-            },
-            createdAt: now,
-            updatedAt: now,
-          },
-        },
-        {
-          kind: "create_relation",
-          id: `host-capture-relation-operation:${id}`,
-          relation: {
-            id: relationId,
-            rootEntityId: session.rootEntityId,
-            sourceKind: "memory_entity",
-            sourceId: entityId,
-            targetKind: "resource_chunk",
-            targetId: chunkId,
-            relationType: "refers_to",
-            role: "l1_evidence",
-            weight: 1,
-            confidence: 0.9,
-            branchRef: branch,
-            status: "active",
-            createdAt: now,
-            updatedAt: now,
-          },
-        },
-      ],
-    }));
-    if (result.status === "conflict") {
-      throw new TeamMemoryGatewayError("conflict", result.conflict.id);
+    ];
+    let chunkIds: string[] = [];
+    try {
+      const ingestion = await this.runtime.ingestion.ingest(session, {
+        resourceId,
+        revisionId,
+        branchRef: branch,
+        clientMutationId: `host-capture-ingest:${id}`,
+      });
+      chunkIds = ingestion.chunks.map((chunk) => chunk.id);
+      lifecycleLog.push({
+        event: "lifecycle.resource_ingested",
+        chunkIds,
+        rebuiltOnly: ingestion.rebuiltOnly,
+      });
+    } catch (error) {
+      lifecycleLog.push({
+        event: "lifecycle.resource_ingest_failed",
+        error: error instanceof Error ? error.message : "unknown ingestion error",
+      });
     }
-    await this.projectMemoryIfEnabled(session.rootEntityId, branch);
+    const extractionCandidates = extractLifecycleStructuredOperations(
+      input,
+      chunkIds,
+    );
     return {
       status: "captured",
-      entityId,
-      branchId,
+      resourceId,
+      revisionId,
+      chunkIds,
       commitIds: [commitId],
+      extractionCandidates,
       extra: {
-        ...branchExtraInfo,
+        ...provenance,
+        contentHash: imported.contentHash,
         captureLayers: [
-          "L3:memory_entity",
-          "L2:memory_entity_branch",
           "L1:conversation_resource",
           "L1:resource_chunk",
-          "L2:memory_relation",
+          "candidate:structured_memory_operations",
         ],
         layerIds: {
-          entityId,
-          branchId,
           resourceId,
           revisionId,
-          chunkId,
-          relationId,
+          chunkIds,
         },
+        lifecycleLog,
       },
     };
   }

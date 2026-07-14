@@ -50,9 +50,11 @@ export interface HostCaptureInput {
 
 export interface MemoryCaptureResult {
   status: "captured";
-  entityId: string;
-  branchId: string;
+  resourceId: string;
+  revisionId: string;
+  chunkIds: string[];
   commitIds: string[];
+  extractionCandidates: Array<Record<string, unknown>>;
   extra?: Record<string, unknown>;
 }
 

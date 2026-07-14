@@ -135,9 +135,9 @@ class TeamMemoryHermesProvider(MemoryProvider):
         return (
             "# Team Memory\n"
             f"Active Hermes external memory provider in {mode} mode. "
-            "Use Team Memory recall before answering and capture durable conversation memories after useful turns. "
-            "Do not pass identity fields, history toggles, conflict claims, or relationship arguments; "
-            "Team Memory derives merges, conflicts, relations, and extra metadata internally."
+            "Use Team Memory recall before answering. For ordinary semantic writes, extract entity summaries, atomic branch facts, and explicit relations into operations[] before calling team_memory_capture. "
+            "Automatic hooks capture raw conversation history as L1 Resource/CAS evidence first. "
+            "Do not pass identity fields, generated ids, raw transcript-as-memory, Agent-authored ResourceChunk, outcome-as-semantic-content, or top-level payload.conflict."
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -336,17 +336,21 @@ class TeamMemoryHermesProvider(MemoryProvider):
             {
                 "name": "team_memory_capture",
                 "description": (
-                    "Capture durable conversation memory with stable arguments only. "
-                    "Pass content and optional outcome; Team Memory records durable memory updates and returns variable metadata under extra. "
-                    "For raw files or documents, import the resource into Team Memory/CAS and trigger resource ingestion instead of using this tool."
+                    "Capture durable semantic memory using structured operations[]. "
+                    "Few-shot: upsert_memory_entity plus create_memory_entity_branch for a new project; "
+                    "refresh_memory_entity_summary for summary refresh; create_memory_entity_branch for duplicate facts so branch vector dedupe can update metadata; "
+                    "create_memory_relation with relates_to for related facts; create_memory_entity_branch plus create_memory_relation with relationType contradicts between old/new branch natural-name endpoints for conflicts. "
+                    "Never send raw transcript-as-memory, Agent-authored ResourceChunk, top-level payload.conflict, generated ids, identity/root fields, or outcome-as-semantic-content. "
+                    "Deprecated compatibility: content/outcome is accepted only as host lifecycle capture and is not the ordinary semantic write path."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "operations": {"type": "array", "items": {"type": "object"}},
+                        "clientMutationId": {"type": "string"},
                         "content": {"type": "string"},
                         "outcome": {"type": "string", "default": "success"},
                     },
-                    "required": ["content"],
                 },
             },
             {
@@ -379,6 +383,19 @@ class TeamMemoryHermesProvider(MemoryProvider):
         if tool_name == "team_memory_catalog":
             return json.dumps(self._provider.catalog())
         if tool_name == "team_memory_capture":
+            if isinstance(args.get("operations"), list):
+                payload: dict[str, Any] = {
+                    "operations": args["operations"],
+                }
+                if isinstance(args.get("clientMutationId"), str):
+                    payload["clientMutationId"] = args["clientMutationId"]
+                try:
+                    result = self._provider.write_memory(payload)
+                except Exception as exc:
+                    _log_event("team_memory_capture", status="failed", sessionId=session_id, error=repr(exc))
+                    raise
+                _log_event("team_memory_capture", status="captured", sessionId=session_id, result=result)
+                return json.dumps(result)
             try:
                 result = self._provider.add(
                     str(args.get("content", "")),
