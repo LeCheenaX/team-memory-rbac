@@ -1,5 +1,11 @@
 # Design Notes
 
+Canonical detailed module docs live under `docs/01-design/`. Field
+ownership and Agent-facing capture examples are defined in
+[[记忆模块.md#AgentFacingCaptureInput]]. Code coverage is tracked in
+[[代码覆盖索引.md#代码覆盖索引]]. This file is the root design note and must not
+redefine incompatible tool schemas.
+
 ## Production v1 Authority Boundary
 
 Production v1 has one logical Cloud Authority. That authority owns the visible
@@ -119,11 +125,12 @@ related atomic facts. It has a human-readable `name` / `title`, `description`,
 tags, status, and an embedding. It is the summary/collection layer at L3; the
 concrete content/details live in `MemoryEntityBranch` at L2. A
 `MemoryEntityBranch` also has a human-readable `name` / `title`, description,
-tags, status, optional `extraInfo`, and an embedding. Agent-visible catalog/list
-tooling should expose visible `MemoryEntity` names and tags, not internal ids or
-branch ids. Follow-up search may narrow by stable human-readable `names` and
-`tagsAny`; root identity continues to come from the trusted session rather than
-from model-supplied payload fields.
+tags, status, optional `extraInfo`, an embedding, and system-managed
+importance/confidence scores. Agent-visible catalog/list tooling should expose
+visible `MemoryEntity` names and tags, not internal ids or branch ids. Follow-up
+search may narrow by stable human-readable `names` and `tagsAny`; root identity
+continues to come from the trusted session rather than from model-supplied
+payload fields.
 
 Agent-facing recall has one required parameter, `query`. Optional parameters are
 `limit`, `layer`, `names`, and `tagsAny`. `layer` defaults to `L3`.
@@ -148,12 +155,18 @@ Agent-updatable resources and fields:
 - `Resource`: code and Markdown-like text resources can be updated to specific
   lines and reviewed as diffs; binary files, archives, images, and other
   non-line-addressable attachments can only be replaced as whole resources.
-- `MemoryRelation`: `name` / `title`, `description`, `tags`, `status`,
-  `sourceId`, `targetId`, and `relationType`.
+- `MemoryRelation`: Agent-facing writes use only `type`, `subject`, and
+  `object`; internal `sourceId`, `targetId`, `relationType`, relation
+  description/role/order/required metadata, `weight`, and `confidence` are
+  resolved, derived, or computed by Team Memory.
 
 System-managed fields include `id` / uuid, `createdAt`, `updatedAt`,
 embeddings, BM25 index rows, source metadata, session provenance, and host
-provenance. All object ids, including `MemoryEntity.id`,
+provenance. Branch `importance`/`confidence`, relation
+description/role/order/required metadata, and relation `weight`/`confidence` are
+also system-managed signals; until scoring is fully implemented, Team Memory
+leaves ranking/confidence fields empty or stores `0`. All object ids, including
+`MemoryEntity.id`,
 `MemoryEntityBranch.id`, `MemoryRelation.id`, `Resource.id`, and
 `ResourceChunk.id`, are UUID-backed unique strings. Agent-facing catalog/list
 does not return `MemoryEntity.id`; it returns human-readable `MemoryEntity`
@@ -179,15 +192,17 @@ Agent-facing capture/update has two required top-level parameters: `target` and
 - `Resource`: text/content edits. Line-addressable resources such as code and
   Markdown may include `lineRange`; non-line-addressable attachments such as
   binary files, archives, and images must use whole-resource replacement.
-- `MemoryRelation`: `name` / `title`, `description`, `tags`, `status`,
-  `sourceId`, `targetId`, `relationType`.
+- `MemoryRelation`: Agent-facing writes use only `type`, `subject`, and
+  `object`; internal endpoint ids, `relationType`, relation
+  description/role/order/required metadata, `weight`, and `confidence` are
+  system-owned.
 
 Optional capture/update parameters are limited to update mechanics that the
 Agent can actually supply: `lineRange` for line-addressable Resource edits,
 `replaceMode: "whole_resource"` for whole Resource replacement, and an explicit
 conflict signal when the user/Agent is intentionally recording a contradiction.
-`outcome`, `sources`, `session`, fact keywords, embeddings, BM25 data, ids, and
-timestamps are not Agent inputs.
+`outcome`, `sources`, `session`, fact keywords, embeddings, BM25 data, relation
+metadata, ranking/confidence fields, ids, and timestamps are not Agent inputs.
 
 ## Memory Update Requirement
 
@@ -208,13 +223,13 @@ recency, importance, or other ranking metadata, because repeated and recent
 statements make the memory more important.
 
 If the related-memory similarity is below the deduplication threshold, the
-update is new concrete fact content/details. When the agent did not explicitly
-mark the content as conflicting, Team Memory creates a new `MemoryEntityBranch` and may
-create a `MemoryRelation` with `relationType: "relates_to"`. It must not invoke
-an LLM merge and must not directly rewrite the old branch.
+update is new concrete fact content/details. Team Memory creates a new
+`MemoryEntityBranch`. It may create a relation only when the Agent supplies a
+`memory_relation` operation such as `type: "relates_to"`. It must not invoke an
+LLM merge and must not directly rewrite the old branch.
 
-Only an explicit conflict signal from the agent/user capture path may create a
-`MemoryRelation` with `relationType: "contradicts"`. Textual similarity or a
+Only an explicit `memory_relation` operation with `type: "contradicts"` from
+the agent/user capture path may create a contradiction. Textual similarity or a
 different object value is not enough by itself to create `contradicts`.
 
 A commit represents one agent or user operation. One tool call may contain
@@ -238,10 +253,12 @@ same authorized tag filtering before candidates are returned.
 Recall uses three candidate sources:
 
 1. BM25 search.
-2. Entity-keyword semantic search. The query is analyzed with spaCy entity
-   extraction. At most eight extracted entities are used. For each extracted
-   entity, Team Memory performs vector similarity search and recalls matches
-   whose similarity is at least `0.5`.
+2. Entity-keyword semantic search. The query is analyzed through the
+   `EntityExtractor` interface; the current implementation uses
+   `HeuristicEntityExtractor`, and production can replace it with spaCy or
+   another extractor. At most eight extracted entities/keywords are used. For
+   each extracted entity, Team Memory performs vector similarity search and
+   recalls matches whose similarity is at least `0.5`.
 3. Relation expansion. For every object hit by semantic search, Team Memory
    loads all `MemoryRelation` rows for that object from libSQL as a relation
    candidate set. This set can be large; packing and reranking decide what is
@@ -257,7 +274,7 @@ Relation packing rules:
 | `refers_to` | Pack `A` and `B` only when `A refers_to B`. |
 | `contradicts` | Pack `A` and `B`. |
 | `supersedes` | Pack `A` and `B` only when `B` supersedes `A`. |
-| `next_is` | Treat as an iterator: walk forward from `A next_is B next_is C`, walk backward from `Z next_is A`, and pack the whole chain `ZABC`. |
+| `next_is` | Recall packing accepts a single-hop `next_is` relation from either endpoint. Workflow traversal performs multi-hop expansion through `expandRelations`. |
 
 The same hit object `A` may participate in multiple independent packs. Each
 pack is a separate reranking candidate.

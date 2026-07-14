@@ -118,7 +118,8 @@ export class TeamMemoryMcpStdioServer {
             description: tool.description ?? "Team Memory tool",
             inputSchema: tool.inputSchema ?? {
               type: "object",
-              additionalProperties: true,
+              properties: {},
+              additionalProperties: false,
             },
           })),
         };

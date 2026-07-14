@@ -80,16 +80,19 @@ export class PersistentRbacAdminService {
     const delegation: AgentDelegation = { ...input, ownerUserId: session.userId, delegatedBy: session.userId, delegatedAt: this.clock(), status: "active" };
     validateAgentDelegation(delegation, ownerPermissions);
     await this.authority.saveDelegation(delegation);
-    await this.audit(session, "create_delegation", { delegationId: delegation.id, agentId: delegation.agentId });
+    await this.audit(session, "create_delegation", { delegationId: delegation.id, agentId: delegation.agentId ?? null });
     return delegation;
   }
 
-  async revokeDelegation(session: AuthenticatedSession, input: { delegationId: string; agentId: string }): Promise<void> {
+  async revokeDelegation(session: AuthenticatedSession, input: { delegationId: string; agentId?: string }): Promise<void> {
     await this.requireHumanAdmin(session, "revoke_user_role");
-    const delegation = (await this.authority.listAgentDelegations(input.agentId, session.rootEntityId)).find((candidate) => candidate.id === input.delegationId);
+    const delegations = input.agentId === undefined
+      ? await this.authority.listRootDelegations(session.rootEntityId)
+      : await this.authority.listAgentDelegations(input.agentId, session.rootEntityId);
+    const delegation = delegations.find((candidate) => candidate.id === input.delegationId);
     if (delegation === undefined) throw new Error("delegation not found in this root");
     await this.authority.revokeDelegation(delegation.id, this.clock());
-    await this.audit(session, "revoke_delegation", { delegationId: delegation.id, agentId: delegation.agentId });
+    await this.audit(session, "revoke_delegation", { delegationId: delegation.id, agentId: delegation.agentId ?? null });
   }
 
   async disableUser(session: AuthenticatedSession, input: { userId: string }): Promise<User> {

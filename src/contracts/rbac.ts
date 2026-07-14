@@ -77,6 +77,7 @@ export interface AgentIdentity {
 
 export interface PermissionConstraint {
   allowedTags?: string[];
+  requiredTags?: string[];
   deniedTags?: string[];
   allowedRelationTypes?: MemoryRelationType[];
   deniedRelationTypes?: MemoryRelationType[];
@@ -88,7 +89,10 @@ export interface PermissionConstraint {
 export interface Permission {
   action: MemoryAction;
   resourceKind: MemoryObjectKind;
-  constraints?: PermissionConstraint;
+  tagsAny?: string[];
+  tagsAll?: string[];
+  relationTypes?: MemoryRelationType[];
+  taskScope?: string[];
 }
 
 export interface Role {
@@ -128,11 +132,10 @@ export interface TaskScope {
 
 export interface AgentDelegation {
   id: string;
-  agentId: string;
+  agentId?: string;
   ownerUserId: string;
   rootEntityId: string;
   permissions: Permission[];
-  constraints?: PermissionConstraint;
   delegatedBy: string;
   delegatedAt: string;
   status: "active" | "revoked";

@@ -273,6 +273,19 @@ test("subagent delegation cannot exceed owner, parent, TaskScope, or administrat
   });
   assert.deepEqual(valid.permissions, [readPermission]);
 
+  const taskOnly = createSubAgentDelegation({
+    id: "delegation-task-only",
+    ownerUserId: "user-alice",
+    rootEntityId,
+    requestedPermissions: [readPermission],
+    ownerPermissions: [readPermission],
+    parentPermissions: [readPermission],
+    taskScope: { rootEntityId },
+    delegatedAt: timestamp,
+  });
+  assert.equal("agentId" in taskOnly, false);
+  assert.equal(taskOnly.delegatedBy, "user-alice");
+
   assert.throws(
     () =>
       createSubAgentDelegation({

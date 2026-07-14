@@ -318,7 +318,7 @@ test("gateway sync uses durable permission watermarks for role and delegation ch
     assert.equal(changed.value.reason, "permission_changed");
 
     await runtime.rbac.saveAgent({ id: "agent-watermark", ownerUserId: "user-watermark", agentType: "sub_agent", displayName: "Watermark Agent", status: "active", createdAt: "2026-06-26T00:00:00.000Z", updatedAt: "2026-06-26T00:00:00.000Z" });
-    await gateway.createDelegation(adminSession.token, { delegationId: "delegation-watermark", agentId: "agent-watermark", permissions: [{ action: "read", resourceKind: "memory_entity", constraints: { allowRootEntityMutation: true } }, { action: "search", resourceKind: "memory_entity", constraints: { allowRootEntityMutation: true } }] });
+    await gateway.createDelegation(adminSession.token, { delegationId: "delegation-watermark", agentId: "agent-watermark", permissions: [{ action: "read", resourceKind: "memory_entity" }, { action: "search", resourceKind: "memory_entity" }] });
     const agentSession = await runtime.rbac.createSession({ id: "session-watermark-agent", userId: "user-watermark", agentId: "agent-watermark", delegationId: "delegation-watermark", rootEntityId: "root-watermark", taskScope: { rootEntityId: "root-watermark" }, expiresAt: "2030-01-01T00:00:00.000Z", createdAt: "2026-06-26T00:00:00.000Z" });
     const agent = await runtime.rbac.authenticate(agentSession.token);
     assert.ok(agent !== undefined);

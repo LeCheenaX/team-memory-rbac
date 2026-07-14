@@ -106,16 +106,18 @@ test("runtime adapters use stable tools and enforce live read-only delegation", 
         const tools = await adapter.listTools(session.token);
         assert.ok(tools.some((tool) => tool.name === "memory.write"));
         await adapter.invokeTool(session.token, "memory.write", {
-          clientMutationId: `runtime-write-${index}`,
-          target: {
-            kind: "memory_entity",
-            name: `Runtime Note ${index}`,
-          },
-          patch: {
-            title: `Runtime Note ${index}`,
-            description: "Runtime adapters write through stable capture.",
-            tags: ["runtime"],
-          },
+          operations: [
+            {
+              target: "memory_entity",
+              op: "create",
+              properties: {
+                name: `Runtime Note ${index}`,
+                title: `Runtime Note ${index}`,
+                description: "Runtime adapters write through stable capture.",
+                tags: ["runtime"],
+              },
+            },
+          ],
         });
         const result = await adapter.invokeTool(session.token, "memory.search", {
           query: `Runtime Note ${index}`,
@@ -162,8 +164,16 @@ test("runtime adapters use stable tools and enforce live read-only delegation", 
         false,
       );
       const denied = await adapter.invokeTool(readSession.token, "memory.write", {
-        target: { kind: "memory_entity", name: "Denied" },
-        patch: { description: "should not write" },
+        operations: [
+          {
+            target: "memory_entity",
+            op: "create",
+            properties: {
+              name: "Denied",
+              description: "should not write",
+            },
+          },
+        ],
       });
       assert.equal(denied.decision.allowed, false);
       await runtime.rbac.revokeDelegation("delegation-read-runtime", now);

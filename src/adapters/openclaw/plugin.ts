@@ -37,18 +37,113 @@ export interface OpenClawToolDefinition {
   description: string;
   inputSchema: {
     type: "object";
-    additionalProperties: true;
+    properties?: Record<string, unknown>;
+    required?: string[];
+    additionalProperties: false;
   };
 }
+
+type OpenClawInputSchema = OpenClawToolDefinition["inputSchema"];
 
 function structuredWriteToolDescription(): string {
   return [
     "Write durable Team Memory using structured operations[].",
     "Extract entity summaries, atomic branch facts, and MemoryRelation edges before writing.",
-    "Few-shot: upsert_memory_entity plus create_memory_entity_branch for a new project; refresh_memory_entity_summary for summary refresh; create_memory_entity_branch for duplicate facts so branch vector dedupe can update metadata; create_memory_relation relates_to for related facts; create_memory_entity_branch plus create_memory_relation contradicts between branch natural-name endpoints for conflicts.",
-    "Never send raw transcript-as-memory, Agent-authored ResourceChunk, top-level payload.conflict, generated ids, identity/root fields, or outcome-as-semantic-content.",
+    "Few-shot: memory_entity/create plus memory_entity_branch/create for a new project; memory_entity/refresh for summary refresh; memory_entity_branch/create for duplicate facts so branch vector dedupe can update metadata; memory_relation/create with type relates_to for related facts; memory_relation/create with type contradicts between branch natural-name endpoints for conflicts.",
+    "Never send raw transcript-as-memory, Agent-authored ResourceChunk, clientMutationId, branchRef, expectedHeadCommitId, top-level payload.conflict, generated ids, identity/root fields, or outcome-as-semantic-content.",
   ].join(" ");
 }
+
+const emptySchema: OpenClawInputSchema = {
+  type: "object",
+  properties: {},
+  additionalProperties: false,
+};
+
+const searchSchema: OpenClawInputSchema = {
+  type: "object",
+  properties: {
+    query: { type: "string" },
+    text: { type: "string" },
+    limit: { type: "integer" },
+    layer: { type: "string", enum: ["L1", "L2", "L3"] },
+    names: { type: "array", items: { type: "string" } },
+    tagsAny: { type: "array", items: { type: "string" } },
+  },
+  additionalProperties: false,
+};
+
+const writeSchema: OpenClawInputSchema = {
+  type: "object",
+  properties: {
+    operations: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          target: {
+            type: "string",
+            enum: ["memory_entity", "memory_entity_branch", "memory_relation", "resource"],
+          },
+          op: {
+            type: "string",
+            enum: ["create", "update", "refresh", "update_metadata", "replace"],
+          },
+          name: { type: "string" },
+          type: {
+            type: "string",
+            enum: ["has", "depends_on", "relates_to", "refers_to", "contradicts", "supersedes", "next_is"],
+          },
+          subject: { type: ["object", "string"] },
+          object: { type: ["object", "string"] },
+          properties: { type: "object" },
+        },
+        required: ["target", "op"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["operations"],
+  additionalProperties: false,
+};
+
+const importResourceSchema: OpenClawInputSchema = {
+  type: "object",
+  properties: {
+    clientMutationId: { type: "string" },
+    title: { type: "string" },
+    sourceType: { type: "string" },
+    content: { type: "string" },
+    contentBase64: { type: "string" },
+    uri: { type: "string" },
+    metadata: { type: "object" },
+    maxChunkCharacters: { type: "integer" },
+  },
+  required: ["clientMutationId", "title", "sourceType"],
+  additionalProperties: false,
+};
+
+const ingestResourceSchema: OpenClawInputSchema = {
+  type: "object",
+  properties: {
+    resourceId: { type: "string" },
+    clientMutationId: { type: "string" },
+    revisionId: { type: "string" },
+    maxChunkCharacters: { type: "integer" },
+  },
+  required: ["resourceId", "clientMutationId"],
+  additionalProperties: false,
+};
+
+const readResourceSchema: OpenClawInputSchema = {
+  type: "object",
+  properties: {
+    resourceId: { type: "string" },
+    revisionId: { type: "string" },
+  },
+  required: ["resourceId"],
+  additionalProperties: false,
+};
 
 /** Host-facing OpenClaw adapter for both tool-plugin and active-memory modes. */
 export class OpenClawTeamMemoryPlugin {
@@ -76,15 +171,21 @@ export class OpenClawTeamMemoryPlugin {
 
   tools(): OpenClawToolDefinition[] {
     const common = [
-      this.tool("team_memory.search", "Search RBAC-protected Team Memory with query, optional layer, names, tagsAny, and limit. Do not send identity fields, generated ids, history toggles, or conflict flags."),
-      this.tool("team_memory.catalog", "List visible Team Memory names and tags from the trusted session root without exposing generated ids."),
-      this.tool("team_memory.write", structuredWriteToolDescription()),
+      this.tool("team_memory.search", "Search RBAC-protected Team Memory with query, optional layer, names, tagsAny, and limit. Do not send identity fields, generated ids, history toggles, or conflict flags.", searchSchema),
+      this.tool("team_memory.catalog", "List visible Team Memory names and tags from the trusted session root without exposing generated ids.", emptySchema),
+      this.tool("team_memory.write", structuredWriteToolDescription(), writeSchema),
+      this.tool("team_memory.import_resource", "Import a host-facing Resource and automatically ingest its current revision.", importResourceSchema),
+      this.tool("team_memory.ingest_resource", "Retry or rebuild ingestion for an existing Resource revision.", ingestResourceSchema),
+      this.tool("team_memory.read_resource", "Read a Resource by generated resourceId, optionally at a revision.", readResourceSchema),
     ];
     if (this.mode === "parallel_native_team_memory") return common;
     return [
-      this.tool("memory_search", "OpenClaw active-memory recall through Team Memory with query, optional layer, names, tagsAny, and limit. Do not send identity fields, generated ids, history toggles, or conflict flags."),
-      this.tool("memory_catalog", "OpenClaw active-memory catalog through Team Memory without exposing generated ids."),
-      this.tool("memory_write", structuredWriteToolDescription()),
+      this.tool("memory_search", "OpenClaw active-memory recall through Team Memory with query, optional layer, names, tagsAny, and limit. Do not send identity fields, generated ids, history toggles, or conflict flags.", searchSchema),
+      this.tool("memory_catalog", "OpenClaw active-memory catalog through Team Memory without exposing generated ids.", emptySchema),
+      this.tool("memory_write", structuredWriteToolDescription(), writeSchema),
+      this.tool("memory_import", "Import a host-facing Resource and automatically ingest its current revision.", importResourceSchema),
+      this.tool("memory_ingest", "Retry or rebuild ingestion for an existing Resource revision.", ingestResourceSchema),
+      this.tool("memory_get", "Read a Resource by generated resourceId, optionally at a revision.", readResourceSchema),
     ];
   }
 
@@ -190,11 +291,15 @@ export class OpenClawTeamMemoryPlugin {
     };
   }
 
-  private tool(name: string, description: string): OpenClawToolDefinition {
+  private tool(
+    name: string,
+    description: string,
+    inputSchema: OpenClawInputSchema,
+  ): OpenClawToolDefinition {
     return {
       name,
       description,
-      inputSchema: { type: "object", additionalProperties: true },
+      inputSchema,
     };
   }
 

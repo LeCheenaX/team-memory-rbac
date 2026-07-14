@@ -26,7 +26,7 @@ create index if not exists rbac_assignments_subject_root
 
 create table if not exists rbac_delegations (
   delegation_id text primary key,
-  agent_id text not null,
+  agent_id text,
   owner_user_id text not null,
   root_entity_id text not null,
   payload_json text not null

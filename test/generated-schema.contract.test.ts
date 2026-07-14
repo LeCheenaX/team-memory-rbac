@@ -60,6 +60,41 @@ test("checked-in JSON Schema matches the TypeScript runtime contract", async () 
       "delete_root_entity",
     ],
   );
+  assert.equal(
+    "constraints" in generated.$defs.Permission.properties,
+    false,
+  );
+  assert.deepEqual(
+    Object.keys(generated.$defs.Permission.properties).sort(),
+    [
+      "action",
+      "relationTypes",
+      "resourceKind",
+      "tagsAll",
+      "tagsAny",
+      "taskScope",
+    ],
+  );
+  assert.equal(
+    generated.$defs.AgentDelegation.required.includes("agentId"),
+    false,
+  );
+  assert.equal(
+    "constraints" in generated.$defs.AgentDelegation.properties,
+    false,
+  );
+  assert.deepEqual(
+    generated.$defs.AgentFacingCaptureInput.required,
+    ["operations"],
+  );
+  assert.equal(
+    "clientMutationId" in generated.$defs.AgentFacingCaptureInput.properties,
+    false,
+  );
+  assert.ok(generated.$defs.MemoryCaptureOperation);
+  assert.ok(generated.$defs.MemorySearchInput);
+  assert.ok(generated.$defs.MemoryCatalogInput);
+  assert.ok(generated.$defs.HostLifecycleCaptureResult);
   assert.deepEqual(
     generated.$defs.MemoryEntityBranch.properties.extraInfo.propertyNames.not
       .enum,
@@ -79,6 +114,11 @@ test("checked-in JSON Schema matches the TypeScript runtime contract", async () 
     "User",
     "AgentIdentity",
     "Permission",
+    "AgentFacingCaptureInput",
+    "MemoryCaptureOperation",
+    "MemorySearchInput",
+    "MemoryCatalogInput",
+    "HostLifecycleCaptureResult",
     "Role",
     "UserRootRoleAssignment",
     "AgentDelegation",

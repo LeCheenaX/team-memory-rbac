@@ -435,20 +435,18 @@ class TeamMemoryHermesProvider(MemoryProvider):
                 "name": "team_memory_capture",
                 "description": (
                     "Capture durable semantic memory using structured operations[]. "
-                    "Few-shot: upsert_memory_entity plus create_memory_entity_branch for a new project; "
-                    "refresh_memory_entity_summary for summary refresh; create_memory_entity_branch for duplicate facts so branch vector dedupe can update metadata; "
-                    "create_memory_relation with relates_to for related facts; create_memory_entity_branch plus create_memory_relation with relationType contradicts between old/new branch natural-name endpoints for conflicts. "
-                    "Never send raw transcript-as-memory, Agent-authored ResourceChunk, top-level payload.conflict, generated ids, identity/root fields, or outcome-as-semantic-content. "
-                    "Deprecated compatibility: content/outcome is accepted only as host lifecycle capture and is not the ordinary semantic write path."
+                    "Few-shot: memory_entity/create plus memory_entity_branch/create for a new project; "
+                    "memory_entity/refresh for summary refresh; memory_entity_branch/create for duplicate facts so branch vector dedupe can update metadata; "
+                    "memory_relation/create with type relates_to for related facts; memory_entity_branch/create plus memory_relation/create with type contradicts between old/new natural-name endpoints for conflicts. "
+                    "Never send raw transcript-as-memory, Agent-authored ResourceChunk, clientMutationId, branchRef, expectedHeadCommitId, top-level payload.conflict, generated ids, identity/root fields, or outcome-as-semantic-content."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "operations": {"type": "array", "items": {"type": "object"}},
-                        "clientMutationId": {"type": "string"},
-                        "content": {"type": "string"},
-                        "outcome": {"type": "string", "default": "success"},
                     },
+                    "required": ["operations"],
+                    "additionalProperties": False,
                 },
             },
             {
@@ -494,27 +492,13 @@ class TeamMemoryHermesProvider(MemoryProvider):
             _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, result=result)
             return json.dumps(result)
         if tool_name == "team_memory_capture":
-            if isinstance(args.get("operations"), list):
-                payload: dict[str, Any] = {
-                    "operations": args["operations"],
-                }
-                if isinstance(args.get("clientMutationId"), str):
-                    payload["clientMutationId"] = args["clientMutationId"]
-                try:
-                    result = self._provider.write_memory(payload)
-                except Exception as exc:
-                    _log_event("team_memory_capture", status="failed", sessionId=session_id, error=repr(exc))
-                    _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, error=exc)
-                    raise
-                _log_event("team_memory_capture", status="captured", sessionId=session_id, result=result)
-                _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, result=result)
-                return json.dumps(result)
+            if not isinstance(args.get("operations"), list):
+                raise ValueError("team_memory_capture requires operations[]")
+            payload: dict[str, Any] = {
+                "operations": args["operations"],
+            }
             try:
-                result = self._provider.add(
-                    str(args.get("content", "")),
-                    session_id=session_id,
-                    outcome=str(args.get("outcome") or "success"),
-                )
+                result = self._provider.write_memory(payload)
             except Exception as exc:
                 _log_event("team_memory_capture", status="failed", sessionId=session_id, error=repr(exc))
                 _log_tool_call(tool_name, args, session_id=session_id, started_at=started_at, error=exc)

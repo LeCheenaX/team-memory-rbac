@@ -243,7 +243,6 @@ async function assertGatewayRoutes(): Promise<void> {
         {
           action: "read",
           resourceKind: "memory_entity",
-          constraints: { allowRootEntityMutation: true },
         },
       ]),
     ]);

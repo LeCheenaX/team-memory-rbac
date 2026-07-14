@@ -49,6 +49,46 @@ async function post(
   });
 }
 
+function entityOperation(
+  name: string,
+  description: string,
+  tags: string[] = [],
+): Record<string, unknown> {
+  return {
+    target: "memory_entity",
+    op: "create",
+    properties: { name, description, tags },
+  };
+}
+
+function branchOperation(
+  entityName: string,
+  title: string,
+  description: string,
+  tags: string[] = [],
+): Record<string, unknown> {
+  return {
+    target: "memory_entity_branch",
+    op: "create",
+    subject: entityName,
+    properties: { name: title, title, description, tags },
+  };
+}
+
+function relationOperation(
+  type: string,
+  subject: Record<string, unknown>,
+  object: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    target: "memory_relation",
+    op: "create",
+    type,
+    subject,
+    object,
+  };
+}
+
 test("HTTP and MCP expose the same authenticated memory gateway without payload identity overrides", async () => {
   const directory = await temporaryDirectory();
   const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({
@@ -117,6 +157,9 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
           resourceKind: "memory_entity_branch",
         },
         { action: "commit", resourceKind: "memory_entity" },
+        { action: "import_resource", resourceKind: "resource" },
+        { action: "index_resource", resourceKind: "resource" },
+        { action: "index_resource", resourceKind: "resource_chunk" },
         { action: "write_resource_chunk", resourceKind: "resource_chunk" },
       ],
       delegatedBy: "user-gateway",
@@ -170,78 +213,149 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     assert.equal(
       (
         await post(base, "/memory/write", writeSession.token, {
-          clientMutationId: "write-guide",
           operations: [
-            {
-              op: "upsert_memory_entity",
-              name: "Gateway Guide",
-              description: "Shared HTTP and MCP behavior",
-              tags: ["guide"],
-            },
-            {
-              op: "upsert_memory_entity",
-              name: "MCP Adapter",
-              description: "MCP exposes Team Memory tools.",
-              tags: ["adapter"],
-            },
-            {
-              op: "create_memory_entity_branch",
-              entityName: "Gateway Guide",
-              title: "Gateway Guide stable tools",
-              description: "HTTP and MCP expose the same stable Team Memory behavior.",
-              tags: ["guide"],
-            },
-            {
-              op: "create_memory_relation",
-              relationType: "relates_to",
-              source: { kind: "memory_entity", name: "Gateway Guide" },
-              target: { kind: "memory_entity", name: "MCP Adapter" },
-              description: "Gateway Guide documents MCP behavior.",
-            },
+            entityOperation("Gateway Guide", "Shared HTTP and MCP behavior", ["guide"]),
+            entityOperation("MCP Adapter", "MCP exposes Team Memory tools.", ["adapter"]),
+            branchOperation(
+              "Gateway Guide",
+              "Gateway Guide stable tools",
+              "HTTP and MCP expose the same stable Team Memory behavior.",
+              ["guide"],
+            ),
+            relationOperation(
+              "relates_to",
+              { target: "memory_entity", name: "Gateway Guide" },
+              { target: "memory_entity", name: "MCP Adapter" },
+            ),
           ],
         })
       ).status,
       200,
     );
     const rejectedConflictShortcut = await post(base, "/memory/write", writeSession.token, {
-      clientMutationId: "write-conflict-shortcut",
       conflict: true,
       operations: [
-        {
-          op: "create_memory_entity_branch",
-          entityName: "Gateway Guide",
-          title: "Invalid conflict shortcut",
-          description: "Top-level conflict must not be accepted.",
-        },
+        branchOperation(
+          "Gateway Guide",
+          "Invalid conflict shortcut",
+          "Top-level conflict must not be accepted.",
+        ),
       ],
     });
     assert.equal(rejectedConflictShortcut.status, 400);
 
-    const conflictBatch = await post(base, "/memory/write", writeSession.token, {
-      clientMutationId: "write-explicit-contradiction",
-      operations: [
-        {
-          op: "create_memory_entity_branch",
-          entityName: "Gateway Guide",
-          title: "Gateway Guide corrected stable tools",
-          description: "HTTP exposes stable Team Memory behavior; MCP does not expose generated ids.",
-          tags: ["guide", "correction"],
+    const forbiddenWritePayloads: Array<{
+      name: string;
+      payload: Record<string, unknown>;
+    }> = [
+      {
+        name: "clientMutationId",
+        payload: {
+          clientMutationId: "agent-supplied",
+          operations: [entityOperation("Invalid", "invalid")],
         },
-        {
-          op: "create_memory_relation",
-          relationType: "contradicts",
-          source: {
-            kind: "memory_entity_branch",
-            entityName: "Gateway Guide",
+      },
+      {
+        name: "entityName",
+        payload: {
+          operations: [
+            {
+              target: "memory_entity_branch",
+              op: "create",
+              entityName: "Gateway Guide",
+              properties: { name: "Invalid", desc: "invalid" },
+            },
+          ],
+        },
+      },
+      {
+        name: "top-level title",
+        payload: {
+          operations: [
+            {
+              target: "memory_entity",
+              op: "create",
+              title: "Invalid",
+              properties: { name: "Invalid", desc: "invalid" },
+            },
+          ],
+        },
+      },
+      {
+        name: "relationType",
+        payload: {
+          operations: [
+            {
+              target: "memory_relation",
+              op: "create",
+              relationType: "relates_to",
+              subject: { target: "memory_entity", name: "Gateway Guide" },
+              object: { target: "memory_entity", name: "MCP Adapter" },
+            },
+          ],
+        },
+      },
+      {
+        name: "internal endpoint ids",
+        payload: {
+          operations: [
+            {
+              target: "memory_relation",
+              op: "create",
+              type: "relates_to",
+              sourceId: "entity:internal",
+              targetId: "entity:internal-2",
+              subject: { target: "memory_entity", name: "Gateway Guide" },
+              object: { target: "memory_entity", name: "MCP Adapter" },
+            },
+          ],
+        },
+      },
+      {
+        name: "old operation name",
+        payload: {
+          operations: [
+            {
+              op: "upsert_memory_entity",
+              name: "Invalid",
+              description: "invalid",
+            },
+          ],
+        },
+      },
+    ];
+    for (const { name, payload } of forbiddenWritePayloads) {
+      const rejected = await post(base, "/memory/write", writeSession.token, payload);
+      assert.equal(rejected.status, 400, `${name} should be rejected: ${await rejected.text()}`);
+    }
+
+    const rejectedIncludeHistory = await post(base, "/memory/search", readSession.token, {
+      query: "Gateway",
+      includeHistory: true,
+    });
+    assert.equal(rejectedIncludeHistory.status, 400);
+
+    const conflictBatch = await post(base, "/memory/write", writeSession.token, {
+      operations: [
+        branchOperation(
+          "Gateway Guide",
+          "Gateway Guide corrected stable tools",
+          "HTTP exposes stable Team Memory behavior; MCP does not expose generated ids.",
+          ["guide", "correction"],
+        ),
+        relationOperation(
+          "contradicts",
+          {
+            target: "memory_entity_branch",
+            parent: "Gateway Guide",
             name: "Gateway Guide corrected stable tools",
           },
-          target: {
-            kind: "memory_entity_branch",
-            entityName: "Gateway Guide",
+          {
+            target: "memory_entity_branch",
+            parent: "Gateway Guide",
             name: "Gateway Guide stable tools",
           },
-          description: "The corrected branch contradicts the older generated-id wording.",
-        },
+        ),
       ],
     });
     const conflictText = await conflictBatch.text();
@@ -260,15 +374,13 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       .filter((relation) => relation.relationType === "contradicts")
       .length;
     const nonConflictBranch = await post(base, "/memory/write", writeSession.token, {
-      clientMutationId: "write-non-conflict-branch",
-      target: {
-        kind: "memory_entity_branch",
-        name: "Gateway Guide stable tools",
-      },
-      patch: {
-        title: "Gateway Guide stable tools variant",
-        description: "HTTP and MCP expose stable behavior with updated phrasing.",
-      },
+      operations: [
+        branchOperation(
+          "Gateway Guide",
+          "Gateway Guide stable tools variant",
+          "HTTP and MCP expose stable behavior with updated phrasing.",
+        ),
+      ],
     });
     const nonConflictText = await nonConflictBranch.text();
     assert.equal(nonConflictBranch.status, 200, nonConflictText);
@@ -289,6 +401,34 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       content: "HTTP and MCP share the same projected BM25 retrieval path",
       maxChunkCharacters: 1200,
     });
+    const resourceRevision = await post(base, "/memory/write", writeSession.token, {
+      operations: [
+        {
+          target: "resource",
+          op: "update",
+          name: "Gateway Resource",
+          properties: {
+            content: "HTTP and MCP share a canonical resource revision path",
+          },
+        },
+      ],
+    });
+    const resourceRevisionText = await resourceRevision.text();
+    assert.equal(resourceRevision.status, 200, resourceRevisionText);
+    const resourceRevisionValue = JSON.parse(resourceRevisionText) as {
+      value: {
+        resourceId: string;
+        revisionId: string;
+        commitIds: string[];
+        extra: { ingestion: { status: string } };
+      };
+    };
+    assert.equal(resourceRevisionValue.value.resourceId, "resource-gateway");
+    assert.match(resourceRevisionValue.value.revisionId, /^revision:/);
+    assert.equal(resourceRevisionValue.value.commitIds.length, 1);
+    assert.ok(["indexed", "retryable_failed"].includes(
+      resourceRevisionValue.value.extra.ingestion.status,
+    ));
 
     const httpSearch = await post(base, "/memory/search", readSession.token, {
       query: "Gateway",
@@ -354,8 +494,9 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     await assert.rejects(
       () =>
         mcp.callTool(readSession.token, "memory.write", {
-          target: { kind: "memory_entity", name: "Denied" },
-          patch: { description: "should not write" },
+          operations: [
+            entityOperation("Denied", "should not write"),
+          ],
         }),
       /permission_denied/,
     );
@@ -376,23 +517,16 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     ));
     assert.equal(historyPayload.value.records[1]?.operations.length, 4);
 
-    const duplicate = await post(base, "/memory/write", writeSession.token, {
-      clientMutationId: "write-guide-duplicate",
+    const legacyTargetPatch = await post(base, "/memory/write", writeSession.token, {
       target: { kind: "memory_entity", name: "Gateway Guide" },
       patch: {
         description: "Shared HTTP and MCP behavior",
         tags: ["guide"],
       },
     });
-    const duplicateText = await duplicate.text();
-    assert.equal(duplicate.status, 200, duplicateText);
-    assert.equal(
-      (JSON.parse(duplicateText) as { value: { status: string } }).value.status,
-      "duplicate",
-    );
+    assert.equal(legacyTargetPatch.status, 400, await legacyTargetPatch.text());
 
     const unsafeConflict = await post(base, "/memory/write", writeSession.token, {
-      clientMutationId: "write-guide-conflict",
       conflict: true,
       target: { kind: "memory_entity", name: "Gateway Guide" },
       patch: { description: "Gateway Guide now documents conflict capture." },
@@ -404,12 +538,17 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       .entityBranches
       .length;
     const summaryUpdate = await post(base, "/memory/write", writeSession.token, {
-      clientMutationId: "write-guide-summary",
-      target: { kind: "memory_entity", name: "Gateway Guide" },
-      patch: {
-        description: "Gateway Guide is the L3 directory entry for HTTP and MCP behavior.",
-        tags: ["guide", "http"],
-      },
+      operations: [
+        {
+          target: "memory_entity",
+          op: "update",
+          properties: {
+            name: "Gateway Guide",
+            description: "Gateway Guide is the L3 directory entry for HTTP and MCP behavior.",
+            tags: ["guide", "http"],
+          },
+        },
+      ],
     });
     const summaryUpdateText = await summaryUpdate.text();
     assert.equal(summaryUpdate.status, 200, summaryUpdateText);
@@ -430,15 +569,13 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       .filter((branch) => branch.entityId === summaryUpdateValue.value.entityId)
       .length;
     const duplicateFact = await post(base, "/memory/write", writeSession.token, {
-      clientMutationId: "write-guide-duplicate-fact",
       operations: [
-        {
-          op: "create_memory_entity_branch",
-          entityName: "Gateway Guide",
-          title: "Gateway Guide duplicate title",
-          description: "HTTP and MCP expose the same stable Team Memory behavior.",
-          tags: ["guide"],
-        },
+        branchOperation(
+          "Gateway Guide",
+          "Gateway Guide duplicate title",
+          "HTTP and MCP expose the same stable Team Memory behavior.",
+          ["guide"],
+        ),
       ],
     });
     const duplicateFactText = await duplicateFact.text();
@@ -448,7 +585,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     };
     assert.equal(
       duplicateFactValue.value.extra.operationsApplied[0],
-      "update_memory_entity_branch_metadata",
+      "memory_entity_branch/update_metadata",
     );
     assert.equal(
       runtime.history
@@ -473,15 +610,13 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       .filter((branch) => branch.entityId === summaryUpdateValue.value.entityId)
       .length;
     const newFact = await post(base, "/memory/write", writeSession.token, {
-      clientMutationId: "write-guide-new-fact",
       operations: [
-        {
-          op: "create_memory_entity_branch",
-          entityName: "Gateway Guide",
-          title: "Gateway Guide stable tools",
-          description: "Gateway Guide keeps operational deployment notes for a separate release checklist.",
-          tags: ["guide", "release"],
-        },
+        branchOperation(
+          "Gateway Guide",
+          "Gateway Guide stable tools",
+          "Gateway Guide keeps operational deployment notes for a separate release checklist.",
+          ["guide", "release"],
+        ),
       ],
     });
     assert.equal(newFact.status, 200, await newFact.text());
@@ -496,18 +631,30 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     );
 
     const secondSameName = await post(base, "/memory/write", writeSession.token, {
-      clientMutationId: "write-second-same-name",
-      target: { kind: "memory_entity", name: "Second Guide" },
-      patch: {
-        title: "Gateway Guide",
-        description: "A separate entity with the same human-readable title.",
-      },
+      operations: [
+        {
+          target: "memory_entity",
+          op: "create",
+          properties: {
+            name: "Second Guide",
+            title: "Gateway Guide",
+            description: "A separate entity with the same human-readable title.",
+          },
+        },
+      ],
     });
     assert.equal(secondSameName.status, 200, await secondSameName.text());
     const ambiguous = await post(base, "/memory/write", writeSession.token, {
-      clientMutationId: "write-ambiguous",
-      target: { kind: "memory_entity", name: "Gateway Guide" },
-      patch: { description: "Should ask the agent to disambiguate." },
+      operations: [
+        {
+          target: "memory_entity",
+          op: "update",
+          properties: {
+            name: "Gateway Guide",
+            description: "Should ask the agent to disambiguate.",
+          },
+        },
+      ],
     });
     const ambiguousText = await ambiguous.text();
     assert.equal(ambiguous.status, 200, ambiguousText);
@@ -522,6 +669,43 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       "search_or_catalog_first",
     );
 
+    const branchFirst = await post(base, "/memory/write", writeSession.token, {
+      operations: [
+        branchOperation(
+          "Riverfront",
+          "Riverfront is the Nova CRM churn pilot",
+          "Riverfront is the Nova CRM customer churn warning pilot.",
+          ["project:riverfront", "hermes"],
+        ),
+      ],
+    });
+    const branchFirstText = await branchFirst.text();
+    assert.equal(branchFirst.status, 200, branchFirstText);
+    const branchFirstPayload = JSON.parse(branchFirstText) as {
+      value: {
+        status: string;
+        entityId: string;
+        branchId: string;
+        commitIds: string[];
+        extra: { operationsApplied: string[] };
+      };
+    };
+    assert.equal(branchFirstPayload.value.status, "captured");
+    assert.deepEqual(branchFirstPayload.value.extra.operationsApplied, [
+      "memory_entity/create",
+      "memory_entity_branch/create",
+    ]);
+    assert.equal(branchFirstPayload.value.commitIds.length, 1);
+    const branchFirstView = runtime.history.readActiveView("root-gateway", "main");
+    const riverfront = branchFirstView.entities.find((entity) => entity.title === "Riverfront");
+    assert.ok(riverfront);
+    assert.equal(riverfront.description, "Riverfront is the Nova CRM customer churn warning pilot.");
+    assert.ok(branchFirstView.entityBranches.some((branch) =>
+      branch.id === branchFirstPayload.value.branchId &&
+      branch.entityId === riverfront.id &&
+      branch.title === "Riverfront is the Nova CRM churn pilot"
+    ));
+
     const unsafe = await post(base, "/memory/search", readSession.token, {
       rootEntityId: "other-root",
       query: "Gateway",
@@ -531,117 +715,6 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       ((await unsafe.json()) as { error: { code: string } }).error.code,
       "validation_failed",
     );
-  } finally {
-    await closeServer(server);
-    runtime.close();
-    await removeTemporaryDirectory(directory);
-  }
-});
-
-test("structured branch capture creates a missing entity before writing the fact", async () => {
-  const directory = await temporaryDirectory();
-  const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({
-    directory,
-    databaseName: "branch-first-gateway.db",
-  }));
-  const gateway = new TeamMemoryGateway(runtime, {
-    retrieval: "active-view",
-    projectWrites: false,
-    branchDedupeThreshold: 0.999,
-  });
-  const server = createTeamMemoryServer(gateway);
-  try {
-    await bootstrapDevelopment(runtime, {
-      rootEntityId: "root-branch-first",
-      userId: "user-branch-first",
-      displayName: "Branch First User",
-      sessionId: "session-branch-first-admin",
-      sessionExpiresAt: "2030-01-01T00:00:00.000Z",
-      now,
-    });
-    await runtime.rbac.saveAgent({
-      id: "agent-branch-first-write",
-      ownerUserId: "user-branch-first",
-      agentType: "curator_agent",
-      displayName: "Branch First Write Agent",
-      status: "active",
-      createdAt: now,
-      updatedAt: now,
-    });
-    await runtime.rbac.saveDelegation({
-      id: "delegation-branch-first-write",
-      agentId: "agent-branch-first-write",
-      ownerUserId: "user-branch-first",
-      rootEntityId: "root-branch-first",
-      permissions: [
-        { action: "read", resourceKind: "memory_entity" },
-        { action: "search", resourceKind: "memory_entity" },
-        { action: "write_entity", resourceKind: "memory_entity" },
-        { action: "write_entity_branch", resourceKind: "memory_entity_branch" },
-        { action: "commit", resourceKind: "memory_entity" },
-      ],
-      delegatedBy: "user-branch-first",
-      delegatedAt: now,
-      status: "active",
-    });
-    const writeSession = await runtime.rbac.createSession({
-      id: "session-branch-first-write",
-      userId: "user-branch-first",
-      agentId: "agent-branch-first-write",
-      delegationId: "delegation-branch-first-write",
-      rootEntityId: "root-branch-first",
-      taskScope: { rootEntityId: "root-branch-first" },
-      expiresAt: "2030-01-01T00:00:00.000Z",
-      createdAt: now,
-    });
-
-    await new Promise<void>((resolve) =>
-      server.listen(0, "127.0.0.1", resolve),
-    );
-    const address = server.address();
-    assert.ok(address !== null && typeof address !== "string");
-    if (address === null || typeof address === "string") return;
-    const base = `http://127.0.0.1:${address.port}`;
-
-    const response = await post(base, "/memory/write", writeSession.token, {
-      clientMutationId: "write-branch-first-riverfront",
-      operations: [
-        {
-          op: "create_memory_entity_branch",
-          entityName: "Riverfront",
-          title: "Riverfront is the Nova CRM churn pilot",
-          description: "Riverfront is the Nova CRM customer churn warning pilot.",
-          tags: ["project:riverfront", "hermes"],
-        },
-      ],
-    });
-    const text = await response.text();
-    assert.equal(response.status, 200, text);
-    const payload = JSON.parse(text) as {
-      value: {
-        status: string;
-        entityId: string;
-        branchId: string;
-        commitIds: string[];
-        extra: { operationsApplied: string[] };
-      };
-    };
-    assert.equal(payload.value.status, "captured");
-    assert.deepEqual(payload.value.extra.operationsApplied, [
-      "upsert_memory_entity",
-      "create_memory_entity_branch",
-    ]);
-    assert.equal(payload.value.commitIds.length, 1);
-
-    const view = runtime.history.readActiveView("root-branch-first", "main");
-    const riverfront = view.entities.find((entity) => entity.title === "Riverfront");
-    assert.ok(riverfront);
-    assert.equal(riverfront.description, "Riverfront is the Nova CRM customer churn warning pilot.");
-    assert.ok(view.entityBranches.some((branch) =>
-      branch.id === payload.value.branchId &&
-      branch.entityId === riverfront.id &&
-      branch.title === "Riverfront is the Nova CRM churn pilot"
-    ));
   } finally {
     await closeServer(server);
     runtime.close();

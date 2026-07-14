@@ -4,6 +4,18 @@ This document records the expected concrete interaction paths between agents and
 Team Memory. It reflects the current design intent, not only the current test
 surface.
 
+For executable Hermes manual regression prompts, do not use this design document
+as a separate checklist. Use
+`docs/operations/hermes-interaction-scenario-prompts.md`, where each scenario
+combines the user prompt, agent workflow, tool JSON schema, expected call,
+real path, memory result, and acceptance results in one place.
+
+For the canonical module-level structures, required/optional fields, and
+test-aligned call examples, see [[记忆模块.md#AgentFacingCaptureInput]],
+[[RBAC模块.md#PermissionRouter]], [[操作记录模块.md#MemoryCommit]], and
+[[同步模块.md#WorkingReplica]]. The full code-to-design mapping is
+[[代码覆盖索引.md#代码覆盖索引]].
+
 ## Model Boundaries
 
 - `MemoryEntity` is a stable identity and summary for a group of related atomic
@@ -13,7 +25,8 @@ surface.
   atomic fact.
 - `MemoryEntityBranch` is concrete atomic fact content/details. It has a
   human-readable `name` / `title`, description, tags, extraInfo, embedding,
-  importance, confidence, and branch / commit projection state.
+  system-managed importance/confidence scores, and branch / commit projection
+  state.
 - `MemoryRelation` expresses relationships between memory objects, but never
   between relations themselves. Valid endpoints are `memory_entity`,
   `memory_entity_branch`, `resource`, and `resource_chunk`.
@@ -27,6 +40,51 @@ surface.
   authenticated session.
 - Response envelopes may be stable enough for tools to route, but object-specific
   variable metadata must be returned under `extra`.
+
+## Field Ownership
+
+Agent-facing capture is intentionally smaller than the internal memory model.
+The Agent names the object it wants to change, chooses the operation, and
+supplies only the semantic properties of that change. Team Memory owns identity,
+timestamps, embeddings, projection fields, History commit fields, endpoint id
+resolution, and ranking/confidence signals such as branch `importance`,
+branch/relation `confidence`, and relation `weight`. If those ranking signals
+are not implemented yet, Team Memory leaves them empty or stores `0`.
+
+| Internal object | Agent-facing fields | System-owned fields |
+| --- | --- | --- |
+| `MemoryEntity` | `properties.name`, `properties.desc`, `properties.tags`, `properties.status`, `properties.extra` | `id`, `rootEntityId`, `currentBranchId`, `embedding`, `createdAt`, `updatedAt` |
+| `MemoryEntityBranch` | `subject` parent entity name, `properties.name`, `properties.desc`, `properties.tags`, `properties.status`, `properties.extra` | `id`, `entityId`, `rootEntityId`, `branchRef`, `parentBranchId`, `embedding`, `origin`, `pendingId`, `importance`, `confidence`, `createdAt`, `updatedAt` |
+| `MemoryRelation` | `type`, `subject`, `object` | `id`, `rootEntityId`, resolved `sourceId`, resolved `sourceKind`, resolved `targetId`, resolved `targetKind`, `branchRef`, `weight`, `confidence`, `createdAt`, `updatedAt` |
+| `Resource` / `ResourceChunk` | not created by ordinary semantic capture; may be referenced by name/id in relation endpoints when already imported | ids, CAS hashes, chunk indexes, BM25/vector fields, metadata, timestamps |
+
+`properties.name` is the single agent-facing human-readable name field. It must
+be chosen by the Agent as a durable, short name for the memory object. It must
+not be the user's raw prompt. On write, Team Memory maps it to the internal
+display fields:
+
+- `MemoryEntity.properties.name` maps to internal `MemoryEntity.name` and
+  `MemoryEntity.title`; both represent the same display name for agent writes.
+- `MemoryEntityBranch.properties.name` maps to internal
+  `MemoryEntityBranch.title`; branches do not expose a separate agent-facing
+  `title`.
+- Relation endpoints use the same agent-authored names to resolve existing
+  entities and branches. A branch endpoint also includes `parent` so the branch
+  name is resolved under the intended entity.
+
+`properties.desc` is the agent-facing semantic description for
+`MemoryEntity` and `MemoryEntityBranch`. It maps to internal `description`. For
+`MemoryEntity`, it is the L3 summary. For `MemoryEntityBranch`, it is the L2
+atomic fact body. Relationship facts, ordering, citations, containment,
+supersession, and contradictions belong in `MemoryRelation`, not in
+`extraInfo`/`properties.extra`.
+
+`MemoryRelation` agent-facing writes only contain `type`, `subject`, and
+`object`. Relation description, role labels, workflow order, required-step
+flags, weight, and confidence are memory-system internals. Team Memory computes
+or derives those signals from relation type, endpoints, write order, repeated
+mentions, recency, and retrieval behavior. Until that scoring exists, those
+fields stay empty or `0`.
 
 ## Stable Agent Tool Inputs
 
@@ -85,8 +143,10 @@ Memory returns an ambiguity result and the Agent should search/catalog first.
 - `Resource`: text/content edits. Code and Markdown-like resources may be
   updated with `lineRange`; binary files, archives, images, and other
   non-line-addressable attachments require whole-resource replacement.
-- `MemoryRelation`: `name` / `title`, `description`, `tags`, `status`,
-  `sourceId`, `targetId`, `relationType`.
+- `MemoryRelation`: Agent-facing writes use only `type`, `subject`, and
+  `object`; internal `sourceId`, `targetId`, `relationType`, relation
+  description/role/order/required metadata, `weight`, and `confidence` are
+  resolved, derived, or computed by Team Memory.
 
 Optional update mechanics are limited to `lineRange` for line-addressable
 Resource edits, `replaceMode: "whole_resource"` for whole Resource replacement,
@@ -98,24 +158,30 @@ Structured capture/update:
 {
   "operations": [
     {
-      "op": "upsert_memory_entity",
-      "name": "MWT",
-      "description": "MWT (Memory Writing Test) is a project related to OpenClaw.",
-      "tags": ["project:mwt", "openclaw"]
+      "target": "memory_entity",
+      "op": "create",
+      "properties": {
+        "name": "MWT",
+        "desc": "MWT (Memory Writing Test) is a project related to OpenClaw.",
+        "tags": ["project:mwt", "openclaw"]
+      }
     },
     {
-      "op": "create_memory_entity_branch",
-      "entityName": "MWT",
-      "title": "MWT is related to OpenClaw",
-      "description": "The project MWT (Memory Writing Test) is related to OpenClaw.",
-      "tags": ["project:mwt", "openclaw"]
+      "target": "memory_entity_branch",
+      "op": "create",
+      "subject": "MWT",
+      "properties": {
+        "name": "MWT is related to OpenClaw",
+        "desc": "The project MWT (Memory Writing Test) is related to OpenClaw.",
+        "tags": ["project:mwt", "openclaw"]
+      }
     },
     {
-      "op": "create_memory_relation",
-      "relationType": "relates_to",
-      "source": { "kind": "memory_entity", "name": "MWT" },
-      "target": { "kind": "memory_entity", "name": "OpenClaw" },
-      "description": "MWT is related to OpenClaw."
+      "target": "memory_relation",
+      "op": "create",
+      "type": "relates_to",
+      "subject": { "target": "memory_entity", "name": "MWT" },
+      "object": { "target": "memory_entity", "name": "OpenClaw" }
     }
   ]
 }
@@ -130,24 +196,69 @@ in this order when applicable: L3 `MemoryEntity` upsert/update, L2
 evidence link to an already ingested Resource/ResourceChunk, L2
 `MemoryRelation` creation/replacement, and optional L3 summary refresh.
 
+Every item in `operations[]` is an atomic operation in the resulting commit.
+Each operation has:
+
+- `target` (required): `memory_entity`, `memory_entity_branch`, or
+  `memory_relation`.
+- `op` (required): operation verb for that target.
+- `properties` (required for entity and branch writes): agent-owned fields to
+  set on the target object.
+- `subject` / `object` (required for relation writes): named endpoints resolved
+  by Team Memory under the trusted session root.
+- `type` (required for relation writes): the agent-facing relation type, mapped
+  by Team Memory to internal `MemoryRelation.relationType`.
+
+Supported operation shapes:
+
+| Target | Op | Required fields | Optional fields |
+| --- | --- | --- | --- |
+| `memory_entity` | `create` | `properties.name`, `properties.desc` | `properties.tags`, `properties.status`, `properties.extra` |
+| `memory_entity` | `update` | `properties.name` | `properties.desc`, `properties.tags`, `properties.status`, `properties.extra` |
+| `memory_entity` | `refresh` | `properties.name`, `properties.desc` | `properties.tags`, `properties.status`, `properties.extra` |
+| `memory_entity_branch` | `create` | `subject`, `properties.name`, `properties.desc` | `properties.tags`, `properties.status`, `properties.extra` |
+| `memory_entity_branch` | `update_metadata` | `subject`, `properties.name` | `properties.tags`, `properties.status`, `properties.extra` |
+| `memory_relation` | `create` | `type`, `subject`, `object` | none |
+| `memory_relation` | `replace` | `type`, `subject`, `object` | none |
+
+Relation endpoint shape:
+
+```json
+{
+  "target": "memory_entity_branch",
+  "name": "Confirm latest ticket summaries",
+  "parent": "Riverfront release checklist"
+}
+```
+
+`parent` is required when endpoint `target` is `memory_entity_branch`; it is the
+agent-authored name of the containing `MemoryEntity`. For `memory_entity`,
+`resource`, and `resource_chunk` endpoints, `name` resolves the visible name or
+already-imported chunk/resource identifier. Agents do not provide generated ids.
+Endpoint `target` is the endpoint object kind; it is not the operation-level
+`target` field that selects `memory_entity`, `memory_entity_branch`, or
+`memory_relation`.
+
 Structured capture supports these operation families:
 
 ```ts
 type MemoryCaptureOperation =
-  | UpsertMemoryEntityOperation
+  | CreateMemoryEntityOperation
   | UpdateMemoryEntityOperation
+  | RefreshMemoryEntityOperation
   | CreateMemoryEntityBranchOperation
   | UpdateMemoryEntityBranchMetadataOperation
   | CreateMemoryRelationOperation
   | ReplaceMemoryRelationOperation
-  | LinkEvidenceOperation
-  | RefreshMemoryEntitySummaryOperation
 ```
 
 Agents do not pass `includeHistory`, `oldClaim`, `newClaim`, `intent`,
-relationship intent, user identity, subject, task scope, root identity, source
-metadata, outcome, session provenance, fact keywords, embeddings, BM25 fields,
-timestamps, generated ids, or a top-level `conflict: true` flag.
+relationship intent, relation metadata such as `properties.desc`,
+`properties.role`, `properties.ordinal`, or `properties.required`, ranking
+scores such as `properties.importance`, `properties.confidence`, or
+`properties.weight`, user identity, task scope, root identity, source metadata,
+outcome, session provenance, fact keywords, embeddings, BM25 fields, timestamps,
+generated ids, or a top-level `conflict: true` flag.
 
 ## Memory Update, Recall, And Reranking Rules
 
@@ -177,10 +288,10 @@ If branch similarity is below the deduplication threshold, the write is new
 concrete fact content/details. Team Memory creates a new `MemoryEntityBranch`.
 It must not call an LLM merge and must not directly modify the old branch.
 
-A semantic contradiction is represented by an explicit
-`create_memory_relation` operation with `relationType: "contradicts"` between
-the old and new branches. Team Memory must not infer `contradicts` merely
-because two values differ, and ordinary Agent tools must not expose a top-level
+A semantic contradiction is represented by an explicit `memory_relation`
+operation with `op: "create"` and `type: "contradicts"` between the old and new
+branches. Team Memory must not infer `contradicts` merely because two values
+differ, and ordinary Agent tools must not expose a top-level
 `payload.conflict: true` shortcut. If the Agent wants to mark a conflict, it
 recalls the old branch if needed, creates the new branch, and creates the
 `contradicts` relation in the same structured capture call.
@@ -199,13 +310,16 @@ Agent-updatable resources and fields:
 - `Resource`: code and Markdown-like text resources can be updated to specific
   lines and reviewed as diffs; binary files, archives, images, and other
   non-line-addressable attachments can only be replaced as whole resources.
-- `MemoryRelation`: `name` / `title`, `description`, `tags`, `status`,
-  `sourceId`, `targetId`, and `relationType`.
+- `MemoryRelation`: Agent-facing writes use only `type`, `subject`, and
+  `object`; internal endpoint ids, `relationType`, relation
+  description/role/order/required metadata, `weight`, and `confidence` are
+  system-owned.
 
 System-managed resources and fields:
 
 - `id` / uuid, `createdAt`, `updatedAt`, embeddings, BM25 index rows, source
-  metadata, session provenance, and host provenance.
+  metadata, session provenance, host provenance, branch importance/confidence,
+  and relation weight/confidence.
 
 Atomic facts require durable embeddings. Production memory configuration must
 require an embedding model for `MemoryEntityBranch`, `MemoryEntity`, and
@@ -452,7 +566,7 @@ Memory result:
         "sourceId": "22222222-2222-4222-8222-222222222221",
         "targetKind": "resource_chunk",
         "targetId": "33333333-3333-4333-8333-333333333333",
-        "relationType": "refers_to"
+        "type": "refers_to"
       }
     }
   ]
@@ -501,7 +615,7 @@ Memory result:
         "sourceKind": "memory_entity_branch",
         "targetId": "55555555-5555-4555-8555-555555555555",
         "targetKind": "memory_entity_branch",
-        "relationType": "next_is",
+        "type": "next_is",
         "ordinal": 1
       }
     }
@@ -573,9 +687,9 @@ Memory result:
   "commitIds": ["commit:mwt-capture"],
   "extra": {
     "operationsApplied": [
-      "upsert_memory_entity",
-      "create_memory_entity_branch",
-      "create_memory_relation"
+      "memory_entity:create",
+      "memory_entity_branch:create",
+      "memory_relation:create"
     ]
   }
 }
@@ -620,7 +734,7 @@ Memory result:
     "captureDecision": "new_branch",
     "createdRelations": [
       {
-        "relationType": "relates_to",
+        "type": "relates_to",
         "sourceId": "22222222-2222-4222-8222-222222222222",
         "targetId": "22222222-2222-4222-8222-222222222221"
       }
@@ -647,11 +761,12 @@ Real path:
 2. Memory validates that the referenced old branch and new branch endpoint names
    resolve uniquely under the trusted root.
 3. In one commit, memory creates the new `MemoryEntityBranch` and a
-   `MemoryRelation` with `relationType: "contradicts"` from the new branch to
+   `MemoryRelation` with `type: "contradicts"` from the new branch to
    the old branch.
-4. Without an explicit `create_memory_relation` operation, this path must not
-   create `contradicts`; the non-conflict path creates a new branch and only
-   creates `relates_to` when such a relation operation is supplied.
+4. Without an explicit `memory_relation` `create` operation with
+   `type: "contradicts"`, this path must not create `contradicts`; the
+   non-conflict path creates a new branch and only creates `relates_to` when
+   such a relation operation is supplied.
 
 Agent call:
 
@@ -659,26 +774,29 @@ Agent call:
 {
   "operations": [
     {
-      "op": "create_memory_entity_branch",
-      "entityName": "Test 1",
-      "title": "Test 1 is about OpenClaw",
-      "description": "Test 1 is another test regarding OpenClaw.",
-      "tags": ["project:test-1", "openclaw"]
+      "target": "memory_entity_branch",
+      "op": "create",
+      "subject": "Test 1",
+      "properties": {
+        "name": "Test 1 is about OpenClaw",
+        "desc": "Test 1 is another test regarding OpenClaw.",
+        "tags": ["project:test-1", "openclaw"]
+      }
     },
     {
-      "op": "create_memory_relation",
-      "relationType": "contradicts",
-      "source": {
-        "kind": "memory_entity_branch",
-        "entityName": "Test 1",
-        "name": "Test 1 is about OpenClaw"
+      "target": "memory_relation",
+      "op": "create",
+      "type": "contradicts",
+      "subject": {
+        "target": "memory_entity_branch",
+        "name": "Test 1 is about OpenClaw",
+        "parent": "Test 1"
       },
-      "target": {
-        "kind": "memory_entity_branch",
-        "entityName": "Test 1",
-        "name": "Test 1 local Hermes is running in a container"
-      },
-      "description": "The OpenClaw interpretation contradicts the older local Hermes/container interpretation."
+      "object": {
+        "target": "memory_entity_branch",
+        "name": "Test 1 local Hermes is running in a container",
+        "parent": "Test 1"
+      }
     }
   ]
 }
@@ -696,7 +814,7 @@ Memory result:
     "createdRelations": [
       {
         "id": "relation:test-1-v2-contradicts-v1",
-        "relationType": "contradicts",
+        "type": "contradicts",
         "sourceId": "99999999-9999-4999-8999-999999999999",
         "targetId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
       }
@@ -742,7 +860,7 @@ Memory result:
     {
       "kind": "relation",
       "relation": {
-        "relationType": "contradicts",
+        "type": "contradicts",
         "sourceId": "99999999-9999-4999-8999-999999999999",
         "targetId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
       }

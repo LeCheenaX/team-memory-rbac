@@ -19,7 +19,7 @@ create table if not exists rbac_agents (agent_id text primary key, owner_user_id
 create table if not exists rbac_roles (role_id text primary key, payload_json text not null);
 create table if not exists rbac_assignments (assignment_id text primary key, user_id text not null, root_entity_id text not null, payload_json text not null);
 create index if not exists rbac_assignments_subject_root on rbac_assignments(user_id, root_entity_id);
-create table if not exists rbac_delegations (delegation_id text primary key, agent_id text not null, owner_user_id text not null, root_entity_id text not null, payload_json text not null);
+create table if not exists rbac_delegations (delegation_id text primary key, agent_id text, owner_user_id text not null, root_entity_id text not null, payload_json text not null);
 create index if not exists rbac_delegations_agent_root on rbac_delegations(agent_id, root_entity_id);
 create table if not exists rbac_sessions (session_id text primary key, token_hash text not null unique, user_id text not null, agent_id text, root_entity_id text not null, task_scope_json text not null, delegation_id text, parent_agent_id text, expires_at text not null, revoked_at text, created_at text not null);
 create table if not exists rbac_user_credentials (user_id text primary key, password_hash text not null, created_at text not null, updated_at text not null);
@@ -159,7 +159,7 @@ export class LibsqlRbacAuthority implements RbacAuthority {
 
   async listAgentDelegations(agentId: string, rootEntityId: string): Promise<AgentDelegation[]> {
     return this.getMany<AgentDelegation>(
-      "select payload_json from rbac_delegations where agent_id = ? and root_entity_id = ?",
+      "select payload_json from rbac_delegations where (agent_id = ? or agent_id is null) and root_entity_id = ?",
       [agentId, rootEntityId],
     );
   }
@@ -207,9 +207,13 @@ export class LibsqlRbacAuthority implements RbacAuthority {
   async saveDelegation(delegation: AgentDelegation): Promise<void> {
     await this.client.execute({
       sql: "insert into rbac_delegations(delegation_id, agent_id, owner_user_id, root_entity_id, payload_json) values (?, ?, ?, ?, ?) on conflict(delegation_id) do update set agent_id = excluded.agent_id, owner_user_id = excluded.owner_user_id, root_entity_id = excluded.root_entity_id, payload_json = excluded.payload_json",
-      args: [delegation.id, delegation.agentId, delegation.ownerUserId, delegation.rootEntityId, JSON.stringify(delegation)],
+      args: [delegation.id, delegation.agentId ?? null, delegation.ownerUserId, delegation.rootEntityId, JSON.stringify(delegation)],
     });
-    await this.advancePermissionWatermark(delegation.agentId, delegation.rootEntityId);
+    if (delegation.agentId === undefined) {
+      await this.advanceUserAtRoot(delegation.ownerUserId, delegation.rootEntityId);
+    } else {
+      await this.advancePermissionWatermark(delegation.agentId, delegation.rootEntityId);
+    }
   }
 
   async revokeAssignment(id: string, revokedAt: string): Promise<void> {
@@ -219,7 +223,11 @@ export class LibsqlRbacAuthority implements RbacAuthority {
 
   async revokeDelegation(id: string, revokedAt: string): Promise<void> {
     const delegation = await this.revoke<AgentDelegation>("rbac_delegations", "delegation_id", id, revokedAt);
-    await this.advancePermissionWatermark(delegation.agentId, delegation.rootEntityId);
+    if (delegation.agentId === undefined) {
+      await this.advanceUserAtRoot(delegation.ownerUserId, delegation.rootEntityId);
+    } else {
+      await this.advancePermissionWatermark(delegation.agentId, delegation.rootEntityId);
+    }
   }
 
   async createSession(input: CreateSessionInput): Promise<CreatedSession> {
@@ -467,7 +475,7 @@ export class LibsqlRbacAuthority implements RbacAuthority {
   }
 
   private async rootsForAgent(agentId: string): Promise<string[]> {
-    const result = await this.client.execute({ sql: "select distinct root_entity_id from rbac_delegations where agent_id = ?", args: [agentId] });
+    const result = await this.client.execute({ sql: "select distinct root_entity_id from rbac_delegations where agent_id = ? or agent_id is null", args: [agentId] });
     return result.rows.flatMap((row) => {
       const value = (row as Record<string, unknown>).root_entity_id;
       return typeof value === "string" ? [value] : [];
@@ -476,7 +484,7 @@ export class LibsqlRbacAuthority implements RbacAuthority {
 
   private async agentIdsOwnedByUserAtRoot(userId: string, rootEntityId: string): Promise<string[]> {
     const result = await this.client.execute({
-      sql: "select distinct agent_id from rbac_delegations where owner_user_id = ? and root_entity_id = ?",
+      sql: "select distinct agent_id from rbac_delegations where owner_user_id = ? and root_entity_id = ? and agent_id is not null",
       args: [userId, rootEntityId],
     });
     return result.rows.flatMap((row) => {

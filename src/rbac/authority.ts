@@ -65,7 +65,8 @@ export class InMemoryRbacAuthority implements RbacAuthority {
   ): Promise<AgentDelegation[]> {
     return this.delegations.filter(
       (delegation) =>
-        delegation.agentId === agentId &&
+        (delegation.agentId === agentId ||
+          delegation.agentId === undefined) &&
         delegation.rootEntityId === rootEntityId,
     );
   }

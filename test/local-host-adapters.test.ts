@@ -49,19 +49,21 @@ test("OpenClaw plugin and Claude Code hooks run against a local gateway without 
     });
     assert.deepEqual(
       openclaw.tools().map((tool) => tool.name),
-      ["memory_search", "memory_catalog", "memory_write"],
+      ["memory_search", "memory_catalog", "memory_write", "memory_import", "memory_ingest", "memory_get"],
     );
     await openclaw.call("memory_write", {
-      clientMutationId: "local-openclaw-memory",
-      target: {
-        kind: "memory_entity",
-        name: "Local OpenClaw Offline Memory",
-      },
-      patch: {
-        title: "Local OpenClaw Offline Memory",
-        description: "OpenClaw works through the local gateway",
-        tags: ["local"],
-      },
+      operations: [
+        {
+          target: "memory_entity",
+          op: "create",
+          properties: {
+            name: "Local OpenClaw Offline Memory",
+            title: "Local OpenClaw Offline Memory",
+            description: "OpenClaw works through the local gateway",
+            tags: ["local"],
+          },
+        },
+      ],
     });
     const openclawSearch = await openclaw.call("memory_search", {
       text: "Local OpenClaw Offline Memory",
@@ -74,6 +76,13 @@ test("OpenClaw plugin and Claude Code hooks run against a local gateway without 
       prompt: "Run local Claude Code offline memory",
       session_id: "local-claude-code",
     });
+    assert.ok(
+      runtime.history
+        .readActiveView("root-local-hosts", "main")
+        .resourceChunks.some((chunk) =>
+          chunk.text.includes("Run local Claude Code offline memory")
+        ),
+    );
     const recall = await hooks.userPromptSubmit({
       hook_event_name: "UserPromptSubmit",
       prompt: "Recall local Claude Code offline memory",
@@ -81,7 +90,7 @@ test("OpenClaw plugin and Claude Code hooks run against a local gateway without 
     });
     assert.match(
       recall.hookSpecificOutput.additionalContext ?? "",
-      /local Claude Code offline memory/i,
+      /Local OpenClaw Offline Memory/i,
     );
   } finally {
     runtime.close();

@@ -79,14 +79,7 @@ export const BUILT_IN_ROLES: readonly Role[] = [
     name: "root_admin",
     kind: "built_in",
     status: "active",
-    permissions: permissionsForActions(MEMORY_ACTIONS).map(
-      (permission) => ({
-        ...permission,
-        constraints: {
-          allowRootEntityMutation: true,
-        },
-      }),
-    ),
+    permissions: permissionsForActions(MEMORY_ACTIONS),
   },
 ] as const;
 

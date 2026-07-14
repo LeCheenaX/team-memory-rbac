@@ -94,16 +94,18 @@ async function onboard(baseUrl: string, token: string): Promise<string> {
 
 async function writeNote(client: TeamMemoryHttpClient, suffix: string): Promise<void> {
   await client.write({
-    clientMutationId: `prod-write-${suffix}`,
-    target: {
-      kind: "memory_entity",
-      name: `Production ${suffix}`,
-    },
-    patch: {
-      title: `Production ${suffix}`,
-      description: "Direct host memory works",
-      tags: ["production"],
-    },
+    operations: [
+      {
+        target: "memory_entity",
+        op: "create",
+        properties: {
+          name: `Production ${suffix}`,
+          title: `Production ${suffix}`,
+          description: "Direct host memory works",
+          tags: ["production"],
+        },
+      },
+    ],
   });
 }
 
@@ -164,7 +166,7 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     assert.ok(!tools.some((tool) => tool.name === "memory.importResource"));
     assert.ok(!tools.some((tool) => tool.name === "memory.ingestResource"));
     const writeTool = tools.find((tool) => tool.name === "memory.write");
-    assert.equal(writeTool?.inputSchema.required, undefined);
+    assert.deepEqual(writeTool?.inputSchema.required, ["operations"]);
     assert.equal(writeTool?.inputSchema.additionalProperties, false);
     assert.match(writeTool?.description ?? "", /operations\[\]/);
     assert.match(writeTool?.description ?? "", /contradicts/);
@@ -179,7 +181,7 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     });
     assert.deepEqual(
       openclaw.tools().map((tool) => tool.name),
-      ["memory_search", "memory_catalog", "memory_write"],
+      ["memory_search", "memory_catalog", "memory_write", "memory_import", "memory_ingest", "memory_get"],
     );
     const openclawWrite = openclaw.tools().find((tool) => tool.name === "memory_write");
     assert.match(openclawWrite?.description ?? "", /operations\[\]/);
@@ -187,16 +189,18 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     assert.match(openclawWrite?.description ?? "", /top-level payload\.conflict/);
 
     await openclaw.call("memory_write", {
-      clientMutationId: "openclaw-write",
-      target: {
-        kind: "memory_entity",
-        name: "OpenClaw Production Memory",
-      },
-      patch: {
-        title: "OpenClaw Production Memory",
-        description: "OpenClaw writes through stable capture",
-        tags: ["openclaw"],
-      },
+      operations: [
+        {
+          target: "memory_entity",
+          op: "create",
+          properties: {
+            name: "OpenClaw Production Memory",
+            title: "OpenClaw Production Memory",
+            description: "OpenClaw writes through stable capture",
+            tags: ["openclaw"],
+          },
+        },
+      ],
     });
     const search = await openclaw.call("memory_search", {
       text: "OpenClaw Production",

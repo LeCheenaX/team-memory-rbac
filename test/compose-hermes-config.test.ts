@@ -6,7 +6,7 @@ test("Hermes local compose setup and manual flow do not require server client to
   const baseCompose = await readFile("compose.yaml", "utf8");
   const compose = await readFile("compose.hermes.yaml", "utf8");
   const packageJson = await readFile("package.json", "utf8");
-  const manualFlow = await readFile("docs/operations/hermes-manual-v1-test.md", "utf8");
+  const manualFlow = await readFile("docs/legacy/hermes-manual-v1-test.md", "utf8");
   const hermesConfig = JSON.parse(
     await readFile("config/team-memory.hermes-local.json", "utf8"),
   ) as {

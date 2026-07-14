@@ -2,6 +2,7 @@ import type {
   AgentDelegation,
   MemoryAction,
   Permission,
+  PermissionConstraint,
   PermissionDecision,
   PolicyEngine,
   PrincipalContext,
@@ -20,6 +21,9 @@ import type {
 import {
   validateAgentDelegation,
 } from "../rbac/validation.ts";
+import {
+  normalizePermissionConstraints,
+} from "../rbac/permissions.ts";
 import type {
   AgentSessionAuthority,
   SessionPermissionInput,
@@ -193,7 +197,7 @@ export class ToolPermissionAdapter {
   }
 }
 
-function scopeConstraints(taskScope: TaskScope): Permission["constraints"] {
+function scopeConstraints(taskScope: TaskScope): PermissionConstraint {
   return {
     ...(taskScope.allowedTags === undefined
       ? {}
@@ -241,7 +245,7 @@ function scopedPermissions(
   return permissions.map((permission) => ({
     ...structuredClone(permission),
     ...(() => {
-      const original = permission.constraints ?? {};
+      const original = normalizePermissionConstraints(permission);
       const allowedTags = intersection(
         original.allowedTags,
         scope.allowedTags,
@@ -249,6 +253,10 @@ function scopedPermissions(
       const deniedTags = union(
         original.deniedTags,
         scope.deniedTags,
+      );
+      const requiredTags = union(
+        original.requiredTags,
+        scope.requiredTags,
       );
       const allowedRelationTypes = intersection(
         original.allowedRelationTypes,
@@ -269,6 +277,7 @@ function scopedPermissions(
       const constraints = {
         ...(allowedTags === undefined ? {} : { allowedTags }),
         ...(deniedTags === undefined ? {} : { deniedTags }),
+        ...(requiredTags === undefined ? {} : { requiredTags }),
         ...(allowedRelationTypes === undefined
           ? {}
           : { allowedRelationTypes }),
@@ -284,16 +293,26 @@ function scopedPermissions(
       };
       return Object.keys(constraints).length === 0
         ? {}
-        : { constraints };
+        : {
+            ...(constraints.allowedTags === undefined
+              ? {}
+              : { tagsAny: constraints.allowedTags }),
+            ...(constraints.requiredTags === undefined
+              ? {}
+              : { tagsAll: constraints.requiredTags }),
+            ...(constraints.allowedRelationTypes === undefined
+              ? {}
+              : { relationTypes: constraints.allowedRelationTypes }),
+          };
     })(),
   }));
 }
 
 export interface CreateSubAgentDelegationInput {
   id: string;
-  childAgentId: string;
+  childAgentId?: string;
   ownerUserId: string;
-  parentAgentId: string;
+  parentAgentId?: string;
   rootEntityId: string;
   requestedPermissions: Permission[];
   ownerPermissions: Permission[];
@@ -318,14 +337,16 @@ export function createSubAgentDelegation(
   }
   const delegation: AgentDelegation = {
     id: input.id,
-    agentId: input.childAgentId,
+    ...(input.childAgentId === undefined
+      ? {}
+      : { agentId: input.childAgentId }),
     ownerUserId: input.ownerUserId,
     rootEntityId: input.rootEntityId,
     permissions: scopedPermissions(
       input.requestedPermissions,
       input.taskScope,
     ),
-    delegatedBy: input.parentAgentId,
+    delegatedBy: input.parentAgentId ?? input.ownerUserId,
     delegatedAt: input.delegatedAt,
     status: "active",
     ...(input.expiresAt === undefined
@@ -358,14 +379,18 @@ function roleSatisfies(role: Role, required: Permission[]): boolean {
       ) {
         return false;
       }
-      if (permission.constraints === undefined) {
+      if (
+        permission.tagsAny === undefined &&
+        permission.tagsAll === undefined &&
+        permission.relationTypes === undefined &&
+        permission.taskScope === undefined
+      ) {
         return true;
       }
       try {
         validateAgentDelegation(
           {
             id: "analysis",
-            agentId: "analysis",
             ownerUserId: "analysis",
             rootEntityId: "analysis",
             permissions: [structuredClone(permission)],
@@ -392,7 +417,6 @@ function decisionCoversPermission(
     validateAgentDelegation(
       {
         id: "analysis",
-        agentId: decision.subjectId,
         ownerUserId: decision.subjectId,
         rootEntityId: decision.rootEntityId,
         permissions: [structuredClone(permission)],
@@ -407,7 +431,9 @@ function decisionCoversPermission(
           ...(Object.keys(decision.constraints).length === 0
             ? {}
             : {
-                constraints: structuredClone(decision.constraints),
+                tagsAny: decision.constraints.allowedTags,
+                tagsAll: decision.constraints.requiredTags,
+                relationTypes: decision.constraints.allowedRelationTypes,
               }),
         },
       ],
@@ -451,7 +477,7 @@ export class TaskPermissionAnalyzer {
         requiresHumanApproval ||
         isAdminMemoryAction(permission.action) ||
         decision.constraints.requireHumanApproval === true ||
-        permission.constraints?.requireHumanApproval === true;
+        false;
     }
 
     return {

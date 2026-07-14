@@ -58,7 +58,7 @@ test("built-in roles expose the initial responsibility catalog", () => {
   );
 });
 
-test("custom roles reject duplicate permissions and invalid constraints", () => {
+test("custom roles reject duplicate permissions and stale public constraints", () => {
   const duplicatePermission: Permission = {
     action: "search",
     resourceKind: "memory_entity",
@@ -83,10 +83,10 @@ test("custom roles reject duplicate permissions and invalid constraints", () => 
             constraints: {
               maxRelationExpansionDepth: -1,
             },
-          },
+          } as unknown as Permission,
         ],
       }),
-    /maxRelationExpansionDepth/,
+    /permission constraints are internal/,
   );
   assert.throws(
     () =>
@@ -112,7 +112,6 @@ test("agent delegation must remain a subset of owner permissions", () => {
   ];
   const delegation: AgentDelegation = {
     id: "delegation-research",
-    agentId: "agent-research",
     ownerUserId: "user-alice",
     rootEntityId: "root-project-a",
     permissions: [

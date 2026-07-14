@@ -12,7 +12,10 @@
     "tools": [
       "team_memory.search",
       "team_memory.catalog",
-      "team_memory.write"
+      "team_memory.write",
+      "team_memory.import_resource",
+      "team_memory.ingest_resource",
+      "team_memory.read_resource"
     ]
   },
   "activeMemoryPlugin": {
@@ -21,7 +24,10 @@
     "tools": [
       "memory_search",
       "memory_catalog",
-      "memory_write"
+      "memory_write",
+      "memory_import",
+      "memory_ingest",
+      "memory_get"
     ],
     "settings": {
       "plugins.slots.memory": "team-memory-rbac"

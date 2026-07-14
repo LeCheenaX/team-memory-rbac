@@ -127,12 +127,10 @@ export class TeamManagementCli {
         {
           action: "read",
           resourceKind: "memory_entity",
-          constraints: { allowRootEntityMutation: true },
         },
         {
           action: "search",
           resourceKind: "memory_entity",
-          constraints: { allowRootEntityMutation: true },
         },
       ];
     }

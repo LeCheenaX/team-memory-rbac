@@ -125,18 +125,15 @@ test("agent permissions intersect owner roles, delegation, and task scope", asyn
   };
   const delegation: AgentDelegation = {
     id: "delegation-read-architecture",
-    agentId: contractFixtures.agent.id,
     ownerUserId: contractFixtures.user.id,
     rootEntityId: "root-project-a",
     permissions: [
       {
         action: "read",
         resourceKind: "memory_entity",
+        tagsAny: ["architecture", "security"],
       },
     ],
-    constraints: {
-      allowedTags: ["architecture", "security"],
-    },
     delegatedBy: contractFixtures.user.id,
     delegatedAt: "2026-06-25T00:00:00.000Z",
     status: "active",
@@ -236,9 +233,6 @@ test("agents cannot execute administrator actions even when the owner can", asyn
       {
         action: "create_root_entity",
         resourceKind: "memory_entity",
-        constraints: {
-          allowRootEntityMutation: true,
-        },
       },
     ],
   };
@@ -347,9 +341,7 @@ test("user requests also honor task scope and union alternative role grants", as
       {
         action: "read",
         resourceKind: "memory_entity",
-        constraints: {
-          allowedTags: ["architecture"],
-        },
+        tagsAny: ["architecture"],
       },
     ],
   };
@@ -362,9 +354,7 @@ test("user requests also honor task scope and union alternative role grants", as
       {
         action: "read",
         resourceKind: "memory_entity",
-        constraints: {
-          allowedTags: ["security"],
-        },
+        tagsAny: ["security"],
       },
     ],
   };
@@ -418,6 +408,57 @@ test("user requests also honor task scope and union alternative role grants", as
   ]);
   assert.equal(scopedDenial.allowed, false);
   assert.equal(scopedDenial.reason, "outside_task_scope");
+});
+
+test("flat Permission tagsAll requires every requested tag", async () => {
+  const role: Role = {
+    id: "role-strict-reader",
+    name: "strict_reader",
+    kind: "custom",
+    status: "active",
+    permissions: [
+      {
+        action: "read",
+        resourceKind: "memory_entity",
+        tagsAll: ["project:riverfront", "weekly-report"],
+      },
+    ],
+  };
+  const engine = new ScopedPolicyEngine(
+    new InMemoryRbacAuthority({
+      users: [contractFixtures.user],
+      roles: [role],
+      assignments: [
+        assignment("assignment-strict", "root-project-a", role.id),
+      ],
+    }),
+    { now: () => now },
+  );
+
+  const denied = await engine.decide({
+    subject: {
+      kind: "user",
+      userId: contractFixtures.user.id,
+    },
+    rootEntityId: "root-project-a",
+    action: "read",
+    resourceKind: "memory_entity",
+    tags: ["project:riverfront"],
+  });
+  const allowed = await engine.decide({
+    subject: {
+      kind: "user",
+      userId: contractFixtures.user.id,
+    },
+    rootEntityId: "root-project-a",
+    action: "read",
+    resourceKind: "memory_entity",
+    tags: ["project:riverfront", "weekly-report"],
+  });
+
+  assert.equal(denied.allowed, false);
+  assert.equal(denied.reason, "permission_constraint");
+  assert.equal(allowed.allowed, true);
 });
 
 test("built-in agent responsibilities receive only their delegated capability", async () => {

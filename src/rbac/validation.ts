@@ -4,13 +4,37 @@ import type {
   PermissionConstraint,
   Role,
 } from "../contracts/rbac.ts";
-import { isPermissionCombinationSupported } from "./permissions.ts";
+import {
+  isPermissionCombinationSupported,
+  normalizePermissionConstraints,
+} from "./permissions.ts";
 
 function permissionKey(permission: Permission): string {
-  return `${permission.action}:${permission.resourceKind}`;
+  return JSON.stringify({
+    action: permission.action,
+    resourceKind: permission.resourceKind,
+    tagsAny: permission.tagsAny ?? [],
+    tagsAll: permission.tagsAll ?? [],
+    relationTypes: permission.relationTypes ?? [],
+    taskScope: permission.taskScope ?? [],
+  });
+}
+
+function assertNoStaleConstraintPayload(permission: Permission): void {
+  if ("constraints" in (permission as unknown as Record<string, unknown>)) {
+    throw new Error(
+      "permission constraints are internal; use flat Permission fields",
+    );
+  }
 }
 
 function assertConstraint(constraint: PermissionConstraint): void {
+  if (
+    constraint.requiredTags !== undefined &&
+    constraint.requiredTags.length === 0
+  ) {
+    throw new Error("requiredTags must not be empty");
+  }
   if (
     constraint.maxRelationExpansionDepth !== undefined &&
     (!Number.isInteger(constraint.maxRelationExpansionDepth) ||
@@ -28,17 +52,9 @@ function isSubset<T>(candidate: readonly T[], owner: readonly T[]): boolean {
 }
 
 function constraintsAreSubset(
-  candidate: PermissionConstraint | undefined,
-  owner: PermissionConstraint | undefined,
+  candidate: PermissionConstraint,
+  owner: PermissionConstraint,
 ): boolean {
-  if (candidate === undefined) {
-    return owner === undefined;
-  }
-
-  if (owner === undefined) {
-    return true;
-  }
-
   if (
     candidate.allowRootEntityMutation === true &&
     owner.allowRootEntityMutation !== true
@@ -66,6 +82,14 @@ function constraintsAreSubset(
     owner.allowedTags !== undefined &&
     (candidate.allowedTags === undefined ||
       !isSubset(candidate.allowedTags, owner.allowedTags))
+  ) {
+    return false;
+  }
+
+  if (
+    owner.requiredTags !== undefined &&
+    (candidate.requiredTags === undefined ||
+      !isSubset(owner.requiredTags, candidate.requiredTags))
   ) {
     return false;
   }
@@ -116,6 +140,7 @@ export function validateCustomRole(role: Role): void {
 
   const keys = new Set<string>();
   for (const permission of role.permissions) {
+    assertNoStaleConstraintPayload(permission);
     const key = permissionKey(permission);
     if (keys.has(key)) {
       throw new Error(`duplicate permission: ${key}`);
@@ -124,9 +149,11 @@ export function validateCustomRole(role: Role): void {
     if (!isPermissionCombinationSupported(permission)) {
       throw new Error(`unsupported permission combination: ${key}`);
     }
-    if (permission.constraints !== undefined) {
-      assertConstraint(permission.constraints);
-    }
+    assertConstraint(
+      normalizePermissionConstraints(permission, {
+        allowRootEntityMutation: role.id === "role-root-admin",
+      }),
+    );
   }
 }
 
@@ -139,6 +166,9 @@ export function validateAgentDelegation(
   }
 
   for (const delegatedPermission of delegation.permissions) {
+    assertNoStaleConstraintPayload(delegatedPermission);
+    const delegatedConstraints =
+      normalizePermissionConstraints(delegatedPermission);
     const ownerPermission = ownerPermissions.find(
       (permission) =>
         permission.action === delegatedPermission.action &&
@@ -148,8 +178,8 @@ export function validateAgentDelegation(
     if (
       ownerPermission === undefined ||
       !constraintsAreSubset(
-        delegatedPermission.constraints,
-        ownerPermission.constraints,
+        delegatedConstraints,
+        normalizePermissionConstraints(ownerPermission),
       )
     ) {
       throw new Error(
@@ -158,17 +188,5 @@ export function validateAgentDelegation(
         )}`,
       );
     }
-  }
-
-  if (
-    delegation.constraints !== undefined &&
-    !ownerPermissions.some((permission) =>
-      constraintsAreSubset(
-        delegation.constraints,
-        permission.constraints,
-      ),
-    )
-  ) {
-    throw new Error("delegation constraints exceed owner permission");
   }
 }

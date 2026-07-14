@@ -235,55 +235,61 @@ function extractLifecycleStructuredOperations(
   );
   const operations: Array<Record<string, unknown>> = [
     {
-      op: "upsert_memory_entity",
-      name: entityName,
-      title: entityName,
-      description: semanticText.slice(0, 500),
-      tags: ["lifecycle-extracted", input.host],
+      target: "memory_entity",
+      op: "create",
+      properties: {
+        name: entityName,
+        title: entityName,
+        description: semanticText.slice(0, 500),
+        tags: ["lifecycle-extracted", input.host],
+      },
     },
     {
-      op: "create_memory_entity_branch",
-      entityName,
-      name: branchName,
-      title: branchName,
-      description: semanticText,
-      tags: ["lifecycle-extracted", input.host, input.outcome],
-      extraInfo: {
-        extractedFrom: "host_lifecycle",
-        host: input.host,
-        sessionId: input.sessionId,
-        outcome: input.outcome,
+      target: "memory_entity_branch",
+      op: "create",
+      subject: entityName,
+      properties: {
+        name: branchName,
+        title: branchName,
+        description: semanticText,
+        tags: ["lifecycle-extracted", input.host, input.outcome],
+        extra: {
+          extractedFrom: "host_lifecycle",
+          host: input.host,
+          sessionId: input.sessionId,
+          outcome: input.outcome,
+        },
       },
     },
     ...chunkIds.map((chunkId) => ({
-      op: "link_evidence",
-      source: {
-        kind: "memory_entity",
+      target: "memory_relation",
+      op: "create",
+      type: "refers_to",
+      subject: {
+        target: "memory_entity",
         name: entityName,
       },
-      target: {
-        kind: "resource_chunk",
+      object: {
+        target: "resource_chunk",
         name: chunkId,
       },
-      description: "lifecycle_l1_evidence",
     })),
   ];
   if (/\b(contradict|contradicts|conflict|conflicts|corrected|correction)\b/i.test(semanticText)) {
     operations.push({
-      op: "create_memory_relation",
-      relationType: "contradicts",
-      source: {
-        kind: "memory_entity_branch",
-        entityName,
+      target: "memory_relation",
+      op: "create",
+      type: "contradicts",
+      subject: {
+        target: "memory_entity_branch",
         name: branchName,
+        parent: entityName,
       },
-      target: {
-        kind: "memory_entity_branch",
-        entityName,
+      object: {
+        target: "memory_entity_branch",
         name: "previous recalled branch",
+        parent: entityName,
       },
-      description: "Candidate conflict extracted from lifecycle evidence; resolve the target branch name before writing.",
-      confidence: 0.5,
     });
   }
   return operations;
@@ -376,10 +382,10 @@ const agentToolCatalog = [
   {
     name: "memory.write",
     description: [
-      "Capture durable semantic memory with either target/patch or the preferred operations[] batch.",
+      "Capture durable semantic memory with a required operations[] batch.",
       "Extract entity summaries, atomic MemoryEntityBranch facts, and MemoryRelation edges before writing.",
-      "Few-shot: new project -> upsert_memory_entity then create_memory_entity_branch; summary refresh -> refresh_memory_entity_summary; duplicate fact -> create_memory_entity_branch lets branch vector dedupe update metadata; related fact -> create_memory_relation with relationType relates_to; conflict -> create_memory_entity_branch for the new fact plus create_memory_relation relationType contradicts between old/new branch natural-name endpoints in the same call.",
-      "Do not send raw transcript-as-memory, Agent-authored ResourceChunk, top-level payload.conflict, generated ids, identity/root fields, or outcome-as-semantic-content.",
+      "Few-shot: new project -> memory_entity/create then memory_entity_branch/create; summary refresh -> memory_entity/refresh; duplicate fact -> memory_entity_branch/create lets branch vector dedupe update metadata; related fact -> memory_relation/create with type relates_to; conflict -> memory_entity_branch/create for the new fact plus memory_relation/create with type contradicts between old/new natural-name endpoints in the same call.",
+      "Do not send raw transcript-as-memory, Agent-authored ResourceChunk, clientMutationId, branchRef, expectedHeadCommitId, top-level payload.conflict, generated ids, identity/root fields, embeddings, provenance, or outcome-as-semantic-content.",
     ].join(" "),
     action: "commit",
     resourceKind: "memory_entity",
@@ -410,48 +416,31 @@ function stableToolSchema(toolName: string): {
     return {
       type: "object",
       properties: {
-        target: {
-          type: "object",
-          properties: {
-            kind: {
-              type: "string",
-              enum: [
-                "memory_entity",
-                "memory_entity_branch",
-                "resource",
-                "memory_relation",
-              ],
-            },
-            name: { type: "string" },
-          },
-          required: ["kind", "name"],
-          additionalProperties: false,
-        },
-        patch: { type: "object" },
         operations: {
           type: "array",
           items: {
             type: "object",
             properties: {
+              target: {
+                type: "string",
+                enum: [
+                  "memory_entity",
+                  "memory_entity_branch",
+                  "memory_relation",
+                  "resource",
+                ],
+              },
               op: {
                 type: "string",
                 enum: [
-                  "upsert_memory_entity",
-                  "update_memory_entity",
-                  "refresh_memory_entity_summary",
-                  "create_memory_entity_branch",
-                  "update_memory_entity_branch_metadata",
-                  "create_memory_relation",
-                  "replace_memory_relation",
-                  "link_evidence",
+                  "create",
+                  "update",
+                  "refresh",
+                  "update_metadata",
+                  "replace",
                 ],
               },
-              name: { type: "string" },
-              entityName: { type: "string" },
-              title: { type: "string" },
-              description: { type: "string" },
-              tags: { type: "array", items: { type: "string" } },
-              relationType: {
+              type: {
                 type: "string",
                 enum: [
                   "has",
@@ -463,10 +452,10 @@ function stableToolSchema(toolName: string): {
                   "next_is",
                 ],
               },
-              source: {
+              subject: {
                 type: "object",
                 properties: {
-                  kind: {
+                  target: {
                     type: "string",
                     enum: [
                       "memory_entity",
@@ -476,13 +465,14 @@ function stableToolSchema(toolName: string): {
                     ],
                   },
                   name: { type: "string" },
-                  entityName: { type: "string" },
+                  parent: { type: "string" },
                 },
+                additionalProperties: false,
               },
-              target: {
+              object: {
                 type: "object",
                 properties: {
-                  kind: {
+                  target: {
                     type: "string",
                     enum: [
                       "memory_entity",
@@ -492,18 +482,44 @@ function stableToolSchema(toolName: string): {
                     ],
                   },
                   name: { type: "string" },
-                  entityName: { type: "string" },
+                  parent: { type: "string" },
                 },
+                additionalProperties: false,
+              },
+              name: { type: "string" },
+              properties: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  title: { type: "string" },
+                  desc: { type: "string" },
+                  description: { type: "string" },
+                  tags: { type: "array", items: { type: "string" } },
+                  status: { type: "string" },
+                  extra: { type: "object" },
+                  extraInfo: { type: "object" },
+                  content: { type: "string" },
+                  contentBase64: { type: "string" },
+                  lineRange: {
+                    type: "object",
+                    properties: {
+                      start: { type: "integer" },
+                      end: { type: "integer" },
+                    },
+                    required: ["start", "end"],
+                    additionalProperties: false,
+                  },
+                  replaceMode: { type: "string", enum: ["whole_resource"] },
+                },
+                additionalProperties: false,
               },
             },
-            required: ["op"],
-            additionalProperties: true,
+            required: ["target", "op"],
+            additionalProperties: false,
           },
         },
-        clientMutationId: { type: "string" },
-        branchRef: { type: "string" },
-        expectedHeadCommitId: { type: "string" },
       },
+      required: ["operations"],
       additionalProperties: false,
     };
   }
@@ -522,14 +538,7 @@ const stableSearchFields = new Set([
   "names",
   "tagsAny",
 ]);
-const stableWriteFields = new Set([
-  "target",
-  "patch",
-  "operations",
-  "clientMutationId",
-  "branchRef",
-  "expectedHeadCommitId",
-]);
+const stableWriteFields = new Set(["operations"]);
 const validTargetKinds = new Set([
   "memory_entity",
   "memory_entity_branch",
@@ -560,6 +569,11 @@ const systemManagedPatchFields = new Set([
   "contentHash",
   "payload",
   "conflict",
+  "clientMutationId",
+  "branchRef",
+  "expectedHeadCommitId",
+  "commitId",
+  "operationId",
 ]);
 const entityPatchFields = new Set(["name", "title", "description", "tags", "status"]);
 const branchPatchFields = new Set([...entityPatchFields, "extraInfo"]);
@@ -608,6 +622,40 @@ interface StableWriteResult {
   commitIds: string[];
   extra: Record<string, unknown>;
 }
+
+type CanonicalMemoryOperationTarget =
+  | "memory_entity"
+  | "memory_entity_branch"
+  | "memory_relation"
+  | "resource";
+
+type CanonicalMemoryEndpointTarget =
+  | "memory_entity"
+  | "memory_entity_branch"
+  | "resource"
+  | "resource_chunk";
+
+type CanonicalMemoryOperation = {
+  target: CanonicalMemoryOperationTarget;
+  op: "create" | "update" | "refresh" | "update_metadata" | "replace";
+  name?: string;
+  type?: MemoryRelationType;
+  subject?: CanonicalMemoryEndpoint | string;
+  object?: CanonicalMemoryEndpoint | string;
+  properties?: Record<string, unknown>;
+};
+
+interface CanonicalMemoryEndpoint {
+  target: CanonicalMemoryEndpointTarget;
+  name: string;
+  parent?: string;
+}
+
+type ResourceWriteOperation = CanonicalMemoryOperation & {
+  target: "resource";
+  name: string;
+  properties: Record<string, unknown>;
+};
 
 type StructuredMemoryOperation =
   | {
@@ -903,7 +951,7 @@ function assertNoSystemManagedInput(
   for (const field of Object.keys(payload)) {
     if (
       systemManagedPatchFields.has(field) ||
-      forbiddenPayloadFields.has(field) ||
+      (field !== "subject" && forbiddenPayloadFields.has(field)) ||
       field === "payload" ||
       field === "conflict"
     ) {
@@ -1188,9 +1236,10 @@ export class TeamMemoryGateway {
     payload: Record<string, unknown>,
   ): Promise<AgentDelegation> {
     const session = await this.authenticate(token);
+    const agentId = optionalString(payload, "agentId");
     return this.runtime.admin.createDelegation(session, {
       id: stringValue(payload, "delegationId"),
-      agentId: stringValue(payload, "agentId"),
+      ...(agentId === undefined ? {} : { agentId }),
       rootEntityId: session.rootEntityId,
       permissions: (payload.permissions as AgentDelegation["permissions"] | undefined) ?? [],
       ...(optionalString(payload, "expiresAt") === undefined
@@ -1276,7 +1325,9 @@ export class TeamMemoryGateway {
     const session = await this.authenticate(token);
     await this.runtime.admin.revokeDelegation(session, {
       delegationId: stringValue(payload, "delegationId"),
-      agentId: stringValue(payload, "agentId"),
+      ...(optionalString(payload, "agentId") === undefined
+        ? {}
+        : { agentId: optionalString(payload, "agentId") as string }),
     });
     return { status: "revoked" };
   }
@@ -1420,44 +1471,49 @@ export class TeamMemoryGateway {
         const branchName = compactTitle(description, legacyBranch.title);
         structuredOperations.push(
           {
-            op: "upsert_memory_entity",
-            name: entityName,
-            title: entityName,
-            description: description.slice(0, 500),
-            tags: legacyBranch.tags.filter((tag) =>
-              tag !== "host-memory" &&
-              tag !== "success" &&
-              tag !== "failure" &&
-              tag !== "unknown"
-            ),
+            target: "memory_entity",
+            op: "create",
+            properties: {
+              name: entityName,
+              title: entityName,
+              description: description.slice(0, 500),
+              tags: legacyBranch.tags.filter((tag) =>
+                tag !== "host-memory" &&
+                tag !== "success" &&
+                tag !== "failure" &&
+                tag !== "unknown"
+              ),
+            },
           },
           {
-            op: "create_memory_entity_branch",
-            entityName,
-            name: branchName,
-            title: branchName,
-            description,
-            tags: ["migrated-host-capture"],
-            extraInfo: {
-              migratedFromEntityId: entity.id,
-              migratedFromBranchId: legacyBranch.id,
+            target: "memory_entity_branch",
+            op: "create",
+            subject: entityName,
+            properties: {
+              name: branchName,
+              title: branchName,
+              description,
+              tags: ["migrated-host-capture"],
+              extra: {
+                migratedFromEntityId: entity.id,
+                migratedFromBranchId: legacyBranch.id,
+              },
             },
-            confidence: legacyBranch.confidence,
-            importance: legacyBranch.importance,
           },
         );
         for (const chunkId of relationTargetsByEntityId.get(entity.id) ?? []) {
           structuredOperations.push({
-            op: "link_evidence",
-            source: {
-              kind: "memory_entity",
+            target: "memory_relation",
+            op: "create",
+            type: "refers_to",
+            subject: {
+              target: "memory_entity",
               name: entityName,
             },
-            target: {
-              kind: "resource_chunk",
+            object: {
+              target: "resource_chunk",
               name: chunkId,
             },
-            description: "legacy_host_capture_l1_evidence",
           });
         }
         const previousBranch = seenBranchByEntityName.get(entityName);
@@ -1466,20 +1522,19 @@ export class TeamMemoryGateway {
           /\b(contradict|contradicts|conflict|conflicts|corrected|correction)\b/i.test(description)
         ) {
           structuredOperations.push({
-            op: "create_memory_relation",
-            relationType: "contradicts",
-            source: {
-              kind: "memory_entity_branch",
-              entityName,
+            target: "memory_relation",
+            op: "create",
+            type: "contradicts",
+            subject: {
+              target: "memory_entity_branch",
               name: branchName,
+              parent: entityName,
             },
-            target: {
-              kind: "memory_entity_branch",
-              entityName,
+            object: {
+              target: "memory_entity_branch",
               name: previousBranch,
+              parent: entityName,
             },
-            description: "Migrated explicit conflict from legacy host capture.",
-            confidence: 0.65,
           });
         }
         seenBranchByEntityName.set(entityName, branchName);
@@ -1489,9 +1544,6 @@ export class TeamMemoryGateway {
     const commitIds: string[] = [];
     if (structuredOperations.length > 0) {
       const structured = await this.writeMemory(token, {
-        clientMutationId: optionalString(payload, "clientMutationId") ??
-          `migrate-legacy-host-capture:${randomUUID()}`,
-        branchRef: branch,
         operations: structuredOperations,
       });
       commitIds.push(...structured.commitIds);
@@ -1830,29 +1882,27 @@ export class TeamMemoryGateway {
     assertNoIdentityOverride(payload);
     assertOnlyFields(payload, stableWriteFields, "memory.write");
     const session = await this.authenticate(token);
-    const branch = branchRef(payload);
-    const hasOperations = payload.operations !== undefined;
-    const hasTargetPatch = payload.target !== undefined || payload.patch !== undefined;
-    if (hasOperations === hasTargetPatch) {
-      throw new TeamMemoryGatewayError(
-        "validation_failed",
-        "memory.write requires either operations or target/patch",
+    const branch = "main";
+    const operations = this.canonicalOperations(payload);
+    const resourceOperations = operations.filter((operation) => operation.target === "resource");
+    if (resourceOperations.length > 0) {
+      if (operations.length !== 1) {
+        throw new TeamMemoryGatewayError(
+          "validation_failed",
+          "resource operations must be the only operation in memory.write",
+        );
+      }
+      return this.writeResourceOperation(
+        session,
+        resourceOperations[0] as ResourceWriteOperation,
+        branch,
       );
     }
-    const target = hasTargetPatch ? stableWriteTarget(payload) : undefined;
-    const patch = target === undefined ? undefined : stablePatch(target, payload);
-    if (target?.kind === "resource" && patch !== undefined) {
-      return this.writeResourcePatch(session, target, patch, payload, branch);
-    }
-    const prepared = hasOperations
-      ? await this.prepareStructuredMemoryOperations(session, payload, branch)
-      : await this.prepareStableMemoryOperations(
-          session,
-          target as StableTarget,
-          patch as Record<string, unknown>,
-          payload,
-          branch,
-        );
+    const prepared = await this.prepareStructuredMemoryOperations(
+      session,
+      { operations },
+      branch,
+    );
     if (prepared.status !== "ready") {
       return prepared;
     }
@@ -1863,22 +1913,14 @@ export class TeamMemoryGateway {
       branchRef: branch,
       action: "commit",
       resourceKind: "memory_entity",
-      clientMutationId: optionalString(payload, "clientMutationId") ??
-        `memory-write:${randomUUID()}`,
-      ...(optionalString(payload, "expectedHeadCommitId") === undefined
-        ? (() => {
-            const head = this.runtime.history.headCommitId(
-              session.rootEntityId,
-              branch,
-            );
-            return head === undefined ? {} : { expectedHeadCommitId: head };
-          })()
-        : {
-            expectedHeadCommitId: optionalString(
-              payload,
-              "expectedHeadCommitId",
-            ) as string,
-          }),
+      clientMutationId: `memory-write:${randomUUID()}`,
+      ...(() => {
+        const head = this.runtime.history.headCommitId(
+          session.rootEntityId,
+          branch,
+        );
+        return head === undefined ? {} : { expectedHeadCommitId: head };
+      })(),
       commit: {
         id: prepared.commitId,
         message: `Capture memory update`,
@@ -1904,9 +1946,9 @@ export class TeamMemoryGateway {
     };
   }
 
-  private structuredOperations(
+  private canonicalOperations(
     payload: Record<string, unknown>,
-  ): StructuredMemoryOperation[] {
+  ): CanonicalMemoryOperation[] {
     const value = payload.operations;
     if (!Array.isArray(value) || value.length === 0) {
       throw new TeamMemoryGatewayError(
@@ -1927,15 +1969,274 @@ export class TeamMemoryGateway {
       }
       const candidate = operation as Record<string, unknown>;
       assertNoSystemManagedInput(candidate, `operations[${index}]`);
+      assertOnlyFields(
+        candidate,
+        new Set(["target", "op", "name", "type", "subject", "object", "properties"]),
+        `operations[${index}]`,
+      );
+      const target = candidate.target;
       const op = candidate.op;
+      if (
+        target !== "memory_entity" &&
+        target !== "memory_entity_branch" &&
+        target !== "memory_relation" &&
+        target !== "resource"
+      ) {
+        throw new TeamMemoryGatewayError(
+          "validation_failed",
+          `operations[${index}].target is required`,
+        );
+      }
       if (typeof op !== "string") {
         throw new TeamMemoryGatewayError(
           "validation_failed",
           `operations[${index}].op is required`,
         );
       }
-      return candidate as unknown as StructuredMemoryOperation;
+      if (candidate.properties !== undefined) {
+        if (
+          candidate.properties === null ||
+          typeof candidate.properties !== "object" ||
+          Array.isArray(candidate.properties)
+        ) {
+          throw new TeamMemoryGatewayError(
+            "validation_failed",
+            `operations[${index}].properties must be an object`,
+          );
+        }
+        assertNoSystemManagedInput(
+          candidate.properties as Record<string, unknown>,
+          `operations[${index}].properties`,
+        );
+      }
+      return candidate as unknown as CanonicalMemoryOperation;
     });
+  }
+
+  private structuredOperations(
+    payload: Record<string, unknown>,
+  ): StructuredMemoryOperation[] {
+    return this.canonicalOperations(payload).map((operation, index) =>
+      this.structuredOperationFromCanonical(operation, `operations[${index}]`)
+    );
+  }
+
+  private structuredOperationFromCanonical(
+    operation: CanonicalMemoryOperation,
+    surface: string,
+  ): StructuredMemoryOperation {
+    if (operation.target === "resource") {
+      throw new TeamMemoryGatewayError(
+        "validation_failed",
+        `${surface}.target resource must be the only operation in memory.write`,
+      );
+    }
+    const properties = operation.properties ?? {};
+    const description =
+      typeof properties.description === "string"
+        ? properties.description
+        : typeof properties.desc === "string"
+          ? properties.desc
+          : undefined;
+    if (operation.target === "memory_entity") {
+      assertOnlyFields(
+        properties,
+        new Set(["name", "title", "desc", "description", "tags", "status"]),
+        `${surface}.properties`,
+      );
+      if (
+        operation.op !== "create" &&
+        operation.op !== "update" &&
+        operation.op !== "refresh"
+      ) {
+        throw new TeamMemoryGatewayError(
+          "validation_failed",
+          `${surface}.op is not supported for memory_entity`,
+        );
+      }
+      const name = this.operationName(operation, properties, surface);
+      const tags = properties.tags === undefined ? undefined : optionalTags(properties.tags);
+      const base = {
+        name,
+        title: typeof properties.title === "string" ? properties.title : name,
+        ...(description === undefined ? {} : { description }),
+        ...(tags === undefined ? {} : { tags }),
+        ...(typeof properties.status === "string" ? { status: properties.status } : {}),
+      };
+      if (operation.op === "create") return { op: "upsert_memory_entity", ...base };
+      if (operation.op === "refresh") return { op: "refresh_memory_entity_summary", ...base };
+      return { op: "update_memory_entity", ...base };
+    }
+    if (operation.target === "memory_entity_branch") {
+      assertOnlyFields(
+        properties,
+        new Set(["name", "title", "desc", "description", "tags", "status", "extra", "extraInfo"]),
+        `${surface}.properties`,
+      );
+      if (operation.op !== "create" && operation.op !== "update_metadata") {
+        throw new TeamMemoryGatewayError(
+          "validation_failed",
+          `${surface}.op is not supported for memory_entity_branch`,
+        );
+      }
+      const entityName = this.parentEntityName(operation.subject, surface);
+      const name = this.operationName(operation, properties, surface);
+      const extraInfo = this.extraInfo(properties, surface);
+      const tags = properties.tags === undefined ? undefined : optionalTags(properties.tags);
+      const branch = {
+        entityName,
+        name,
+        title: typeof properties.title === "string" ? properties.title : name,
+        ...(tags === undefined ? {} : { tags }),
+        ...(typeof properties.status === "string" ? { status: properties.status } : {}),
+        ...(extraInfo === undefined ? {} : { extraInfo }),
+      };
+      if (operation.op === "create") {
+        if (description === undefined || description.length === 0) {
+          throw new TeamMemoryGatewayError(
+            "validation_failed",
+            `${surface}.properties.description is required`,
+          );
+        }
+        return { op: "create_memory_entity_branch", ...branch, description };
+      }
+      return { op: "update_memory_entity_branch_metadata", ...branch };
+    }
+    if (operation.target === "memory_relation") {
+      if (operation.properties !== undefined && Object.keys(operation.properties).length > 0) {
+        throw new TeamMemoryGatewayError(
+          "validation_failed",
+          `${surface}.properties is not supported for memory_relation`,
+        );
+      }
+      if (operation.op !== "create" && operation.op !== "replace") {
+        throw new TeamMemoryGatewayError(
+          "validation_failed",
+          `${surface}.op is not supported for memory_relation`,
+        );
+      }
+      const relationType = optionalRelationType(operation.type);
+      if (relationType === undefined) {
+        throw new TeamMemoryGatewayError(
+          "validation_failed",
+          `${surface}.type is required`,
+        );
+      }
+      return {
+        op: operation.op === "replace" ? "replace_memory_relation" : "create_memory_relation",
+        relationType,
+        source: this.structuredEndpoint(operation.subject, `${surface}.subject`),
+        target: this.structuredEndpoint(operation.object, `${surface}.object`),
+      };
+    }
+    throw new TeamMemoryGatewayError(
+      "validation_failed",
+      `${surface}.target is not supported`,
+    );
+  }
+
+  private operationName(
+    operation: CanonicalMemoryOperation,
+    properties: Record<string, unknown>,
+    surface: string,
+  ): string {
+    const name = typeof properties.name === "string" ? properties.name : operation.name;
+    if (typeof name !== "string" || name.length === 0) {
+      throw new TeamMemoryGatewayError(
+        "validation_failed",
+        `${surface}.properties.name is required`,
+      );
+    }
+    return name;
+  }
+
+  private parentEntityName(
+    value: CanonicalMemoryOperation["subject"],
+    surface: string,
+  ): string {
+    if (typeof value === "string" && value.length > 0) return value;
+    const endpoint = this.canonicalEndpoint(value, `${surface}.subject`);
+    if (endpoint.target !== "memory_entity") {
+      throw new TeamMemoryGatewayError(
+        "validation_failed",
+        `${surface}.subject must identify a memory_entity parent`,
+      );
+    }
+    return endpoint.name;
+  }
+
+  private structuredEndpoint(
+    value: CanonicalMemoryOperation["subject"],
+    surface: string,
+  ): StructuredEndpoint {
+    const endpoint = this.canonicalEndpoint(value, surface);
+    if (endpoint.target === "memory_entity_branch") {
+      if (endpoint.parent === undefined) {
+        throw new TeamMemoryGatewayError(
+          "validation_failed",
+          `${surface}.parent is required for memory_entity_branch`,
+        );
+      }
+      return {
+        kind: "memory_entity_branch",
+        entityName: endpoint.parent,
+        name: endpoint.name,
+      };
+    }
+    return {
+      kind: endpoint.target,
+      name: endpoint.name,
+    };
+  }
+
+  private canonicalEndpoint(
+    value: CanonicalMemoryOperation["subject"],
+    surface: string,
+  ): CanonicalMemoryEndpoint {
+    if (typeof value === "string" && value.length > 0) {
+      return { target: "memory_entity", name: value };
+    }
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new TeamMemoryGatewayError(
+        "validation_failed",
+        `${surface} is required`,
+      );
+    }
+    const endpoint = value as unknown as Record<string, unknown>;
+    assertNoSystemManagedInput(endpoint, surface);
+    assertOnlyFields(endpoint, new Set(["target", "name", "parent"]), surface);
+    if (
+      endpoint.target !== "memory_entity" &&
+      endpoint.target !== "memory_entity_branch" &&
+      endpoint.target !== "resource" &&
+      endpoint.target !== "resource_chunk"
+    ) {
+      throw new TeamMemoryGatewayError(
+        "validation_failed",
+        `${surface}.target is required`,
+      );
+    }
+    return {
+      target: endpoint.target,
+      name: stringValue(endpoint, "name"),
+      ...(typeof endpoint.parent === "string" ? { parent: endpoint.parent } : {}),
+    };
+  }
+
+  private extraInfo(
+    properties: Record<string, unknown>,
+    surface: string,
+  ): Record<string, unknown> | undefined {
+    const extra = properties.extraInfo ?? properties.extra;
+    if (extra === undefined) return undefined;
+    if (extra === null || typeof extra !== "object" || Array.isArray(extra)) {
+      throw new TeamMemoryGatewayError(
+        "validation_failed",
+        `${surface}.properties.extra must be an object`,
+      );
+    }
+    assertNoSystemManagedInput(extra as Record<string, unknown>, `${surface}.properties.extra`);
+    return extra as Record<string, unknown>;
   }
 
   private async prepareStructuredMemoryOperations(
@@ -2008,7 +2309,7 @@ export class TeamMemoryGateway {
         id: `operation:${commitId}:${operations.length}`,
         entity,
       });
-      applied.push("upsert_memory_entity");
+      applied.push("memory_entity/create");
       return entity;
     };
     const exactBranch = (entityName: string, name: string): MemoryEntityBranch | StableWriteResult => {
@@ -2112,7 +2413,13 @@ export class TeamMemoryGateway {
           ? { kind: "create_entity", id: `operation:${commitId}:${operations.length}`, entity }
           : { kind: "update_entity", id: `operation:${commitId}:${operations.length}`, targetId: entityId, entity });
         lastEntityId = entityId;
-        applied.push(operation.op);
+        applied.push(
+          operation.op === "refresh_memory_entity_summary"
+            ? "memory_entity/refresh"
+            : operation.op === "update_memory_entity"
+              ? "memory_entity/update"
+              : "memory_entity/create",
+        );
         continue;
       }
 
@@ -2161,7 +2468,7 @@ export class TeamMemoryGateway {
           });
           lastEntityId = entity.id;
           lastBranchId = existing.id;
-          applied.push("update_memory_entity_branch_metadata");
+          applied.push("memory_entity_branch/update_metadata");
           continue;
         }
         const branchId = `branch:${randomUUID()}`;
@@ -2189,7 +2496,7 @@ export class TeamMemoryGateway {
         });
         lastEntityId = entity.id;
         lastBranchId = branchId;
-        applied.push(operation.op);
+        applied.push("memory_entity_branch/create");
         continue;
       }
 
@@ -2209,7 +2516,7 @@ export class TeamMemoryGateway {
         operations.push({ kind: "update_entity_branch_metadata", id: `operation:${commitId}:${operations.length}`, targetId: existing.id, branch: next });
         lastEntityId = existing.entityId;
         lastBranchId = existing.id;
-        applied.push(operation.op);
+        applied.push("memory_entity_branch/update_metadata");
         continue;
       }
 
@@ -2275,7 +2582,11 @@ export class TeamMemoryGateway {
         }
         relations.set(relationId, relation);
         lastRelationId = relationId;
-        applied.push(operation.op);
+        applied.push(
+          operation.op === "replace_memory_relation"
+            ? "memory_relation/replace"
+            : "memory_relation/create",
+        );
         continue;
       }
 
@@ -2541,11 +2852,38 @@ export class TeamMemoryGateway {
     };
   }
 
+  private async writeResourceOperation(
+    session: AuthenticatedSession,
+    operation: ResourceWriteOperation,
+    branch: string,
+  ): Promise<StableWriteResult> {
+    if (operation.op !== "update" && operation.op !== "replace") {
+      throw new TeamMemoryGatewayError(
+        "validation_failed",
+        "resource operations support update or replace",
+      );
+    }
+    if (typeof operation.name !== "string" || operation.name.length === 0) {
+      throw new TeamMemoryGatewayError(
+        "validation_failed",
+        "resource operations require name",
+      );
+    }
+    const patch = operation.properties ?? {};
+    assertNoSystemManagedInput(patch, "resource operation properties");
+    assertOnlyFields(patch, resourcePatchFields, "resource operation properties");
+    return this.writeResourcePatch(
+      session,
+      { kind: "resource", name: operation.name },
+      patch,
+      branch,
+    );
+  }
+
   private async writeResourcePatch(
     session: AuthenticatedSession,
     target: StableTarget,
     patch: Record<string, unknown>,
-    payload: Record<string, unknown>,
     branch: string,
   ): Promise<StableWriteResult> {
     const view = this.runtime.history.readActiveView(session.rootEntityId, branch);
@@ -2590,22 +2928,27 @@ export class TeamMemoryGateway {
       lines.splice(lineRange.start - 1, lineRange.end - lineRange.start + 1, content);
       content = lines.join("\n");
     }
+    const clientMutationId = `memory-write-resource:${randomUUID()}`;
+    const commitId = `commit:${clientMutationId}`;
     const revision = await this.runtime.resources.revise(session, {
-      clientMutationId: optionalString(payload, "clientMutationId") ??
-        `memory-write-resource:${randomUUID()}`,
+      clientMutationId,
+      commitId,
       resourceId: resource.id,
       content,
       branchRef: branch,
-      ...(optionalString(payload, "expectedHeadCommitId") === undefined
-        ? {}
-        : { expectedHeadCommitId: optionalString(payload, "expectedHeadCommitId") as string }),
+    });
+    const ingestion = await this.tryAutomaticIngestion(session, {
+      resourceId: resource.id,
+      revisionId: revision.revisionId,
+      branchRef: branch,
+      clientMutationId: `${clientMutationId}:auto-ingest`,
     });
     return {
       status: "captured",
       resourceId: resource.id,
       revisionId: revision.revisionId,
-      commitIds: [],
-      extra: { captureDecision: "resource_revision" },
+      commitIds: [commitId],
+      extra: { captureDecision: "resource_revision", ingestion },
     };
   }
 

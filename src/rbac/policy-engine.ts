@@ -14,6 +14,7 @@ import type {
   UserRootRoleAssignment,
 } from "../contracts/rbac.ts";
 import { isAdminMemoryAction } from "../contracts/rbac.ts";
+import { normalizePermissionConstraints } from "./permissions.ts";
 
 export interface ScopedPolicyEngineOptions {
   now?: () => Date;
@@ -111,6 +112,7 @@ function intersectConstraints(
   right: PermissionConstraint = {},
 ): PermissionConstraint {
   const allowedTags = intersection(left.allowedTags, right.allowedTags);
+  const requiredTags = union(left.requiredTags, right.requiredTags);
   const deniedTags = union(left.deniedTags, right.deniedTags);
   const allowedRelationTypes = intersection(
     left.allowedRelationTypes,
@@ -127,6 +129,7 @@ function intersectConstraints(
 
   return {
     ...(allowedTags === undefined ? {} : { allowedTags }),
+    ...(requiredTags === undefined ? {} : { requiredTags }),
     ...(deniedTags === undefined ? {} : { deniedTags }),
     ...(allowedRelationTypes === undefined
       ? {}
@@ -187,6 +190,7 @@ function unionGrantConstraints(
   right: PermissionConstraint,
 ): PermissionConstraint {
   const allowedTags = unionAllowed(left.allowedTags, right.allowedTags);
+  const requiredTags = intersectDenied(left.requiredTags, right.requiredTags);
   const deniedTags = intersectDenied(left.deniedTags, right.deniedTags);
   const allowedRelationTypes = unionAllowed(
     left.allowedRelationTypes,
@@ -203,6 +207,7 @@ function unionGrantConstraints(
 
   return {
     ...(allowedTags === undefined ? {} : { allowedTags }),
+    ...(requiredTags === undefined ? {} : { requiredTags }),
     ...(deniedTags === undefined ? {} : { deniedTags }),
     ...(allowedRelationTypes === undefined
       ? {}
@@ -260,6 +265,15 @@ function taskScopeConstraints(taskScope: TaskScope): PermissionConstraint {
   };
 }
 
+function rolePermissionConstraints(
+  role: Role,
+  permission: Permission,
+): PermissionConstraint {
+  return normalizePermissionConstraints(permission, {
+    allowRootEntityMutation: role.id === "role-root-admin",
+  });
+}
+
 function valuesWithinAllowed<T>(
   values: readonly T[] | undefined,
   allowed: readonly T[] | undefined,
@@ -282,6 +296,20 @@ function valuesOutsideDenied<T>(
   return values.every((value) => !deniedSet.has(value));
 }
 
+function valuesIncludeRequired<T>(
+  values: readonly T[] | undefined,
+  required: readonly T[] | undefined,
+): boolean {
+  if (required === undefined || required.length === 0) {
+    return true;
+  }
+  if (values === undefined) {
+    return false;
+  }
+  const valueSet = new Set(values);
+  return required.every((value) => valueSet.has(value));
+}
+
 function requestWithinConstraints(
   request: PermissionRequest,
   constraints: PermissionConstraint,
@@ -294,6 +322,7 @@ function requestWithinConstraints(
   }
   if (
     !valuesWithinAllowed(request.tags, constraints.allowedTags) ||
+    !valuesIncludeRequired(request.tags, constraints.requiredTags) ||
     !valuesOutsideDenied(request.tags, constraints.deniedTags)
   ) {
     return false;
@@ -406,10 +435,10 @@ export class ScopedPolicyEngine implements PolicyEngine {
         permission.action === request.action &&
         permission.resourceKind === request.resourceKind,
     );
-    const matches = permissionMatches.filter(({ permission }) =>
+    const matches = permissionMatches.filter(({ role, permission }) =>
       requestWithinConstraints(
         request,
-        permission.constraints ?? {},
+        rolePermissionConstraints(role, permission),
       ),
     );
 
@@ -431,13 +460,15 @@ export class ScopedPolicyEngine implements PolicyEngine {
       request.taskScope === undefined
         ? combineAlternativeGrants(
             matches.map(
-              ({ permission }) => permission.constraints ?? {},
+              ({ role, permission }) =>
+                rolePermissionConstraints(role, permission),
             ),
           )
         : intersectConstraints(
             combineAlternativeGrants(
               matches.map(
-                ({ permission }) => permission.constraints ?? {},
+                ({ role, permission }) =>
+                  rolePermissionConstraints(role, permission),
               ),
             ),
             taskScopeConstraints(request.taskScope),
@@ -520,13 +551,13 @@ export class ScopedPolicyEngine implements PolicyEngine {
       for (const delegated of delegationMatches) {
         const effectiveConstraints = intersectConstraints(
           intersectConstraints(
-            ownerPermission.permission.constraints,
-            delegated.permission.constraints,
+            rolePermissionConstraints(
+              ownerPermission.role,
+              ownerPermission.permission,
+            ),
+            normalizePermissionConstraints(delegated.permission),
           ),
-          intersectConstraints(
-            delegated.delegation.constraints,
-            taskScopeConstraints(request.taskScope),
-          ),
+          taskScopeConstraints(request.taskScope),
         );
 
         if (requestWithinConstraints(request, effectiveConstraints)) {

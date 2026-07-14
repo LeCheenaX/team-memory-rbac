@@ -2,6 +2,7 @@ import type { MemoryObjectKind } from "../contracts/memory.ts";
 import type {
   MemoryAction,
   Permission,
+  PermissionConstraint,
 } from "../contracts/rbac.ts";
 
 export const SUPPORTED_RESOURCE_KINDS_BY_ACTION = {
@@ -63,4 +64,33 @@ export function permissionsForActions(
       resourceKind,
     })),
   );
+}
+
+export function normalizePermissionConstraints(
+  permission: Permission,
+  options: { allowRootEntityMutation?: boolean } = {},
+): PermissionConstraint {
+  const allowedTags =
+    permission.tagsAny === undefined
+      ? permission.taskScope
+      : permission.taskScope === undefined
+        ? permission.tagsAny
+        : permission.tagsAny.filter((tag) =>
+            permission.taskScope?.includes(tag),
+          );
+  return {
+    ...(allowedTags === undefined ? {} : { allowedTags: [...allowedTags] }),
+    ...(permission.tagsAll === undefined
+      ? {}
+      : { requiredTags: [...permission.tagsAll] }),
+    ...(permission.relationTypes === undefined
+      ? {}
+      : { allowedRelationTypes: [...permission.relationTypes] }),
+    ...(permission.taskScope === undefined
+      ? {}
+      : { allowedTags: [...permission.taskScope] }),
+    ...(options.allowRootEntityMutation === true
+      ? { allowRootEntityMutation: true }
+      : {}),
+  };
 }

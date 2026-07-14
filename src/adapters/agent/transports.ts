@@ -501,7 +501,7 @@ export class McpTeamMemoryAdapter {
 
   listTools(): Array<{
     name: string;
-    inputSchema: { type: "object"; additionalProperties: true };
+    inputSchema: { type: "object"; properties: Record<string, unknown>; additionalProperties: false };
   }> {
     return [
       "memory.catalog",
@@ -509,7 +509,7 @@ export class McpTeamMemoryAdapter {
       "memory.write",
     ].map((name) => ({
       name,
-      inputSchema: { type: "object", additionalProperties: true },
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
     }));
   }
 

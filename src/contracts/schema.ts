@@ -98,6 +98,7 @@ export const CONTRACT_SCHEMA = {
       additionalProperties: false,
       properties: {
         allowedTags: stringArray,
+        requiredTags: stringArray,
         deniedTags: stringArray,
         allowedRelationTypes: {
           type: "array",
@@ -124,7 +125,14 @@ export const CONTRACT_SCHEMA = {
       properties: {
         action: { $ref: "#/$defs/MemoryAction" },
         resourceKind: { $ref: "#/$defs/MemoryObjectKind" },
-        constraints: { $ref: "#/$defs/PermissionConstraint" },
+        tagsAny: stringArray,
+        tagsAll: stringArray,
+        relationTypes: {
+          type: "array",
+          items: { $ref: "#/$defs/MemoryRelationType" },
+          uniqueItems: true,
+        },
+        taskScope: stringArray,
       },
     },
     Role: {
@@ -202,7 +210,6 @@ export const CONTRACT_SCHEMA = {
       additionalProperties: false,
       required: [
         "id",
-        "agentId",
         "ownerUserId",
         "rootEntityId",
         "permissions",
@@ -220,7 +227,6 @@ export const CONTRACT_SCHEMA = {
           minItems: 1,
           items: { $ref: "#/$defs/Permission" },
         },
-        constraints: { $ref: "#/$defs/PermissionConstraint" },
         delegatedBy: nonEmptyString,
         delegatedAt: timestamp,
         status: { enum: ["active", "revoked"] },
@@ -319,6 +325,144 @@ export const CONTRACT_SCHEMA = {
           uniqueItems: true,
         },
         constraints: { $ref: "#/$defs/PermissionConstraint" },
+      },
+    },
+    MemoryRelationEndpoint: {
+      type: "object",
+      additionalProperties: false,
+      required: ["target", "name"],
+      properties: {
+        target: {
+          enum: [
+            "memory_entity",
+            "memory_entity_branch",
+            "resource",
+            "resource_chunk",
+          ],
+        },
+        name: nonEmptyString,
+        parent: nonEmptyString,
+      },
+    },
+    MemoryCaptureOperationProperties: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        name: nonEmptyString,
+        desc: { type: "string" },
+        tags: stringArray,
+        status: { type: "string" },
+        extra: { type: "object" },
+      },
+    },
+    MemoryCaptureOperation: {
+      oneOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["target", "op", "properties"],
+          properties: {
+            target: { const: "memory_entity" },
+            op: { enum: ["create", "update", "refresh"] },
+            properties: {
+              $ref: "#/$defs/MemoryCaptureOperationProperties",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["target", "op", "subject", "properties"],
+          properties: {
+            target: { const: "memory_entity_branch" },
+            op: { enum: ["create", "update_metadata"] },
+            subject: {
+              oneOf: [
+                nonEmptyString,
+                { $ref: "#/$defs/MemoryRelationEndpoint" },
+              ],
+            },
+            properties: {
+              $ref: "#/$defs/MemoryCaptureOperationProperties",
+            },
+          },
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["target", "op", "type", "subject", "object"],
+          properties: {
+            target: { const: "memory_relation" },
+            op: { enum: ["create", "replace"] },
+            type: { $ref: "#/$defs/MemoryRelationType" },
+            subject: { $ref: "#/$defs/MemoryRelationEndpoint" },
+            object: { $ref: "#/$defs/MemoryRelationEndpoint" },
+          },
+        },
+      ],
+    },
+    AgentFacingCaptureInput: {
+      type: "object",
+      additionalProperties: false,
+      required: ["operations"],
+      properties: {
+        operations: {
+          type: "array",
+          minItems: 1,
+          items: { $ref: "#/$defs/MemoryCaptureOperation" },
+        },
+      },
+    },
+    MemorySearchInput: {
+      type: "object",
+      additionalProperties: false,
+      required: ["query"],
+      properties: {
+        query: nonEmptyString,
+        limit: { type: "integer", minimum: 1 },
+        layer: { enum: ["L1", "L2", "L3"] },
+        names: stringArray,
+        tagsAny: stringArray,
+      },
+    },
+    MemoryCatalogInput: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    HostLifecycleCaptureResult: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "status",
+        "outcome",
+        "resourceId",
+        "revisionId",
+        "chunkIds",
+        "extractionCandidates",
+        "commitIds",
+        "extra",
+      ],
+      properties: {
+        status: { const: "captured" },
+        outcome: { enum: ["success", "failure", "unknown"] },
+        resourceId: nonEmptyString,
+        revisionId: nonEmptyString,
+        chunkIds: {
+          type: "array",
+          items: nonEmptyString,
+          uniqueItems: true,
+        },
+        extractionCandidates: {
+          type: "array",
+          items: { $ref: "#/$defs/MemoryCaptureOperation" },
+        },
+        commitIds: {
+          type: "array",
+          items: nonEmptyString,
+          uniqueItems: true,
+        },
+        extra: { type: "object" },
       },
     },
     MemoryEntity: {
