@@ -1975,6 +1975,42 @@ export class TeamMemoryGateway {
       }
       return matches[0] as MemoryEntity;
     };
+    const ensureEntityForBranch = async (
+      name: string,
+      description: string,
+      tags: string[] = [],
+    ): Promise<MemoryEntity | StableWriteResult> => {
+      const matches = exactEntitiesByName(name);
+      if (matches.length > 1) {
+        return this.ambiguousResult(
+          { kind: "memory_entity", name },
+          matches.map((entity) => entityVisibleName(entity, branchById().get(entity.currentBranchId ?? ""))),
+        );
+      }
+      const existing = matches[0];
+      if (existing !== undefined) return existing;
+      const entityId = `entity:${randomUUID()}`;
+      const entity: MemoryEntity = {
+        id: entityId,
+        rootEntityId: session.rootEntityId,
+        name,
+        title: name,
+        description,
+        tags,
+        embedding: await this.runtime.embeddings.embed([name, description, ...tags].join("\n")),
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      };
+      entities.set(entityId, entity);
+      operations.push({
+        kind: "create_entity",
+        id: `operation:${commitId}:${operations.length}`,
+        entity,
+      });
+      applied.push("upsert_memory_entity");
+      return entity;
+    };
     const exactBranch = (entityName: string, name: string): MemoryEntityBranch | StableWriteResult => {
       const entity = exactEntity(entityName);
       if (isStableWriteResult(entity)) return entity;
@@ -2081,13 +2117,17 @@ export class TeamMemoryGateway {
       }
 
       if (operation.op === "create_memory_entity_branch") {
-        const entity = exactEntity(operation.entityName);
-        if (isStableWriteResult(entity)) return entity;
-        const title = operation.title ?? operation.name ?? operation.description.slice(0, 80);
         const description = operation.description;
         if (typeof description !== "string" || description.length === 0) {
           throw new TeamMemoryGatewayError("validation_failed", `${surface}.description is required`);
         }
+        const entity = await ensureEntityForBranch(
+          operation.entityName,
+          description,
+          operation.tags ?? [],
+        );
+        if (isStableWriteResult(entity)) return entity;
+        const title = operation.title ?? operation.name ?? operation.description.slice(0, 80);
         const embedding = await this.runtime.embeddings.embed(description);
         const entityBranches = [...branches.values()].filter((candidate) => candidate.entityId === entity.id);
         const scored = entityBranches

@@ -424,6 +424,11 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       branchCountBeforeSummary,
     );
     assert.ok(summaryUpdateValue.value.entityId);
+    const branchCountBeforeDuplicateFact = runtime.history
+      .readActiveView("root-gateway", "main")
+      .entityBranches
+      .filter((branch) => branch.entityId === summaryUpdateValue.value.entityId)
+      .length;
     const duplicateFact = await post(base, "/memory/write", writeSession.token, {
       clientMutationId: "write-guide-duplicate-fact",
       operations: [
@@ -452,7 +457,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
           branch.entityId === summaryUpdateValue.value.entityId
         )
         .length,
-      1,
+      branchCountBeforeDuplicateFact,
     );
     assert.equal(
       runtime.history
@@ -462,6 +467,11 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       "HTTP and MCP expose the same stable Team Memory behavior.",
     );
 
+    const branchCountBeforeNewFact = runtime.history
+      .readActiveView("root-gateway", "main")
+      .entityBranches
+      .filter((branch) => branch.entityId === summaryUpdateValue.value.entityId)
+      .length;
     const newFact = await post(base, "/memory/write", writeSession.token, {
       clientMutationId: "write-guide-new-fact",
       operations: [
@@ -482,7 +492,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
           branch.entityId === summaryUpdateValue.value.entityId
         )
         .length,
-      2,
+      branchCountBeforeNewFact + 1,
     );
 
     const secondSameName = await post(base, "/memory/write", writeSession.token, {
@@ -521,6 +531,117 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       ((await unsafe.json()) as { error: { code: string } }).error.code,
       "validation_failed",
     );
+  } finally {
+    await closeServer(server);
+    runtime.close();
+    await removeTemporaryDirectory(directory);
+  }
+});
+
+test("structured branch capture creates a missing entity before writing the fact", async () => {
+  const directory = await temporaryDirectory();
+  const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({
+    directory,
+    databaseName: "branch-first-gateway.db",
+  }));
+  const gateway = new TeamMemoryGateway(runtime, {
+    retrieval: "active-view",
+    projectWrites: false,
+    branchDedupeThreshold: 0.999,
+  });
+  const server = createTeamMemoryServer(gateway);
+  try {
+    await bootstrapDevelopment(runtime, {
+      rootEntityId: "root-branch-first",
+      userId: "user-branch-first",
+      displayName: "Branch First User",
+      sessionId: "session-branch-first-admin",
+      sessionExpiresAt: "2030-01-01T00:00:00.000Z",
+      now,
+    });
+    await runtime.rbac.saveAgent({
+      id: "agent-branch-first-write",
+      ownerUserId: "user-branch-first",
+      agentType: "curator_agent",
+      displayName: "Branch First Write Agent",
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+    await runtime.rbac.saveDelegation({
+      id: "delegation-branch-first-write",
+      agentId: "agent-branch-first-write",
+      ownerUserId: "user-branch-first",
+      rootEntityId: "root-branch-first",
+      permissions: [
+        { action: "read", resourceKind: "memory_entity" },
+        { action: "search", resourceKind: "memory_entity" },
+        { action: "write_entity", resourceKind: "memory_entity" },
+        { action: "write_entity_branch", resourceKind: "memory_entity_branch" },
+        { action: "commit", resourceKind: "memory_entity" },
+      ],
+      delegatedBy: "user-branch-first",
+      delegatedAt: now,
+      status: "active",
+    });
+    const writeSession = await runtime.rbac.createSession({
+      id: "session-branch-first-write",
+      userId: "user-branch-first",
+      agentId: "agent-branch-first-write",
+      delegationId: "delegation-branch-first-write",
+      rootEntityId: "root-branch-first",
+      taskScope: { rootEntityId: "root-branch-first" },
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      createdAt: now,
+    });
+
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    assert.ok(address !== null && typeof address !== "string");
+    if (address === null || typeof address === "string") return;
+    const base = `http://127.0.0.1:${address.port}`;
+
+    const response = await post(base, "/memory/write", writeSession.token, {
+      clientMutationId: "write-branch-first-riverfront",
+      operations: [
+        {
+          op: "create_memory_entity_branch",
+          entityName: "Riverfront",
+          title: "Riverfront is the Nova CRM churn pilot",
+          description: "Riverfront is the Nova CRM customer churn warning pilot.",
+          tags: ["project:riverfront", "hermes"],
+        },
+      ],
+    });
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    const payload = JSON.parse(text) as {
+      value: {
+        status: string;
+        entityId: string;
+        branchId: string;
+        commitIds: string[];
+        extra: { operationsApplied: string[] };
+      };
+    };
+    assert.equal(payload.value.status, "captured");
+    assert.deepEqual(payload.value.extra.operationsApplied, [
+      "upsert_memory_entity",
+      "create_memory_entity_branch",
+    ]);
+    assert.equal(payload.value.commitIds.length, 1);
+
+    const view = runtime.history.readActiveView("root-branch-first", "main");
+    const riverfront = view.entities.find((entity) => entity.title === "Riverfront");
+    assert.ok(riverfront);
+    assert.equal(riverfront.description, "Riverfront is the Nova CRM customer churn warning pilot.");
+    assert.ok(view.entityBranches.some((branch) =>
+      branch.id === payload.value.branchId &&
+      branch.entityId === riverfront.id &&
+      branch.title === "Riverfront is the Nova CRM churn pilot"
+    ));
   } finally {
     await closeServer(server);
     runtime.close();
