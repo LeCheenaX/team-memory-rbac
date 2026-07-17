@@ -298,17 +298,24 @@ class ContractSchemaTest(unittest.TestCase):
         self.assertEqual(calls[1][2]["names"], ["entity-filtered"])
         self.assertEqual(calls[1][2]["tagsAny"], ["hermes"])
 
+        all_messages = [
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "first answer"},
+            {"role": "user", "content": "do the work"},
+            {"role": "assistant", "content": "done"},
+        ]
         captured = provider.add(
-            [
-                {"role": "user", "content": "do the work"},
-                {"role": "assistant", "content": "done"},
-            ],
+            all_messages,
             user_id="hermes-user",
             outcome="success",
+            user_prompt="do the work",
+            final_assistant_message="done",
         )
         self.assertEqual(captured["status"], "captured")
         self.assertEqual(calls[2][1], "host/hermes/capture")
+        self.assertEqual(calls[2][2]["userPrompt"], "do the work")
         self.assertEqual(calls[2][2]["finalAssistantMessage"], "done")
+        self.assertEqual(calls[2][2]["messages"], all_messages)
 
         catalog = provider.catalog()
         self.assertEqual(catalog["tags"][0], "hermes")
@@ -503,6 +510,43 @@ class ContractSchemaTest(unittest.TestCase):
         self.assertIn("oneOf", operation_schema)
         self.assertNotIn("action", str(operation_schema))
         self.assertIn("Never use action/title/content/entity_key/source/target", capture["description"])
+        system_prompt = provider.system_prompt_block()
+        self.assertIn(
+            "Classify each semantic write as repeated, additive, or correction",
+            system_prompt,
+        )
+        self.assertIn("capture only the newly stated semantic delta", capture["description"])
+        self.assertIn("Never merge or append recalled descriptions", capture["description"])
+
+
+        calls = []
+
+        class StubProvider:
+            def add(self, messages, **metadata):
+                calls.append((messages, metadata))
+                return {"status": "captured"}
+
+        module._log_event = lambda *args, **kwargs: None
+        provider._provider = StubProvider()
+        provider._session_id = "session-sync"
+        all_messages = [
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "first answer"},
+            {"role": "user", "content": "current question"},
+            {"role": "assistant", "content": "current answer"},
+        ]
+        provider.sync_turn(
+            "current question",
+            "current answer",
+            session_id="session-sync",
+            messages=all_messages,
+        )
+        self.assertEqual(calls[0][0], all_messages)
+        self.assertEqual(calls[0][1]["user_prompt"], "current question")
+        self.assertEqual(
+            calls[0][1]["final_assistant_message"],
+            "current answer",
+        )
 
 
 if __name__ == "__main__":

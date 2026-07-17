@@ -939,12 +939,11 @@
         }
       }
     },
-    "type": "object",
-    "additionalProperties": false,
     "HostLifecycleCaptureResult": {
+      "type": "object",
+      "additionalProperties": false,
       "required": [
         "status",
-        "outcome",
         "resourceId",
         "revisionId",
         "chunkIds",
@@ -955,13 +954,6 @@
       "properties": {
         "status": {
           "const": "captured"
-        },
-        "outcome": {
-          "enum": [
-            "success",
-            "failure",
-            "unknown"
-          ]
         },
         "resourceId": {
           "type": "string",

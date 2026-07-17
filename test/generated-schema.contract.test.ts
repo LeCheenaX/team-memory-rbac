@@ -104,6 +104,14 @@ test("checked-in JSON Schema matches the TypeScript runtime contract", async () 
     false,
   );
   assert.ok(generated.$defs.HostLifecycleCaptureResult);
+  assert.equal(
+    generated.$defs.HostLifecycleCaptureResult.required.includes("outcome"),
+    false,
+  );
+  assert.equal(
+    "outcome" in generated.$defs.HostLifecycleCaptureResult.properties,
+    false,
+  );
   assert.deepEqual(
     generated.$defs.MemoryEntityBranch.properties.extraInfo.propertyNames.not
       .enum,

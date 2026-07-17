@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "docs/03-manual-tests/本地手动测试.md",
+                "file": "docs/03-manual-tests/HotpotQA自动记忆评估.md",
                 "mode": "preview",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "本地手动测试"
+              "title": "HotpotQA自动记忆评估"
             }
           },
           {
@@ -94,17 +94,16 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "docs/03-manual-tests/本地手动测试.md",
+                "file": "docs/03-manual-tests/HotpotQA自动记忆评估.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline of 本地手动测试"
+              "title": "Outline of HotpotQA自动记忆评估"
             }
           }
-        ],
-        "currentTab": 3
+        ]
       }
     ],
     "direction": "horizontal",
@@ -124,7 +123,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "docs/03-manual-tests/本地手动测试.md",
+                "file": "docs/03-manual-tests/HotpotQA自动记忆评估.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -134,7 +133,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for 本地手动测试"
+              "title": "Backlinks for HotpotQA自动记忆评估"
             }
           },
           {
@@ -143,12 +142,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "docs/03-manual-tests/本地手动测试.md",
+                "file": "docs/03-manual-tests/HotpotQA自动记忆评估.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "Outgoing links from 本地手动测试"
+              "title": "Outgoing links from HotpotQA自动记忆评估"
             }
           },
           {
@@ -186,13 +185,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "docs/03-manual-tests/本地手动测试.md",
+                "file": "docs/03-manual-tests/HotpotQA自动记忆评估.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline of 本地手动测试"
+              "title": "Outline of HotpotQA自动记忆评估"
             }
           }
         ]
@@ -215,14 +214,20 @@
   },
   "active": "edde061eb17aa859",
   "lastOpenFiles": [
-    "test/evaluation/compose.yaml",
-    "test/evaluation/team-memory.eval.json",
-    "test/evaluation/prepare.mjs",
-    "test/evaluation/lib.ts",
-    "test/evaluation",
-    "test/memory-evaluation.test.ts",
-    "docs/02-config/配置文档-local.md",
     "docs/03-manual-tests/本地手动测试.md",
+    "docs/03-manual-tests/HotpotQA自动记忆评估.md",
+    "docs/02-config/配置文档-local.md",
+    "test/lifecycle-memory-extractor.test.ts",
+    "src/adapters/lifecycle/memory-extractor.ts",
+    "scripts/clear-hermes-test-memories.ps1",
+    "scripts/redeploy-hermes-tests.ps1",
+    "test/test-memory-maintenance.test.ts",
+    "scripts/clear-test-memory.mjs",
+    "test/evaluation/README.md.codex-reviewed",
+    "src/adapters/runtime/test-memory-maintenance.ts",
+    "test/memory-evaluation-container.test.ts.codex-reviewed",
+    "test/memory-evaluation.test.ts.codex-reviewed",
+    "test/evaluation/README.md",
     "docs/02-config/配置文档-多端同步.md",
     "docs/01-design/运行时适配器模块.md",
     "docs/01-design/RBAC模块.md",

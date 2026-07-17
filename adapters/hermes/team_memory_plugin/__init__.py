@@ -319,6 +319,10 @@ class TeamMemoryHermesProvider(MemoryProvider):
             "# Team Memory\n"
             f"Active Hermes external memory provider in {mode} mode. "
             "Use Team Memory recall before answering. For ordinary semantic writes, extract entity summaries, atomic branch facts, and explicit relations into operations[] before calling team_memory_capture. "
+            "Classify each semantic write as repeated, additive, or correction before capture. "
+            "For an additive fact, write one independently retrievable branch containing only the newly stated semantic delta; recalled memory is read-only context and must not be copied into the new description. "
+            "For a repeated fact, reuse the same atomic fact name so dedupe can refresh metadata. "
+            "For a correction, recall the old fact, create a new atomic branch, and relate the new fact to the old fact with supersedes or contradicts as appropriate. "
             "Each operation must use target plus op fields, for example target=memory_entity and op=create; never send an action field. "
             "Automatic hooks capture raw conversation history as L1 Resource/CAS evidence first. "
             "Do not pass identity fields, generated ids, raw transcript-as-memory, Agent-authored ResourceChunk, outcome-as-semantic-content, or top-level payload.conflict."
@@ -370,6 +374,8 @@ class TeamMemoryHermesProvider(MemoryProvider):
             ],
             session_id=resolved_session_id,
             outcome="success",
+            user_prompt=user_content,
+            final_assistant_message=assistant_content,
             event="sync_turn",
         )
 
@@ -471,6 +477,8 @@ class TeamMemoryHermesProvider(MemoryProvider):
         session_id: str = "",
         outcome: str = "success",
         error_summary: Any = None,
+        user_prompt: Any = None,
+        final_assistant_message: Any = None,
         event: str = "capture_messages",
     ) -> None:
         metadata: dict[str, Any] = {
@@ -478,6 +486,10 @@ class TeamMemoryHermesProvider(MemoryProvider):
         }
         if isinstance(error_summary, str) and error_summary:
             metadata["error_summary"] = error_summary
+        if isinstance(user_prompt, str) and user_prompt:
+            metadata["user_prompt"] = user_prompt
+        if isinstance(final_assistant_message, str) and final_assistant_message:
+            metadata["final_assistant_message"] = final_assistant_message
         try:
             result = self._provider.add(messages, outcome=outcome, **metadata)
         except Exception as exc:
@@ -531,6 +543,9 @@ class TeamMemoryHermesProvider(MemoryProvider):
                     "Correct branch JSON is {\"target\":\"memory_entity_branch\",\"op\":\"create\",\"subject\":\"Riverfront\",\"properties\":{\"name\":\"Riverfront naming preference\",\"desc\":\"...\"}}. "
                     "Correct relation JSON is {\"target\":\"memory_relation\",\"op\":\"create\",\"type\":\"relates_to\",\"subject\":{\"target\":\"memory_entity\",\"name\":\"Riverfront\"},\"object\":{\"target\":\"memory_entity\",\"name\":\"OpenClaw\"}}. "
                     "Use target=memory_entity with op=refresh for summary refresh; target=memory_entity_branch with op=create for duplicate facts so branch vector dedupe can update metadata; "
+                    "For additive facts, capture only the newly stated semantic delta in a new branch with a predicate-specific name; do not reuse broad topic names such as Riverfront weekly report structure. "
+                    "Never merge or append recalled descriptions into an additive fact, and never resubmit old facts merely to add the new detail. Recalled content is read-only write context. "
+                    "Use the same branch name only for a true repeat of the same independently retrievable fact; use a distinct branch name for a new preference, constraint, responsibility, or workflow step. "
                     "target=memory_relation with op=create and type=relates_to for related facts; target=memory_entity_branch with op=create plus target=memory_relation with op=create and type=contradicts between old/new natural-name endpoints for conflicts. "
                     "Never use action/title/content/entity_key/source/target as the old action-style operation shape. "
                     "Never send raw transcript-as-memory, Agent-authored ResourceChunk, clientMutationId, branchRef, expectedHeadCommitId, top-level payload.conflict, generated ids, identity/root fields, or outcome-as-semantic-content."

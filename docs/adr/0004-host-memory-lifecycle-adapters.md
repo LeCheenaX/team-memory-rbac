@@ -306,6 +306,19 @@ logic:
 - sync and conflict behavior remain the existing History and local pending
   overlay model.
 
+## Lifecycle semantic extraction
+
+Automatic lifecycle capture is a two-stage path:
+
+1. Persist the complete host conversation as L1 Resource/ResourceChunk evidence.
+2. If lifecycleExtraction is configured, call a LifecycleMemoryExtractor adapter with the complete message list, current turn, authorized memory catalog, and L1 evidence references. Validate its operations through the same memory.write interface used by Agents and commit the whole batch as one History commit.
+
+The production HTTP adapter supports OpenAI-compatible chat completions and Ollama chat endpoints. The runtime configuration fields are provider, url, model, optional apiKey, and optional timeoutMs. Tests inject a deterministic adapter at the same seam.
+
+No heuristic transcript-to-entity fallback is allowed. Missing configuration, timeout, invalid JSON, invalid operations, permission denial, or commit failure leaves the L1 evidence intact and records lifecycle.extraction_failed without promoting raw text.
+
+outcome is trusted host lifecycle audit metadata. It defaults to unknown when absent, is never passed to the semantic extractor, and is not part of AgentFacingCaptureInput or memory.write.
+
 ## Security and prompt-injection rules
 
 Injected memory is data, not instruction. Every adapter must wrap injected

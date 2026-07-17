@@ -720,7 +720,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
         branchOperation(
           "Gateway Guide",
           "Gateway Guide release checklist",
-          "Gateway Guide release checklist details were mentioned again with different wording.",
+          "Gateway Guide keeps operational deployment notes for a separate release checklist.",
           ["guide", "release", "seen-again"],
         ),
       ],
@@ -751,6 +751,89 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
         ?.description,
       "Gateway Guide keeps operational deployment notes for a separate release checklist.",
     );
+
+    const atomicFactCollision = await post(base, "/memory/write", writeSession.token, {
+      operations: [
+        branchOperation(
+          "Gateway Guide",
+          "Gateway Guide release checklist",
+          "Gateway Guide reports keep implementation details out of the body and mention them only in an appendix.",
+          ["guide", "reporting", "preference"],
+        ),
+      ],
+    });
+    const atomicFactCollisionText = await atomicFactCollision.text();
+    assert.equal(atomicFactCollision.status, 200, atomicFactCollisionText);
+    const atomicFactCollisionValue = JSON.parse(atomicFactCollisionText) as {
+      value: {
+        status: string;
+        commitIds: string[];
+        extra: {
+          code: string;
+          guidance: string;
+          existingFact: { name: string; desc: string };
+          incomingFact: { name: string; desc: string };
+        };
+      };
+    };
+    assert.equal(atomicFactCollisionValue.value.status, "ambiguous");
+    assert.deepEqual(atomicFactCollisionValue.value.commitIds, []);
+    assert.equal(
+      atomicFactCollisionValue.value.extra.code,
+      "atomic_fact_identity_collision",
+    );
+    assert.equal(
+      atomicFactCollisionValue.value.extra.guidance,
+      "create_with_distinct_atomic_fact_name",
+    );
+    assert.equal(
+      atomicFactCollisionValue.value.extra.existingFact.name,
+      "Gateway Guide release checklist",
+    );
+    assert.equal(
+      atomicFactCollisionValue.value.extra.incomingFact.desc,
+      "Gateway Guide reports keep implementation details out of the body and mention them only in an appendix.",
+    );
+    assert.equal(
+      runtime.history
+        .readActiveView("root-gateway", "main")
+        .entityBranches.filter((branch) =>
+          branch.entityId === summaryUpdateValue.value.entityId
+        )
+        .length,
+      branchCountBeforeNewFact + 1,
+    );
+    const highSimilarityGateway = new TeamMemoryGateway(runtime, {
+      retrieval: "active-view",
+      projectWrites: false,
+      branchDedupeThreshold: 0.99,
+    });
+    const appendedDescription =
+      "Gateway Guide keeps operational deployment notes for a separate release checklist. " +
+      "Gateway Guide reports keep implementation details out of the body and mention them only in an appendix.";
+    const highSimilarityAppend = await highSimilarityGateway.writeMemory(
+      writeSession.token,
+      {
+        operations: [
+          branchOperation(
+            "Gateway Guide",
+            "Gateway Guide release checklist",
+            appendedDescription,
+            ["guide", "reporting", "preference"],
+          ),
+        ],
+      },
+    );
+    assert.equal(highSimilarityAppend.status, "ambiguous");
+    assert.deepEqual(highSimilarityAppend.commitIds, []);
+    assert.equal(
+      highSimilarityAppend.extra.code,
+      "atomic_fact_identity_collision",
+    );
+
+
+
+
 
     const branchCountBeforeRelatedFact = runtime.history
       .readActiveView("root-gateway", "main")

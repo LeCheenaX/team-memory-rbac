@@ -223,19 +223,11 @@ test("host lifecycle recall injects trusted-boundary context and capture writes 
       entry.event === "lifecycle.resource_ingest_failed"
     );
     assert.ok(captured.chunkIds.length > 0 || ingestionFailed);
-    assert.ok(captured.extractionCandidates.some((operation) =>
-      operation.target === "memory_entity" && operation.op === "create"
-    ));
-    assert.ok(captured.extractionCandidates.some((operation) =>
-      operation.target === "memory_entity_branch" && operation.op === "create"
-    ));
-    if (captured.chunkIds.length > 0) {
-      assert.ok(captured.extractionCandidates.some((operation) =>
-        operation.target === "memory_relation" &&
-        operation.op === "create" &&
-        operation.type === "refers_to"
-      ));
-    }
+    assert.deepEqual(captured.extractionCandidates, []);
+    assert.deepEqual(captured.extra.extraction, {
+      status: "skipped",
+      reason: "not_configured",
+    });
     assert.equal(captured.extra.host, "hermes");
     assert.equal(captured.extra.sessionId, "hermes-session");
     assert.equal(captured.extra.outcome, "failure");
@@ -244,7 +236,6 @@ test("host lifecycle recall injects trusted-boundary context and capture writes 
     assert.deepEqual(captured.extra.captureLayers, [
       "L1:conversation_resource",
       "L1:resource_chunk",
-      "candidate:structured_memory_operations",
     ]);
 
     const layerIds = captured.extra.layerIds as Record<string, string>;
@@ -295,10 +286,147 @@ test("host lifecycle recall injects trusted-boundary context and capture writes 
       item.kind === "entity" && item.entity?.id?.startsWith("host-capture:") === true
     ) === false);
     await exerciseLegacyHostMigration(fixture);
+    await exerciseLifecycleExtraction(fixture);
   } finally {
     await close(fixture);
   }
 });
+
+async function exerciseLifecycleExtraction(
+  fixture: Awaited<ReturnType<typeof setup>>,
+): Promise<void> {
+  const extractedOperations = [
+    {
+      target: "memory_entity",
+      op: "create",
+      properties: {
+        name: "Riverfront",
+        desc: "Nova CRM customer churn warning pilot.",
+        tags: ["project", "churn-prediction", "nova-crm"],
+      },
+    },
+    {
+      target: "memory_entity_branch",
+      op: "create",
+      subject: "Riverfront",
+      properties: {
+        name: "Riverfront purpose",
+        desc: "Riverfront is the Nova CRM customer churn warning pilot.",
+        tags: ["project", "churn-prediction"],
+      },
+    },
+    {
+      target: "memory_entity",
+      op: "create",
+      properties: {
+        name: "OpenClaw",
+        desc: "System that pushes customer-service ticket summaries to Riverfront.",
+        tags: ["system", "pipeline"],
+      },
+    },
+    {
+      target: "memory_entity_branch",
+      op: "create",
+      subject: "OpenClaw",
+      properties: {
+        name: "OpenClaw Riverfront delivery",
+        desc: "OpenClaw pushes customer-service ticket summaries to Riverfront.",
+        tags: ["system", "pipeline"],
+      },
+    },
+  ];
+  let extractionInput: Record<string, unknown> | undefined;
+  const extractionGateway = new TeamMemoryGateway(fixture.runtime, {
+    retrieval: "active-view",
+    projectWrites: false,
+    lifecycleMemoryExtractor: {
+      async extract(input) {
+        if (input.sessionId === "hermes-extraction-failure") {
+          throw new Error("extractor unavailable");
+        }
+        extractionInput = input;
+        return extractedOperations;
+      },
+    },
+  });
+
+    const messages = [
+      { role: "user", content: "List current projects." },
+      { role: "assistant", content: "Riverfront is the Nova CRM churn pilot." },
+      { role: "user", content: "How does OpenClaw relate to it?" },
+      { role: "assistant", content: "OpenClaw pushes ticket summaries to Riverfront." },
+    ];
+    const captured = await extractionGateway.captureHostMemory(fixture.token, {
+      host: "hermes",
+      sessionId: "hermes-extraction-session",
+      outcome: "success",
+      messages,
+      userPrompt: messages[2]?.content,
+      finalAssistantMessage: messages[3]?.content,
+    });
+
+    assert.ok(extractionInput);
+    assert.deepEqual(extractionInput.messages, messages);
+    assert.equal("outcome" in extractionInput, false);
+    assert.deepEqual(captured.extractionCandidates, extractedOperations);
+    assert.equal(captured.commitIds.length, 2);
+    assert.equal(
+      (captured.extra?.extraction as { status?: string }).status,
+      "committed",
+    );
+
+    const structuredCommit = fixture.runtime.history
+      .listCommitRecords("root-host", "main")
+      .find(({ commit }) => commit.id === captured.commitIds[1]);
+    assert.ok(structuredCommit);
+    assert.equal(structuredCommit.operations.length, 6);
+    const operationKinds = structuredCommit.operations.map(({ kind }) => kind);
+    assert.equal(
+      operationKinds.filter((kind) => kind === "create_entity").length,
+      2,
+    );
+    assert.equal(
+      operationKinds.filter((kind) => kind === "create_entity_branch").length,
+      2,
+    );
+    assert.equal(
+      operationKinds.filter((kind) => kind === "create_relation").length,
+      2,
+    );
+
+    const view = fixture.runtime.history.readActiveView("root-host", "main");
+    assert.ok(view.entities.some(({ name }) => name === "Riverfront"));
+    assert.ok(view.entities.some(({ name }) => name === "OpenClaw"));
+    assert.ok(!view.entities.some(({ name }) => name === messages[2]?.content));
+
+    const failedCapture = await extractionGateway.captureHostMemory(fixture.token, {
+      host: "hermes",
+      sessionId: "hermes-extraction-failure",
+      messages: [
+        { role: "user", content: "Remember Project Quartz." },
+        { role: "assistant", content: "Project Quartz launches on Friday." },
+      ],
+    });
+
+    assert.deepEqual(failedCapture.extractionCandidates, []);
+    assert.equal(failedCapture.commitIds.length, 1);
+    assert.equal(
+      (failedCapture.extra?.extraction as { status?: string }).status,
+      "failed",
+    );
+    assert.equal(failedCapture.extra?.outcome, "unknown");
+    const lifecycleLog = failedCapture.extra?.lifecycleLog as Array<{
+      event?: string;
+      error?: string;
+    }>;
+    assert.ok(lifecycleLog.some(({ event, error }) =>
+      event === "lifecycle.extraction_failed" && error === "extractor unavailable"
+    ));
+    const viewAfterFailure = fixture.runtime.history.readActiveView("root-host", "main");
+    assert.ok(!viewAfterFailure.entities.some(({ name }) =>
+      typeof name === "string" && name.includes("Project Quartz")
+    ));
+}
 
 async function exerciseLegacyHostMigration(
   fixture: Awaited<ReturnType<typeof setup>>,

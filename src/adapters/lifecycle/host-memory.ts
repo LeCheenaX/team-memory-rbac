@@ -41,6 +41,7 @@ export interface HostCaptureInput {
   outcome: HostMemoryOutcome;
   userPrompt?: string;
   finalAssistantMessage?: string;
+  messages?: HostMessage[];
   transcriptPath?: string;
   toolEvents?: Array<Record<string, unknown>>;
   errorSummary?: string;
@@ -67,9 +68,14 @@ export function hostRecallInput(payload: Record<string, unknown>): HostRecallInp
     host,
     sessionId: optionalString(payload, "sessionId") ?? `${host}:session`,
     userPrompt: requiredString(payload, "userPrompt"),
-    ...(messages(payload.recentMessages) === undefined
+    ...(hostMessages(payload.recentMessages, "recentMessages") === undefined
       ? {}
-      : { recentMessages: messages(payload.recentMessages) as HostMessage[] }),
+      : {
+          recentMessages: hostMessages(
+            payload.recentMessages,
+            "recentMessages",
+          ) as HostMessage[],
+        }),
     ...(optionalString(payload, "cwd") === undefined
       ? {}
       : { cwd: optionalString(payload, "cwd") as string }),
@@ -93,9 +99,11 @@ export function hostCaptureInput(payload: Record<string, unknown>): HostCaptureI
   if (host !== "claude_code" && host !== "openclaw" && host !== "hermes") {
     throw new Error(`unsupported host: ${host}`);
   }
-  const outcome = requiredString(payload, "outcome") as HostMemoryOutcome;
+  const outcome =
+    (optionalString(payload, "outcome") as HostMemoryOutcome | undefined) ??
+    "unknown";
   if (outcome !== "success" && outcome !== "failure" && outcome !== "unknown") {
-    throw new Error(`unsupported outcome: ${outcome}`);
+    throw new Error("unsupported outcome: " + outcome);
   }
   return {
     host,
@@ -111,6 +119,14 @@ export function hostCaptureInput(payload: Record<string, unknown>): HostCaptureI
             payload,
             "finalAssistantMessage",
           ) as string,
+        }),
+    ...(hostMessages(payload.messages, "messages") === undefined
+      ? {}
+      : {
+          messages: hostMessages(
+            payload.messages,
+            "messages",
+          ) as HostMessage[],
         }),
     ...(optionalString(payload, "transcriptPath") === undefined
       ? {}
@@ -256,12 +272,15 @@ function strings(value: unknown): string[] | undefined {
   return value;
 }
 
-function messages(value: unknown): HostMessage[] | undefined {
+function hostMessages(
+  value: unknown,
+  field: "messages" | "recentMessages",
+): HostMessage[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new Error("recentMessages must be an array");
+  if (!Array.isArray(value)) throw new Error(field + " must be an array");
   return value.map((item) => {
     if (item === null || typeof item !== "object" || Array.isArray(item)) {
-      throw new Error("recentMessages entries must be objects");
+      throw new Error(field + " entries must be objects");
     }
     const record = item as Record<string, unknown>;
     const role = record.role;
@@ -272,10 +291,10 @@ function messages(value: unknown): HostMessage[] | undefined {
       role !== "system" &&
       role !== "tool"
     ) {
-      throw new Error("recentMessages.role is invalid");
+      throw new Error(field + ".role is invalid");
     }
     if (typeof content !== "string") {
-      throw new Error("recentMessages.content is required");
+      throw new Error(field + ".content is required");
     }
     return { role, content };
   });

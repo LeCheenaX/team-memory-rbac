@@ -39,6 +39,9 @@ import {
   type InjectedMemoryContext,
   type MemoryCaptureResult,
 } from "../lifecycle/host-memory.ts";
+import type {
+  LifecycleMemoryExtractor,
+} from "../lifecycle/memory-extractor.ts";
 import type { TeamMemoryRuntime } from "./development-stack.ts";
 
 export type GatewayErrorCode =
@@ -73,6 +76,7 @@ export interface TeamMemoryGatewayOptions {
   projectWrites?: boolean;
   branchDedupeThreshold?: number;
   branchRelationHintThreshold?: number;
+  lifecycleMemoryExtractor?: LifecycleMemoryExtractor;
 }
 
 const forbiddenPayloadFields = new Set([
@@ -194,109 +198,52 @@ function captureDescription(input: HostCaptureInput): string {
   return lines.filter((line) => line.length > 0).join("\n");
 }
 
-function captureConversationText(input: HostCaptureInput): string {
-  const lines = [
-    `Host: ${input.host}`,
-    `Session: ${input.sessionId}`,
-    `Outcome: ${input.outcome}`,
-    input.userPrompt === undefined ? "" : `User: ${input.userPrompt}`,
-    input.finalAssistantMessage === undefined
-      ? ""
-      : `Assistant: ${input.finalAssistantMessage}`,
-    input.errorSummary === undefined ? "" : `Error: ${input.errorSummary}`,
-    input.transcriptPath === undefined ? "" : `Transcript: ${input.transcriptPath}`,
-    input.toolEvents === undefined
-      ? ""
-      : `Tool events: ${JSON.stringify(input.toolEvents)}`,
+function lifecycleMessages(input: HostCaptureInput) {
+  if (input.messages !== undefined) return input.messages;
+  return [
+    ...(input.userPrompt === undefined
+      ? []
+      : [{ role: "user" as const, content: input.userPrompt }]),
+    ...(input.finalAssistantMessage === undefined
+      ? []
+      : [{ role: "assistant" as const, content: input.finalAssistantMessage }]),
+    ...(input.errorSummary === undefined
+      ? []
+      : [{ role: "tool" as const, content: "Error: " + input.errorSummary }]),
+    ...(input.toolEvents === undefined
+      ? []
+      : [{
+          role: "tool" as const,
+          content: "Tool events: " + JSON.stringify(input.toolEvents),
+        }]),
   ];
-  return lines.filter((line) => line.length > 0).join("\n");
 }
 
-function compactTitle(value: string | undefined, fallback: string): string {
+function captureConversationText(input: HostCaptureInput): string {
+  const lines = [
+    "Host: " + input.host,
+    "Session: " + input.sessionId,
+    "Outcome: " + input.outcome,
+    ...lifecycleMessages(input).map(
+      (message) =>
+        message.role.slice(0, 1).toUpperCase() +
+        message.role.slice(1) +
+        ": " +
+        message.content,
+    ),
+    input.transcriptPath === undefined
+      ? ""
+      : "Transcript: " + input.transcriptPath,
+  ];
+  return lines.filter((line) => line.length > 0).join(String.fromCharCode(10));
+}
+function compactTitle(
+  value: string | undefined,
+  fallback: string,
+): string {
   const cleaned = value?.replace(/\s+/g, " ").trim();
   if (cleaned === undefined || cleaned.length === 0) return fallback;
   return cleaned.slice(0, 80);
-}
-
-function extractLifecycleStructuredOperations(
-  input: HostCaptureInput,
-  chunkIds: string[],
-): Array<Record<string, unknown>> {
-  const semanticText = [
-    input.userPrompt,
-    input.finalAssistantMessage,
-    input.errorSummary,
-  ].filter((value): value is string => value !== undefined && value.trim().length > 0)
-    .join("\n");
-  if (semanticText.length === 0) return [];
-  const entityName = compactTitle(
-    input.title ?? input.userPrompt ?? input.finalAssistantMessage,
-    `${input.host} lifecycle memory`,
-  );
-  const branchName = compactTitle(
-    input.finalAssistantMessage ?? input.errorSummary ?? input.userPrompt,
-    `${entityName} lifecycle fact`,
-  );
-  const operations: Array<Record<string, unknown>> = [
-    {
-      target: "memory_entity",
-      op: "create",
-      properties: {
-        name: entityName,
-        title: entityName,
-        description: semanticText.slice(0, 500),
-        tags: ["lifecycle-extracted", input.host],
-      },
-    },
-    {
-      target: "memory_entity_branch",
-      op: "create",
-      subject: entityName,
-      properties: {
-        name: branchName,
-        title: branchName,
-        description: semanticText,
-        tags: ["lifecycle-extracted", input.host, input.outcome],
-        extra: {
-          extractedFrom: "host_lifecycle",
-          host: input.host,
-          sessionId: input.sessionId,
-          outcome: input.outcome,
-        },
-      },
-    },
-    ...chunkIds.map((chunkId) => ({
-      target: "memory_relation",
-      op: "create",
-      type: "refers_to",
-      subject: {
-        target: "memory_entity",
-        name: entityName,
-      },
-      object: {
-        target: "resource_chunk",
-        name: chunkId,
-      },
-    })),
-  ];
-  if (/\b(contradict|contradicts|conflict|conflicts|corrected|correction)\b/i.test(semanticText)) {
-    operations.push({
-      target: "memory_relation",
-      op: "create",
-      type: "contradicts",
-      subject: {
-        target: "memory_entity_branch",
-        name: branchName,
-        parent: entityName,
-      },
-      object: {
-        target: "memory_entity_branch",
-        name: "previous recalled branch",
-        parent: entityName,
-      },
-    });
-  }
-  return operations;
 }
 
 function semanticDescriptionFromLegacyBranch(branch: MemoryEntityBranch): string {
@@ -1019,6 +966,7 @@ export class TeamMemoryGateway {
   private readonly projectWrites: boolean;
   private readonly branchDedupeThreshold: number;
   private readonly branchRelationHintThreshold: number;
+  private readonly lifecycleMemoryExtractor: LifecycleMemoryExtractor | undefined;
 
   constructor(
     runtime: TeamMemoryRuntime,
@@ -1026,6 +974,8 @@ export class TeamMemoryGateway {
   ) {
     this.runtime = runtime;
     this.projectWrites = options.projectWrites ?? true;
+    this.lifecycleMemoryExtractor =
+      options.lifecycleMemoryExtractor ?? runtime.lifecycleMemoryExtractor;
     this.branchDedupeThreshold = options.branchDedupeThreshold ?? 0.92;
     this.branchRelationHintThreshold = Math.min(
       options.branchRelationHintThreshold ?? 0.82,
@@ -2574,9 +2524,37 @@ export class TeamMemoryGateway {
             score: cosineSimilarity(embedding, candidate.embedding ?? []),
           }))
           .sort((left, right) => right.score - left.score);
+        const exactTitleScore = exactTitleDuplicate === undefined
+          ? undefined
+          : scored.find(({ branch: candidate }) => candidate.id === exactTitleDuplicate.id)?.score;
+        if (
+          exactTitleDuplicate !== undefined &&
+          (exactTitleScore === undefined || exactTitleScore < this.branchDedupeThreshold)
+        ) {
+          return {
+            status: "ambiguous",
+            commitIds: [],
+            extra: {
+              code: "atomic_fact_identity_collision",
+              guidance: "create_with_distinct_atomic_fact_name",
+              existingFact: {
+                parent: operation.entityName,
+                name: exactTitleDuplicate.title,
+                desc: exactTitleDuplicate.description,
+                tags: exactTitleDuplicate.tags,
+              },
+              incomingFact: {
+                parent: operation.entityName,
+                name: title,
+                desc: description,
+                tags: operation.tags ?? [],
+              },
+            },
+          };
+        }
         const duplicate = exactTitleDuplicate === undefined
           ? scored[0]
-          : { branch: exactTitleDuplicate, score: 1 };
+          : { branch: exactTitleDuplicate, score: exactTitleScore ?? 1 };
         if (duplicate !== undefined && duplicate.score >= this.branchDedupeThreshold) {
           const existing = duplicate.branch;
           const next: MemoryEntityBranch = {
@@ -3259,16 +3237,98 @@ export class TeamMemoryGateway {
         error: error instanceof Error ? error.message : "unknown ingestion error",
       });
     }
-    const extractionCandidates = extractLifecycleStructuredOperations(
-      input,
-      chunkIds,
-    );
+    let extractionCandidates: Array<Record<string, unknown>> = [];
+    const commitIds = [commitId];
+    let extraction: Record<string, unknown> = {
+      status: "skipped",
+      reason: "not_configured",
+    };
+    if (this.lifecycleMemoryExtractor !== undefined) {
+      try {
+        const existingMemory = await this.memoryCatalog(token);
+        const extracted = await this.lifecycleMemoryExtractor.extract({
+          host: input.host,
+          sessionId: input.sessionId,
+          messages: lifecycleMessages(input),
+          currentTurn: {
+            ...(input.userPrompt === undefined
+              ? {}
+              : { userPrompt: input.userPrompt }),
+            ...(input.finalAssistantMessage === undefined
+              ? {}
+              : { finalAssistantMessage: input.finalAssistantMessage }),
+          },
+          evidence: {
+            resourceId,
+            revisionId,
+            chunkIds,
+          },
+          existingMemory,
+        });
+        if (!Array.isArray(extracted)) {
+          throw new Error("lifecycle memory extractor must return an array");
+        }
+        extractionCandidates = extracted;
+        lifecycleLog.push({
+          event: "lifecycle.extraction_completed",
+          operationCount: extracted.length,
+        });
+        if (extracted.length === 0) {
+          extraction = {
+            status: "empty",
+            operationCount: 0,
+          };
+        } else {
+          const structured = await this.writeMemory(token, {
+            operations: extracted,
+          });
+          if (structured.commitIds.length === 0) {
+            extraction = {
+              status: "not_committed",
+              writeStatus: structured.status,
+              operationCount: extracted.length,
+              ...(structured.extra === undefined
+                ? {}
+                : { writeExtra: structured.extra }),
+            };
+            lifecycleLog.push({
+              event: "lifecycle.extraction_not_committed",
+              writeStatus: structured.status,
+              operationCount: extracted.length,
+            });
+          } else {
+            commitIds.push(...structured.commitIds);
+            extraction = {
+              status: "committed",
+              operationCount: extracted.length,
+              commitIds: structured.commitIds,
+            };
+            lifecycleLog.push({
+              event: "lifecycle.extraction_committed",
+              operationCount: extracted.length,
+              commitIds: structured.commitIds,
+            });
+          }
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "unknown extraction error";
+        extraction = {
+          status: "failed",
+          error: message,
+        };
+        lifecycleLog.push({
+          event: "lifecycle.extraction_failed",
+          error: message,
+        });
+      }
+    }
     return {
       status: "captured",
       resourceId,
       revisionId,
       chunkIds,
-      commitIds: [commitId],
+      commitIds,
       extractionCandidates,
       extra: {
         ...provenance,
@@ -3276,8 +3336,11 @@ export class TeamMemoryGateway {
         captureLayers: [
           "L1:conversation_resource",
           "L1:resource_chunk",
-          "candidate:structured_memory_operations",
+          ...(extraction.status === "committed"
+            ? ["L2/L3:structured_memory_operations"]
+            : []),
         ],
+        extraction,
         layerIds: {
           resourceId,
           revisionId,

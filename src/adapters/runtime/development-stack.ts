@@ -30,6 +30,11 @@ import {
 import type { ResourceCas } from "../../memory/stores.ts";
 import { StoreMemoryProjector } from "../../memory/projector.ts";
 import { HistoryMemoryProjectionWorker } from "../../memory/projection-worker.ts";
+import {
+  HttpLifecycleMemoryExtractor,
+  type LifecycleMemoryExtractor,
+  type LifecycleMemoryExtractorProvider,
+} from "../lifecycle/memory-extractor.ts";
 
 export type CasBackendKind = "filesystem" | "object_store";
 export type RuntimeMode = "unitTest" | "Dev" | "Production";
@@ -61,6 +66,13 @@ export interface RuntimeConfigDocument {
   retrieval?: {
     recallTopP?: number;
   };
+  lifecycleExtraction?: {
+    provider: LifecycleMemoryExtractorProvider;
+    url: string;
+    model: string;
+    apiKey?: string;
+    timeoutMs?: number;
+  };
   activation?: {
     status: "active";
     embedding: {
@@ -88,6 +100,7 @@ export interface RuntimeConfig {
   embeddingProviderModel?: string;
   embeddingProviderName?: string;
   recallTopP: number;
+  lifecycleMemoryExtractor?: LifecycleMemoryExtractor;
   activation?: RuntimeConfigDocument["activation"];
 }
 
@@ -100,6 +113,9 @@ export function loadRuntimeConfig(document: RuntimeConfigDocument): RuntimeConfi
   const runtimeMode = runtimeModeFrom(document.runtimeMode);
   const casBackend = casBackendFrom(document.cas?.backend);
   const embeddings = embeddingsFromDocument(document.embedding, runtimeMode);
+  const lifecycleMemoryExtractor = lifecycleMemoryExtractorFrom(
+    document.lifecycleExtraction,
+  );
   return {
     libsqlUrl: requiredString(document.libsql?.url, "libsql.url"),
     ...(optionalString(document.libsql?.authToken) === undefined ? {} : { libsqlAuthToken: document.libsql.authToken }),
@@ -115,6 +131,9 @@ export function loadRuntimeConfig(document: RuntimeConfigDocument): RuntimeConfi
     ...(optionalString(document.embedding.model) === undefined ? {} : { embeddingProviderModel: document.embedding.model }),
     ...(optionalString(document.embedding.name) === undefined ? {} : { embeddingProviderName: document.embedding.name }),
     recallTopP: recallTopPFrom(document.retrieval?.recallTopP),
+    ...(lifecycleMemoryExtractor === undefined
+      ? {}
+      : { lifecycleMemoryExtractor }),
     ...(document.activation === undefined ? {} : { activation: document.activation }),
   };
 }
@@ -148,6 +167,33 @@ function recallTopPFrom(value: number | undefined): number {
     throw new Error("retrieval.recallTopP must be greater than 0 and less than or equal to 1");
   }
   return recallTopP;
+}
+
+function lifecycleMemoryExtractorFrom(
+  config: RuntimeConfigDocument["lifecycleExtraction"] | undefined,
+): LifecycleMemoryExtractor | undefined {
+  if (config === undefined) return undefined;
+  if (
+    config.provider !== "openai_chat" &&
+    config.provider !== "ollama_chat"
+  ) {
+    throw new Error(
+      "lifecycleExtraction.provider must be openai_chat or ollama_chat",
+    );
+  }
+  const timeoutMs = config.timeoutMs ?? 30_000;
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("lifecycleExtraction.timeoutMs must be a positive integer");
+  }
+  return new HttpLifecycleMemoryExtractor({
+    provider: config.provider,
+    url: requiredString(config.url, "lifecycleExtraction.url"),
+    model: requiredString(config.model, "lifecycleExtraction.model"),
+    ...(optionalString(config.apiKey) === undefined
+      ? {}
+      : { apiKey: config.apiKey }),
+    timeoutMs,
+  });
 }
 
 function embeddingsFromDocument(
@@ -257,6 +303,7 @@ export class TeamMemoryRuntime {
   >;
   private readonly config: RuntimeConfig;
   readonly embeddings: EmbeddingProvider;
+  readonly lifecycleMemoryExtractor: LifecycleMemoryExtractor | undefined;
 
   private constructor(
     client: Client,
@@ -274,7 +321,7 @@ export class TeamMemoryRuntime {
     retrieval: TeamMemoryRuntime["retrieval"],
     config: RuntimeConfig,
     embeddings: EmbeddingProvider,
-  ) { this.client = client; this.rbac = rbac; this.history = history; this.policy = policy; this.cas = cas; this.resources = resources; this.admin = admin; this.vectors = vectors; this.relations = relations; this.bm25 = bm25; this.ingestion = ingestion; this.projection = projection; this.retrieval = retrieval; this.config = config; this.embeddings = embeddings; }
+  ) { this.client = client; this.rbac = rbac; this.history = history; this.policy = policy; this.cas = cas; this.resources = resources; this.admin = admin; this.vectors = vectors; this.relations = relations; this.bm25 = bm25; this.ingestion = ingestion; this.projection = projection; this.retrieval = retrieval; this.config = config; this.embeddings = embeddings; this.lifecycleMemoryExtractor = config.lifecycleMemoryExtractor; }
 
   static async create(config: RuntimeConfig): Promise<TeamMemoryRuntime> {
     const embeddings = configuredEmbeddings(config);

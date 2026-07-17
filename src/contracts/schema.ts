@@ -460,12 +460,11 @@ export const CONTRACT_SCHEMA = {
         },
       },
     },
+    HostLifecycleCaptureResult: {
       type: "object",
       additionalProperties: false,
-    HostLifecycleCaptureResult: {
       required: [
         "status",
-        "outcome",
         "resourceId",
         "revisionId",
         "chunkIds",
@@ -475,7 +474,6 @@ export const CONTRACT_SCHEMA = {
       ],
       properties: {
         status: { const: "captured" },
-        outcome: { enum: ["success", "failure", "unknown"] },
         resourceId: nonEmptyString,
         revisionId: nonEmptyString,
         chunkIds: {

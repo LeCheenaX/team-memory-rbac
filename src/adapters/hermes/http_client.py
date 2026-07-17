@@ -333,30 +333,36 @@ class HermesTeamMemoryProvider:
     ) -> dict[str, Any]:
         session_id = str(metadata.get("session_id") or user_id or "hermes")
         if isinstance(messages, str):
-            final_message = messages
+            final_message = metadata.get("final_assistant_message") or messages
             user_prompt = metadata.get("user_prompt")
         else:
-            user_prompt = next(
-                (
-                    message.get("content")
-                    for message in messages
-                    if message.get("role") == "user"
-                ),
-                None,
-            )
-            final_message = next(
-                (
-                    message.get("content")
-                    for message in reversed(messages)
-                    if message.get("role") == "assistant"
-                ),
-                "",
-            )
+            user_prompt = metadata.get("user_prompt")
+            if not isinstance(user_prompt, str):
+                user_prompt = next(
+                    (
+                        message.get("content")
+                        for message in reversed(messages)
+                        if message.get("role") == "user"
+                    ),
+                    None,
+                )
+            final_message = metadata.get("final_assistant_message")
+            if not isinstance(final_message, str):
+                final_message = next(
+                    (
+                        message.get("content")
+                        for message in reversed(messages)
+                        if message.get("role") == "assistant"
+                    ),
+                    "",
+                )
         payload: dict[str, Any] = {
             "sessionId": session_id,
             "outcome": outcome,
             "finalAssistantMessage": final_message,
         }
+        if isinstance(messages, list):
+            payload["messages"] = messages
         if isinstance(user_prompt, str):
             payload["userPrompt"] = user_prompt
         if "error_summary" in metadata:

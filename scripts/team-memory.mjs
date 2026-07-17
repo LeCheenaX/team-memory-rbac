@@ -80,6 +80,34 @@ async function setupMemory(configPath) {
     "recall top-P (0 < p <= 1)",
     String(existing.retrieval?.recallTopP ?? 0.8),
   ));
+  const lifecycleExtractionProvider = await promptLine(
+    "lifecycle extraction provider (openai_chat/ollama_chat, blank to disable)",
+    existing.lifecycleExtraction?.provider ?? "",
+  );
+  const lifecycleExtractionUrl = lifecycleExtractionProvider.length === 0
+    ? ""
+    : await promptLine(
+        "lifecycle extraction URL",
+        existing.lifecycleExtraction?.url ?? "",
+      );
+  const lifecycleExtractionModel = lifecycleExtractionProvider.length === 0
+    ? ""
+    : await promptLine(
+        "lifecycle extraction model",
+        existing.lifecycleExtraction?.model ?? "",
+      );
+  const lifecycleExtractionApiKey = lifecycleExtractionProvider.length === 0
+    ? ""
+    : await promptLine(
+        "lifecycle extraction API key (optional)",
+        existing.lifecycleExtraction?.apiKey ?? "",
+      );
+  const lifecycleExtractionTimeoutMs = lifecycleExtractionProvider.length === 0
+    ? 30_000
+    : Number.parseInt(await promptLine(
+        "lifecycle extraction timeout milliseconds",
+        String(existing.lifecycleExtraction?.timeoutMs ?? 30_000),
+      ), 10);
 
   const candidate = {
     runtimeMode,
@@ -105,6 +133,19 @@ async function setupMemory(configPath) {
     retrieval: {
       recallTopP,
     },
+    ...(withoutEmpty(lifecycleExtractionProvider) === undefined
+      ? {}
+      : {
+          lifecycleExtraction: {
+            provider: lifecycleExtractionProvider,
+            url: lifecycleExtractionUrl,
+            model: lifecycleExtractionModel,
+            ...(withoutEmpty(lifecycleExtractionApiKey) === undefined
+              ? {}
+              : { apiKey: lifecycleExtractionApiKey }),
+            timeoutMs: lifecycleExtractionTimeoutMs,
+          },
+        }),
   };
 
   const runtimeConfig = loadRuntimeConfig(candidate);
