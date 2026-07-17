@@ -68,7 +68,11 @@ const searchSchema: OpenClawInputSchema = {
     limit: { type: "integer" },
     layer: { type: "string", enum: ["L1", "L2", "L3"] },
     names: { type: "array", items: { type: "string" } },
-    tagsAny: { type: "array", items: { type: "string" } },
+    tagsAny: {
+      type: "array",
+      items: { type: "string" },
+      description: "Exact visible tag strings copied from memory_catalog or team_memory.catalog; these are filters, not inferred keywords.",
+    },
   },
   additionalProperties: false,
 };
@@ -171,8 +175,8 @@ export class OpenClawTeamMemoryPlugin {
 
   tools(): OpenClawToolDefinition[] {
     const common = [
-      this.tool("team_memory.search", "Search RBAC-protected Team Memory with query, optional layer, names, tagsAny, and limit. Do not send identity fields, generated ids, history toggles, or conflict flags.", searchSchema),
-      this.tool("team_memory.catalog", "List visible Team Memory names and tags from the trusted session root without exposing generated ids.", emptySchema),
+      this.tool("team_memory.search", "Search RBAC-protected Team Memory with query, optional layer, names, tagsAny, and limit. Copy every tagsAny value exactly from team_memory.catalog; if no suitable visible tag exists, use names or query instead of inventing one. Do not send identity fields, generated ids, history toggles, or conflict flags.", searchSchema),
+      this.tool("team_memory.catalog", "List visible Team Memory names and plain tag strings from the trusted session root. Tags are sorted by descending visible entity count with deterministic ties; counts and generated ids are not exposed.", emptySchema),
       this.tool("team_memory.write", structuredWriteToolDescription(), writeSchema),
       this.tool("team_memory.import_resource", "Import a host-facing Resource and automatically ingest its current revision.", importResourceSchema),
       this.tool("team_memory.ingest_resource", "Retry or rebuild ingestion for an existing Resource revision.", ingestResourceSchema),
@@ -180,8 +184,8 @@ export class OpenClawTeamMemoryPlugin {
     ];
     if (this.mode === "parallel_native_team_memory") return common;
     return [
-      this.tool("memory_search", "OpenClaw active-memory recall through Team Memory with query, optional layer, names, tagsAny, and limit. Do not send identity fields, generated ids, history toggles, or conflict flags.", searchSchema),
-      this.tool("memory_catalog", "OpenClaw active-memory catalog through Team Memory without exposing generated ids.", emptySchema),
+      this.tool("memory_search", "OpenClaw active-memory recall through Team Memory with query, optional layer, names, tagsAny, and limit. Copy every tagsAny value exactly from memory_catalog; if no suitable visible tag exists, use names or query instead of inventing one. Do not send identity fields, generated ids, history toggles, or conflict flags.", searchSchema),
+      this.tool("memory_catalog", "OpenClaw active-memory catalog with visible names and plain tag strings sorted by descending visible entity count with deterministic ties. Counts and generated ids are not exposed.", emptySchema),
       this.tool("memory_write", structuredWriteToolDescription(), writeSchema),
       this.tool("memory_import", "Import a host-facing Resource and automatically ingest its current revision.", importResourceSchema),
       this.tool("memory_ingest", "Retry or rebuild ingestion for an existing Resource revision.", ingestResourceSchema),

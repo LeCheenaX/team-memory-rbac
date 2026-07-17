@@ -16,6 +16,7 @@ class TeamMemoryHttpError(RuntimeError):
         self.status = status
         self.code = str(error.get("code", "http_error"))
         self.decision = error.get("decision")
+        self.details = error.get("details")
         super().__init__(f"{self.code}: {error.get('message', 'Team Memory request failed')}")
 
 

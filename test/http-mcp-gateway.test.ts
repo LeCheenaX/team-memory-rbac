@@ -207,14 +207,25 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     });
     const toolsText = await toolsResponse.text();
     assert.equal(toolsResponse.status, 200, toolsText);
+    const visibleTools = (JSON.parse(toolsText) as {
+      value: Array<{
+        name: string;
+        description: string;
+        inputSchema: { properties?: Record<string, { description?: string }> };
+      }>;
+    }).value;
     assert.ok(
-      (JSON.parse(toolsText) as { value: Array<{ name: string }> }).value
-        .some((tool) => tool.name === "memory.catalog"),
+      visibleTools.some((tool) => tool.name === "memory.catalog"),
     );
     assert.deepEqual(
-      (JSON.parse(toolsText) as { value: Array<{ name: string }> }).value
-        .map((tool) => tool.name),
+      visibleTools.map((tool) => tool.name),
       ["memory.catalog", "memory.search"],
+    );
+    const searchTool = visibleTools.find((tool) => tool.name === "memory.search");
+    assert.match(searchTool?.description ?? "", /copied exactly from the current memory\.catalog/);
+    assert.match(
+      searchTool?.inputSchema.properties?.tagsAny?.description ?? "",
+      /not inferred keywords/,
     );
 
     assert.equal(
@@ -223,6 +234,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
           operations: [
             entityOperation("Gateway Guide", "Shared HTTP and MCP behavior", ["guide"]),
             entityOperation("MCP Adapter", "MCP exposes Team Memory tools.", ["adapter"]),
+            entityOperation("Catalog Reference", "Visible tag ordering fixture.", ["guide", "reference"]),
             branchOperation(
               "Gateway Guide",
               "Gateway Guide stable tools",
@@ -446,8 +458,30 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     assert.equal(
       (JSON.parse(httpSearchText) as { value: { items: unknown[] } }).value
         .items.length,
-      1,
+      2,
     );
+    const mixedTagSearch = await post(base, "/memory/search", readSession.token, {
+      query: "Gateway",
+      tagsAny: ["guide", "workflow"],
+    });
+    const mixedTagSearchText = await mixedTagSearch.text();
+    assert.equal(mixedTagSearch.status, 200, mixedTagSearchText);
+    const mixedTagSearchValue = JSON.parse(mixedTagSearchText) as {
+      value: {
+        items: unknown[];
+        warnings?: Array<{
+          code: string;
+          field: string;
+          unknownTags: string[];
+        }>;
+      };
+    };
+    assert.equal(mixedTagSearchValue.value.items.length, 2);
+    assert.deepEqual(mixedTagSearchValue.value.warnings, [{
+      code: "unknown_catalog_tags",
+      field: "tagsAny",
+      unknownTags: ["workflow"],
+    }]);
     const httpCatalog = await fetch(`${base}/memory/catalog`, {
       headers: { authorization: `Bearer ${readSession.token}` },
     });
@@ -456,7 +490,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     const catalog = JSON.parse(httpCatalogText) as {
       value: {
         entities: Array<{ name: string; summary: string; status: string; tags: string[]; id?: string; branch?: unknown }>;
-        tags: Array<{ tag: string; count: number; names: string[] }>;
+        tags: string[];
       };
     };
     const guideEntity = catalog.value.entities.find((entity) => entity.name === "Gateway Guide");
@@ -464,10 +498,24 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     assert.equal(guideEntity.summary, "Shared HTTP and MCP behavior");
     assert.equal("id" in guideEntity, false);
     assert.equal("branch" in guideEntity, false);
-    assert.deepEqual(catalog.value.tags, [
-      { tag: "adapter", count: 1, names: ["MCP Adapter"] },
-      { tag: "guide", count: 1, names: ["Gateway Guide"] },
-    ]);
+    assert.deepEqual(catalog.value.tags, ["guide", "adapter", "reference"]);
+    const inventedTagSearch = await post(base, "/memory/search", readSession.token, {
+      query: "deployment process",
+      tagsAny: ["workflow", "release"],
+    });
+    const inventedTagSearchText = await inventedTagSearch.text();
+    assert.equal(inventedTagSearch.status, 400, inventedTagSearchText);
+    const inventedTagError = JSON.parse(inventedTagSearchText) as {
+      error: {
+        code: string;
+        message: string;
+        details?: { field?: string; unknownTags?: string[] };
+      };
+    };
+    assert.equal(inventedTagError.error.code, "validation_failed");
+    assert.match(inventedTagError.error.message, /memory\.catalog/);
+    assert.equal(inventedTagError.error.details?.field, "tagsAny");
+    assert.deepEqual(inventedTagError.error.details?.unknownTags, ["workflow", "release"]);
     const keywordSearch = await post(base, "/memory/search", readSession.token, {
       query: "projected BM25",
       layer: "L1",
@@ -482,6 +530,15 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     );
 
     const mcp = new McpTeamMemoryAdapter(gateway);
+    const directMcpSearchTool = mcp.listTools().find((tool) =>
+      tool.name === "memory.search"
+    );
+    assert.match(
+      directMcpSearchTool?.description ?? "",
+      /Copy tagsAny values exactly from memory\.catalog/,
+    );
+    assert.ok(directMcpSearchTool?.inputSchema.properties.tagsAny);
+
     const mcpSearch = await mcp.callTool(
       readSession.token,
       "memory.search",
@@ -490,7 +547,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
         tagsAny: ["guide"],
       },
     ) as { value: { items: unknown[] } };
-    assert.equal(mcpSearch.value.items.length, 1);
+    assert.equal(mcpSearch.value.items.length, 2);
     const mcpCatalog = await mcp.callTool(
       readSession.token,
       "memory.catalog",

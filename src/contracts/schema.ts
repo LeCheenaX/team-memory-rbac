@@ -422,7 +422,10 @@ export const CONTRACT_SCHEMA = {
         limit: { type: "integer", minimum: 1 },
         layer: { enum: ["L1", "L2", "L3"] },
         names: stringArray,
-        tagsAny: stringArray,
+        tagsAny: {
+          ...stringArray,
+          description: "Exact visible tag strings copied from memory.catalog; these are filters, not inferred keywords.",
+        },
       },
     },
     MemoryCatalogInput: {
@@ -430,9 +433,36 @@ export const CONTRACT_SCHEMA = {
       additionalProperties: false,
       properties: {},
     },
-    HostLifecycleCaptureResult: {
+    MemoryCatalogResult: {
       type: "object",
       additionalProperties: false,
+      required: ["rootName", "branchRef", "entities", "tags"],
+      properties: {
+        rootName: nonEmptyString,
+        branchRef: nonEmptyString,
+        entities: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name", "summary", "status", "tags"],
+            properties: {
+              name: nonEmptyString,
+              summary: { type: "string" },
+              status: { type: "string" },
+              tags: stringArray,
+            },
+          },
+        },
+        tags: {
+          ...stringArray,
+          description: "Plain visible tag strings sorted by descending visible entity count, with deterministic tag-name ordering for ties. Counts and per-tag entity names are not exposed.",
+        },
+      },
+    },
+      type: "object",
+      additionalProperties: false,
+    HostLifecycleCaptureResult: {
       required: [
         "status",
         "outcome",

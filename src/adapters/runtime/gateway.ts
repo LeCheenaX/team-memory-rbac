@@ -52,15 +52,18 @@ export type GatewayErrorCode =
 export class TeamMemoryGatewayError extends Error {
   readonly code: GatewayErrorCode;
   readonly decision?: PermissionDecision & { allowed: false };
+  readonly details?: Record<string, unknown>;
 
   constructor(
     code: GatewayErrorCode,
     message: string,
     decision?: PermissionDecision & { allowed: false },
+    details?: Record<string, unknown>,
   ) {
     super(`${code}: ${message}`);
     this.code = code;
     if (decision !== undefined) this.decision = decision;
+    if (details !== undefined) this.details = details;
   }
 }
 
@@ -370,13 +373,13 @@ function defaultAgentPermissions(ownerPermissions: readonly Permission[]): Permi
 const agentToolCatalog = [
   {
     name: "memory.catalog",
-    description: "List the trusted session root name plus visible MemoryEntity names and tags. Does not expose generated ids.",
+    description: "List the trusted session root plus visible MemoryEntity names and tags. Catalog tags are plain strings sorted by descending visible entity count with deterministic ties. Does not expose generated ids or tag counts.",
     action: "read",
     resourceKind: "memory_entity",
   },
   {
     name: "memory.search",
-    description: "Search Team Memory with natural-language query plus optional limit, layer, names, and tagsAny. Identity, root, history toggles, conflict flags, and generated ids are not accepted.",
+    description: "Search Team Memory with natural-language query plus optional limit, layer, names, and tagsAny. Every tagsAny value must be copied exactly from the current memory.catalog response; when no suitable visible tag exists, use names or query instead of inventing a tag. Identity, root, history toggles, conflict flags, and generated ids are not accepted.",
     action: "search",
     resourceKind: "memory_entity",
   },
@@ -407,7 +410,11 @@ function stableToolSchema(toolName: string): {
         limit: { type: "integer" },
         layer: { type: "string", enum: ["L1", "L2", "L3"] },
         names: { type: "array", items: { type: "string" } },
-        tagsAny: { type: "array", items: { type: "string" } },
+        tagsAny: {
+          type: "array",
+          items: { type: "string" },
+          description: "Exact visible tag strings copied from memory.catalog; these are filters, not inferred keywords.",
+        },
       },
       required: ["query"],
       additionalProperties: false,
@@ -942,6 +949,12 @@ function entityVisibleTags(
   branch?: MemoryEntityBranch,
 ): string[] {
   return [...(entity.tags ?? branch?.tags ?? [])];
+}
+
+function compareStableStrings(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function dotProduct(left: number[], right: number[]): number {
@@ -1799,6 +1812,66 @@ export class TeamMemoryGateway {
     };
   }
 
+  private visibleCatalogSnapshot(
+    session: AuthenticatedSession,
+    branch: string,
+  ): {
+    rootEntity: MemoryEntity | undefined;
+    rootBranch: MemoryEntityBranch | undefined;
+    entities: Array<{
+      entity: MemoryEntity;
+      branch: MemoryEntityBranch | undefined;
+    }>;
+    tags: string[];
+  } {
+    const view = this.runtime.history.readActiveView(session.rootEntityId, branch);
+    const branchById = new Map(view.entityBranches.map((candidate) => [
+      candidate.id,
+      candidate,
+    ]));
+    const rootEntity = view.entities.find(
+      (entity) => entity.id === session.rootEntityId && entity.rootEntityId === null,
+    );
+    const rootBranch = rootEntity?.currentBranchId === undefined
+      ? undefined
+      : branchById.get(rootEntity.currentBranchId);
+    const entities = view.entities
+      .filter((entity) => entity.rootEntityId !== null)
+      .filter((entity) =>
+        session.taskScope.allowedEntityIds === undefined ||
+        session.taskScope.allowedEntityIds.includes(entity.id)
+      )
+      .filter((entity) =>
+        session.taskScope.deniedEntityIds?.includes(entity.id) !== true
+      )
+      .map((entity) => ({
+        entity,
+        branch: entity.currentBranchId === undefined
+          ? undefined
+          : branchById.get(entity.currentBranchId),
+      }))
+      .filter(({ entity, branch: entityBranch }) => {
+        const tags = entityVisibleTags(entity, entityBranch);
+        return (
+          (session.taskScope.allowedTags === undefined ||
+            tags.some((tag) => session.taskScope.allowedTags?.includes(tag))) &&
+          !tags.some((tag) => session.taskScope.deniedTags?.includes(tag))
+        );
+      });
+    const tagCounts = new Map<string, number>();
+    for (const { entity, branch: entityBranch } of entities) {
+      for (const tag of new Set(entityVisibleTags(entity, entityBranch))) {
+        tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+      }
+    }
+    const tags = [...tagCounts.entries()]
+      .sort((left, right) =>
+        right[1] - left[1] || compareStableStrings(left[0], right[0])
+      )
+      .map(([tag]) => tag);
+    return { rootEntity, rootBranch, entities, tags };
+  }
+
   async memoryCatalog(
     token: string | undefined,
     payload: Record<string, unknown> = {},
@@ -1811,11 +1884,7 @@ export class TeamMemoryGateway {
       status: string;
       tags: string[];
     }>;
-    tags: Array<{
-      tag: string;
-      count: number;
-      names: string[];
-    }>;
+    tags: string[];
   }> {
     assertNoIdentityOverride(payload);
     assertOnlyFields(payload, stableCatalogFields, "memory.catalog");
@@ -1837,71 +1906,23 @@ export class TeamMemoryGateway {
       );
     }
 
-    const view = this.runtime.history.readActiveView(session.rootEntityId, branch);
-    const branchById = new Map(view.entityBranches.map((candidate) => [
-      candidate.id,
-      candidate,
-    ]));
-    const rootEntity = view.entities.find(
-      (entity) => entity.id === session.rootEntityId && entity.rootEntityId === null,
-    );
-    const rootBranch = rootEntity?.currentBranchId === undefined
-      ? undefined
-      : branchById.get(rootEntity.currentBranchId);
-    const visibleEntities = view.entities
-      .filter((entity) => entity.rootEntityId !== null)
-      .filter((entity) =>
-        session.taskScope.allowedEntityIds === undefined ||
-        session.taskScope.allowedEntityIds.includes(entity.id)
-      )
-      .filter((entity) =>
-        session.taskScope.deniedEntityIds?.includes(entity.id) !== true
-      )
-      .map((entity) => ({
-        entity,
-        branch: entity.currentBranchId === undefined
-          ? undefined
-          : branchById.get(entity.currentBranchId),
-      }))
-      .filter(({ entity, branch }) => {
-        const tags = entityVisibleTags(entity, branch);
-        return (
-          (session.taskScope.allowedTags === undefined ||
-            tags.some((tag) => session.taskScope.allowedTags?.includes(tag))) &&
-          !tags.some((tag) => session.taskScope.deniedTags?.includes(tag))
-        );
-      });
-    const tagMap = new Map<string, Set<string>>();
-    for (const { entity, branch } of visibleEntities) {
-      const name = entityVisibleName(entity, branch);
-      for (const tag of entityVisibleTags(entity, branch)) {
-        const names = tagMap.get(tag) ?? new Set<string>();
-        names.add(name);
-        tagMap.set(tag, names);
-      }
-    }
+    const catalog = this.visibleCatalogSnapshot(session, branch);
     return {
-      rootName: entityVisibleName(rootEntity ?? {
+      rootName: entityVisibleName(catalog.rootEntity ?? {
         id: session.rootEntityId,
         rootEntityId: null,
         status: "active",
         createdAt: "",
         updatedAt: "",
-      }, rootBranch),
+      }, catalog.rootBranch),
       branchRef: branch,
-      entities: visibleEntities.map(({ entity, branch }) => ({
-        name: entityVisibleName(entity, branch),
-        summary: entityVisibleSummary(entity, branch),
+      entities: catalog.entities.map(({ entity, branch: entityBranch }) => ({
+        name: entityVisibleName(entity, entityBranch),
+        summary: entityVisibleSummary(entity, entityBranch),
         status: entity.status,
-        tags: entityVisibleTags(entity, branch),
+        tags: entityVisibleTags(entity, entityBranch),
       })),
-      tags: [...tagMap.entries()]
-        .map(([tag, names]) => ({
-          tag,
-          count: names.size,
-          names: [...names].sort(),
-        }))
-        .sort((left, right) => left.tag.localeCompare(right.tag)),
+      tags: catalog.tags,
     };
   }
 
@@ -3084,6 +3105,26 @@ export class TeamMemoryGateway {
     assertOnlyFields(payload, stableSearchFields, "memory.search");
     const session = await this.authenticate(token);
     const text = stringValue(payload, "query");
+    const requestedTagsAny = optionalStringList(payload, "tagsAny");
+    let tagsAny = requestedTagsAny;
+    let unknownTags: string[] = [];
+    if (requestedTagsAny !== undefined && requestedTagsAny.length > 0) {
+      const visibleTags = new Set(
+        this.visibleCatalogSnapshot(session, "main").tags,
+      );
+      tagsAny = requestedTagsAny.filter((tag) => visibleTags.has(tag));
+      unknownTags = [...new Set(
+        requestedTagsAny.filter((tag) => !visibleTags.has(tag)),
+      )];
+      if (tagsAny.length === 0) {
+        throw new TeamMemoryGatewayError(
+          "validation_failed",
+          `tagsAny contains tags that are not visible in memory.catalog: ${unknownTags.join(", ")}. Copy tags exactly from memory.catalog, or use names or query when no suitable visible tag exists.`,
+          undefined,
+          { field: "tagsAny", unknownTags },
+        );
+      }
+    }
     const request: MemoryRetrievalRequest = {
       subject: gatewaySubject(session),
       rootEntityId: session.rootEntityId,
@@ -3103,12 +3144,27 @@ export class TeamMemoryGateway {
         ...(optionalStringList(payload, "names") === undefined
           ? {}
           : { names: optionalStringList(payload, "names") as string[] }),
-        ...(optionalStringList(payload, "tagsAny") === undefined
+        ...(tagsAny === undefined
           ? {}
-          : { tagsAny: optionalStringList(payload, "tagsAny") as string[] }),
+          : { tagsAny }),
       },
     };
-    return this.retrievalRouter.execute(request);
+    const result = await this.retrievalRouter.execute(request);
+    if (!("value" in result) || unknownTags.length === 0) return result;
+    return {
+      decision: result.decision,
+      value: {
+        ...result.value,
+        warnings: [
+          ...(result.value.warnings ?? []),
+          {
+            code: "unknown_catalog_tags",
+            field: "tagsAny",
+            unknownTags,
+          },
+        ],
+      },
+    };
   }
 
   async recallHostMemory(
@@ -3119,7 +3175,7 @@ export class TeamMemoryGateway {
     const input = hostRecallInput(payload);
     const session = await this.authenticate(token);
     const branch = input.branchRef ?? "main";
-    let result = unwrap(await this.retrievalRouter.execute({
+    const result = unwrap(await this.retrievalRouter.execute({
       subject: gatewaySubject(session),
       rootEntityId: session.rootEntityId,
       taskScope: session.taskScope,
@@ -3127,25 +3183,11 @@ export class TeamMemoryGateway {
       action: "search",
       resourceKind: "memory_entity",
       query: {
-        kind: "entity",
+        kind: "recall",
         text: recallSearchText(input),
         limit: input.limit ?? 8,
       },
     }));
-    if (result.items.length === 0) {
-      result = unwrap(await this.retrievalRouter.execute({
-        subject: gatewaySubject(session),
-        rootEntityId: session.rootEntityId,
-        taskScope: session.taskScope,
-        branchRef: branch,
-        action: "search",
-        resourceKind: "memory_entity",
-        query: {
-          kind: "entity",
-          limit: input.limit ?? 8,
-        },
-      }));
-    }
     return formatInjectedMemoryContext(input.host, result);
   }
 

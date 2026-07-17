@@ -184,6 +184,7 @@ function normalizeError(error: unknown): TeamMemoryGatewayError | HttpGuardrailE
     gatewayError.code,
     redactMessage(gatewayError.message.replace(`${gatewayError.code}: `, "")),
     gatewayError.decision,
+    gatewayError.details,
   );
 }
 
@@ -195,6 +196,9 @@ function errorPayload(error: TeamMemoryGatewayError | HttpGuardrailError): unkno
       ...("decision" in error && error.decision === undefined
         ? {}
         : "decision" in error ? { decision: error.decision } : {}),
+      ...("details" in error && error.details !== undefined
+        ? { details: error.details }
+        : {}),
     },
   };
 }

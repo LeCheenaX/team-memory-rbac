@@ -501,16 +501,48 @@ export class McpTeamMemoryAdapter {
 
   listTools(): Array<{
     name: string;
+    description: string;
     inputSchema: { type: "object"; properties: Record<string, unknown>; additionalProperties: false };
   }> {
     return [
-      "memory.catalog",
-      "memory.search",
-      "memory.write",
-    ].map((name) => ({
-      name,
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
-    }));
+      {
+        name: "memory.catalog",
+        description: "List visible MemoryEntity names and plain tag strings sorted by descending visible entity count with deterministic ties. Counts and generated ids are not exposed.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "memory.search",
+        description: "Search Team Memory with query, optional limit, layer, names, and tagsAny. Copy tagsAny values exactly from memory.catalog; if no suitable visible tag exists, use names or query instead of inventing one.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            limit: { type: "integer" },
+            layer: { type: "string", enum: ["L1", "L2", "L3"] },
+            names: { type: "array", items: { type: "string" } },
+            tagsAny: {
+              type: "array",
+              items: { type: "string" },
+              description: "Visible tag strings copied from memory.catalog; these are filters, not inferred keywords.",
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "memory.write",
+        description: "Write durable Team Memory using structured operations.",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
+      },
+    ];
   }
 
   async callTool(

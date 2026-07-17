@@ -94,6 +94,15 @@ test("checked-in JSON Schema matches the TypeScript runtime contract", async () 
   assert.ok(generated.$defs.MemoryCaptureOperation);
   assert.ok(generated.$defs.MemorySearchInput);
   assert.ok(generated.$defs.MemoryCatalogInput);
+  assert.ok(generated.$defs.MemoryCatalogResult);
+  assert.deepEqual(
+    generated.$defs.MemoryCatalogResult.properties.tags.items,
+    { type: "string" },
+  );
+  assert.equal(
+    "count" in generated.$defs.MemoryCatalogResult.properties.tags,
+    false,
+  );
   assert.ok(generated.$defs.HostLifecycleCaptureResult);
   assert.deepEqual(
     generated.$defs.MemoryEntityBranch.properties.extraInfo.propertyNames.not
@@ -118,6 +127,7 @@ test("checked-in JSON Schema matches the TypeScript runtime contract", async () 
     "MemoryCaptureOperation",
     "MemorySearchInput",
     "MemoryCatalogInput",
+    "MemoryCatalogResult",
     "HostLifecycleCaptureResult",
     "Role",
     "UserRootRoleAssignment",

@@ -128,9 +128,11 @@ concrete content/details live in `MemoryEntityBranch` at L2. A
 tags, status, optional `extraInfo`, an embedding, and system-managed
 importance/confidence scores. Agent-visible catalog/list tooling should expose
 visible `MemoryEntity` names and tags, not internal ids or branch ids. Follow-up
-search may narrow by stable human-readable `names` and `tagsAny`; root identity
-continues to come from the trusted session rather than from model-supplied
-payload fields.
+search may narrow by stable human-readable `names` and `tagsAny`. Every
+`tagsAny` value must be copied exactly from the current visible catalog; it is
+not a free-form keyword. When no suitable visible tag exists, the Agent uses
+`names` or the natural-language `query` instead. Root identity continues to
+come from the trusted session rather than from model-supplied payload fields.
 
 When an Agent creates a `MemoryEntityBranch`, it supplies the parent
 `MemoryEntity` as the operation `subject`. Team Memory must attach the branch to
@@ -155,7 +157,10 @@ Agent-facing recall has one required parameter, `query`. Optional parameters are
 
 Agent-facing catalog/list has no required parameters and no Agent-supplied id
 parameters in v1. It lists the trusted session root name, visible
-`MemoryEntity` names, and visible tags.
+`MemoryEntity` names, and visible tags. The top-level `tags` value is an array
+of plain strings sorted by descending visible entity count, with deterministic
+tag-name ordering for ties. Counts and per-tag entity-name mappings are not
+exposed.
 
 Layer behavior:
 

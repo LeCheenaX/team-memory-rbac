@@ -118,6 +118,11 @@ export interface MemoryRetrievalResult {
   rootEntityId: string;
   branchRef: string;
   items: MemoryRetrievalItem[];
+  warnings?: Array<{
+    code: "unknown_catalog_tags";
+    field: "tagsAny";
+    unknownTags: string[];
+  }>;
 }
 
 export interface MemoryQueryContext {

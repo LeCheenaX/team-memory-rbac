@@ -14,12 +14,30 @@ from src.adapters.hermes.session_context import (
 from src.adapters.hermes.http_client import (
     HermesMemoryLocalAdapter,
     HermesTeamMemoryProvider,
+    TeamMemoryHttpError,
     TeamMemoryHttpClient,
     TeamMemoryLocalClient,
 )
 
 
+
 class ContractSchemaTest(unittest.TestCase):
+    def test_http_error_preserves_structured_unknown_tags(self) -> None:
+        error = TeamMemoryHttpError(
+            400,
+            {
+                "error": {
+                    "code": "validation_failed",
+                    "message": "tagsAny contains unknown tags",
+                    "details": {
+                        "field": "tagsAny",
+                        "unknownTags": ["workflow", "release"],
+                    },
+                }
+            },
+        )
+        self.assertEqual(error.details["unknownTags"], ["workflow", "release"])
+
     def test_python_adapter_can_consume_generated_contract(self) -> None:
         schema = load_contract_schema()
 
@@ -163,7 +181,7 @@ class ContractSchemaTest(unittest.TestCase):
                     "value": {
                         "rootName": "root-http",
                         "entities": [{"name": "entity-http"}],
-                        "tags": [{"tag": "guide", "count": 1, "names": ["entity-http"]}],
+                        "tags": ["guide"],
                     }
                 }
             raise AssertionError(path)
@@ -245,7 +263,7 @@ class ContractSchemaTest(unittest.TestCase):
                     "value": {
                         "rootName": "root-hermes",
                         "entities": [{"name": "entity-filtered"}],
-                        "tags": [{"tag": "hermes", "count": 1, "names": ["entity-filtered"]}],
+                        "tags": ["hermes"],
                     }
                 }
             raise AssertionError(path)
@@ -293,7 +311,7 @@ class ContractSchemaTest(unittest.TestCase):
         self.assertEqual(calls[2][2]["finalAssistantMessage"], "done")
 
         catalog = provider.catalog()
-        self.assertEqual(catalog["tags"][0]["tag"], "hermes")
+        self.assertEqual(catalog["tags"][0], "hermes")
 
     def test_hermes_provider_validates_agent_identity_and_catalog_tool(self) -> None:
         def valid_transport(method: str, path: str, payload: dict | None) -> dict:

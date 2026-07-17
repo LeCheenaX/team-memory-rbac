@@ -491,8 +491,9 @@ class TeamMemoryHermesProvider(MemoryProvider):
                 "team_memory_search",
                 (
                     "Search Team Memory for durable context relevant to the current task. "
-                    "Use the natural-language query, optional limit, and stable entity/tag filters; the query determines whether history, "
-                    "facts, resources, or relations are recalled. Variable metadata appears under extra when returned."
+                    "Use the natural-language query, optional limit, and stable entity/tag filters. Copy every tagsAny value exactly from "
+                    "team_memory_catalog; if no suitable visible tag exists, use names or query instead of inventing one. The query determines "
+                    "whether history, facts, resources, or relations are recalled. Variable metadata appears under extra when returned."
                 ),
                 {
                     "type": "object",
@@ -501,7 +502,11 @@ class TeamMemoryHermesProvider(MemoryProvider):
                         "limit": {"type": "integer"},
                         "layer": {"type": "string", "enum": ["L1", "L2", "L3"]},
                         "names": {"type": "array", "items": {"type": "string"}},
-                        "tagsAny": {"type": "array", "items": {"type": "string"}},
+                        "tagsAny": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Exact visible tag strings copied from team_memory_catalog; these are filters, not inferred keywords.",
+                        },
                     },
                     "required": ["query"],
                 },
@@ -510,7 +515,8 @@ class TeamMemoryHermesProvider(MemoryProvider):
                 "team_memory_catalog",
                 (
                     "List the current Team Memory root, visible MemoryEntity L3 directory summaries, "
-                    "statuses, tags, and tag counts. It does not expose branch facts, branch ids, L1 chunks, or relations."
+                    "statuses, and plain tag strings sorted by descending visible entity count with deterministic ties. "
+                    "It does not expose tag counts, tag-to-name mappings, branch facts, branch ids, L1 chunks, or relations."
                 ),
                 {
                     "type": "object",
