@@ -26,25 +26,38 @@ function runNode(...args: string[]): Promise<{ status: number | null; stdout: st
   });
 }
 
-test("redeploy CLI replaces all Hermes test images while preserving volumes", () => {
+test("redeploy CLI requires one explicit Hermes target", () => {
   const result = powershell("scripts/redeploy-hermes-tests.ps1", "-DryRun");
-
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /build --pull service hermes-local hermes-a hermes-b/);
-  assert.match(result.stdout, /up -d --force-recreate libsql qdrant object-store service/);
-  assert.match(result.stdout, /exec -T service sh -lc/);
-  for (const service of ["hermes-local", "hermes-a", "hermes-b"]) {
-    assert.match(result.stdout, new RegExp(`run --rm --no-deps ${service} sh -lc`));
-  }
-  assert.match(result.stdout, /HermesTeamMemoryProvider/);
-  assert.doesNotMatch(result.stdout, /--volumes|\bdown\b/);
+  assert.notEqual(result.status, 0);
 });
 
-test("redeploy CLI supports a cache-free rebuild", () => {
-  const result = powershell("scripts/redeploy-hermes-tests.ps1", "-DryRun", "-NoCache");
+test("redeploy CLI rebuilds only hermes-local", () => {
+  const result = powershell("scripts/redeploy-hermes-tests.ps1", "-Target", "hermes-local", "-DryRun");
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /build --pull --no-cache service hermes-local hermes-a hermes-b/);
+  assert.match(result.stdout, /rm -sf hermes-local/);
+  assert.match(result.stdout, /build --pull hermes-local/);
+  assert.match(result.stdout, /run --rm --no-deps hermes-local sh -lc/);
+  assert.doesNotMatch(result.stdout, /hermes-a|hermes-b|\bup -d\b|--volumes|\bdown\b/);
+});
+
+test("redeploy CLI rebuilds only hermes-a and its shared service image", () => {
+  const result = powershell("scripts/redeploy-hermes-tests.ps1", "-Target", "hermes-a", "-DryRun");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /rm -sf hermes-a/);
+  assert.match(result.stdout, /build --pull service hermes-a/);
+  assert.match(result.stdout, /run --rm --no-deps service sh -lc/);
+  assert.match(result.stdout, /run --rm --no-deps hermes-a sh -lc/);
+  assert.doesNotMatch(result.stdout, /hermes-local|hermes-b|\bup -d\b/);
+});
+
+test("redeploy CLI supports a cache-free targeted rebuild", () => {
+  const result = powershell("scripts/redeploy-hermes-tests.ps1", "-Target", "hermes-b", "-DryRun", "-NoCache");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /build --pull --no-cache service hermes-b/);
+  assert.doesNotMatch(result.stdout, /hermes-local|hermes-a/);
 });
 
 test("memory reset deletes memory stores but preserves RBAC tables", async () => {
@@ -118,13 +131,32 @@ test("memory reset deletes memory stores but preserves RBAC tables", async () =>
   }
 });
 
-test("clear CLI preserves RBAC volumes and targets both local and shared memory", () => {
+test("clear CLI requires one explicit Hermes target", () => {
   const result = powershell("scripts/clear-hermes-test-memories.ps1", "-DryRun");
+  assert.notEqual(result.status, 0);
+});
+
+test("clear CLI clears only hermes-local memory", () => {
+  const result = powershell("scripts/clear-hermes-test-memories.ps1", "-Target", "hermes-local", "-DryRun");
 
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /build hermes-local/);
+  assert.match(result.stdout, /rm -sf hermes-local/);
+  assert.match(result.stdout, /up -d qdrant/);
   assert.match(result.stdout, /hermes-local.*clear-test-memory\.mjs/);
+  assert.doesNotMatch(result.stdout, /hermes-a|hermes-b|\bservice\b|object-store|libsql/);
+});
+
+test("clear CLI clears shared server memory for only the selected Hermes client", () => {
+  const result = powershell("scripts/clear-hermes-test-memories.ps1", "-Target", "hermes-b", "-DryRun");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /build service/);
+  assert.match(result.stdout, /rm -sf hermes-b/);
+  assert.match(result.stdout, /stop service object-store/);
+  assert.match(result.stdout, /up -d libsql qdrant/);
   assert.match(result.stdout, /service.*clear-test-memory\.mjs/);
   assert.match(result.stdout, /test .*resolved.*\/data/);
-  assert.doesNotMatch(result.stdout, /--volumes|\bdown\b|libsql-data|hermes-local-home/);
+  assert.doesNotMatch(result.stdout, /hermes-local|hermes-a|up -d --force-recreate/);
 });
 

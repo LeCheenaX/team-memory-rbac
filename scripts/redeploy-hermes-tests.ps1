@@ -1,4 +1,7 @@
 param(
+  [Parameter(Mandatory = $true)]
+  [ValidateSet("hermes-local", "hermes-a", "hermes-b")]
+  [string]$Target,
   [switch]$DryRun,
   [switch]$NoCache
 )
@@ -6,7 +9,6 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $ComposeFiles = @("-f", "compose.yaml", "-f", "compose.hermes.yaml")
-$HermesServices = @("hermes-local", "hermes-a", "hermes-b")
 $BuildMarkerPath = Join-Path $RepoRoot ".team-memory-build-id"
 
 function Format-Argument([string]$Value) {
@@ -37,33 +39,30 @@ try {
     $markerCreated = $true
   }
 
-  # A running `docker compose run` session keeps its old image. Stop those
-  # test clients, but deliberately retain every named volume.
-  Invoke-Docker (@("compose") + $ComposeFiles + @("rm", "-sf") + $HermesServices)
+  Invoke-Docker (@("compose") + $ComposeFiles + @("rm", "-sf", $Target))
 
+  $buildTargets = if ($Target -eq "hermes-local") { @($Target) } else { @("service", $Target) }
   $build = @("compose") + $ComposeFiles + @("build", "--pull")
   if ($NoCache) { $build += "--no-cache" }
-  $build += @("service") + $HermesServices
+  $build += $buildTargets
   Invoke-Docker $build
 
-  Invoke-Docker (@("compose") + $ComposeFiles + @(
-    "up", "-d", "--force-recreate", "libsql", "qdrant", "object-store", "service"
-  ))
-
-  $serviceCheck = 'test "$(cat /app/.team-memory-build-id)" = "' + $buildId + '"'
-  Invoke-Docker (@("compose") + $ComposeFiles + @("exec", "-T", "service", "sh", "-lc", $serviceCheck))
-
-  foreach ($service in $HermesServices) {
-    $hermesCheck =
-      'test "$(cat /opt/team-memory-rbac/.team-memory-build-id)" = "' + $buildId +
-      '" && python -c "from src.adapters.hermes.http_client import HermesTeamMemoryProvider"'
+  if ($Target -ne "hermes-local") {
+    $serviceCheck = 'test "$(cat /app/.team-memory-build-id)" = "' + $buildId + '"'
     Invoke-Docker (@("compose") + $ComposeFiles + @(
-      "run", "--rm", "--no-deps", $service, "sh", "-lc", $hermesCheck
+      "run", "--rm", "--no-deps", "service", "sh", "-lc", $serviceCheck
     ))
   }
 
-  Write-Host "Team Memory $buildId is deployed and verified in hermes-local, hermes-a, and hermes-b."
-  Write-Host "Hermes settings, sessions, RBAC data, and test memories were preserved."
+  $hermesCheck =
+    'test "$(cat /opt/team-memory-rbac/.team-memory-build-id)" = "' + $buildId +
+    '" && python -c "from src.adapters.hermes.http_client import HermesTeamMemoryProvider"'
+  Invoke-Docker (@("compose") + $ComposeFiles + @(
+    "run", "--rm", "--no-deps", $Target, "sh", "-lc", $hermesCheck
+  ))
+
+  Write-Host "Team Memory $buildId is rebuilt and verified for $Target only."
+  Write-Host "No other Hermes target or dependency stack was started."
 } finally {
   if ($markerCreated -and (Test-Path $BuildMarkerPath)) {
     Remove-Item -LiteralPath $BuildMarkerPath -Force

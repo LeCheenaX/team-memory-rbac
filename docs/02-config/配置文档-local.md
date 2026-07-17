@@ -6,33 +6,37 @@
 
 ## 测试环境一键维护
 
-在仓库根目录运行以下命令，把当前工作树中的最新版 Team Memory 同时重新部署到 `hermes-local`、`hermes-a`、`hermes-b` 和共享 `service`：
+两个命令都必须通过 `-Target` 指定唯一目标；可选值只有 `hermes-local`、`hermes-a`、`hermes-b`。脚本不会同时启动三套 Hermes。
+
+只重新构建指定目标中的最新版 Team Memory：
 
 ```powershell
-npm.cmd run hermes:test:redeploy
+npm.cmd run hermes:test:redeploy -- -Target hermes-local
+npm.cmd run hermes:test:redeploy -- -Target hermes-a
+npm.cmd run hermes:test:redeploy -- -Target hermes-b
 ```
 
-如需完全禁用 Docker 构建缓存：
+完全禁用 Docker 构建缓存时，在同一命令后增加 `-NoCache`：
 
 ```powershell
-npm.cmd run hermes:test:redeploy -- -NoCache
+npm.cmd run hermes:test:redeploy -- -Target hermes-local -NoCache
 ```
 
-脚本会替换仍在使用旧镜像的测试容器，并在四个运行环境中核对同一个 build marker。它保留 Hermes 配置、登录 session、RBAC 数据和已有测试记忆。
+`hermes-local` 只构建和验证 local 镜像。`hermes-a` 或 `hermes-b` 会同时构建它依赖的共享 `service` 镜像，但不会启动 service、基础设施或另一个 Hermes 客户端。
 
-只清空本项目测试环境的非核心记忆：
+只清空指定测试目标的非核心记忆：
 
 ```powershell
-npm.cmd run hermes:test:clear-memory
+npm.cmd run hermes:test:clear-memory -- -Target hermes-local
+npm.cmd run hermes:test:clear-memory -- -Target hermes-a
+npm.cmd run hermes:test:clear-memory -- -Target hermes-b
 ```
 
-该命令同时清理 Test 1 local 和 Test 2 shared server 的以下数据：
+- 指定 `hermes-local`：只清理 Test 1 local 的 History、relation、BM25、Qdrant collections 和 filesystem CAS。
+- 指定 `hermes-a` 或 `hermes-b`：清理 Test 2 的共享 server memory。A/B 使用同一个 server memory，因此选择任一客户端都会让另一个客户端看到同样的清空结果，但脚本不会启动另一个 Hermes 客户端。
+- 清理所需的基础设施只在执行期间启动，完成后停止；脚本不会把整套测试容器留在同时运行状态。
 
-- History commit、operation、conflict、branch head、watermark 和幂等记录；
-- Memory relation、BM25 文档、Qdrant memory collections；
-- local filesystem CAS 和测试用 object-store CAS。
-
-它不会删除 `rbac_*` 数据，因此用户、密码凭据、管理员、Agent、角色、授权、delegation、session 和 RBAC audit log 都会保留。不要用 `docker compose down -v` 代替这个命令；`-v` 会连核心身份数据和 Hermes 配置一起删除。
+清理不会删除任何 `rbac_*` 数据，因此用户、密码凭据、管理员、Agent、角色、授权、delegation、session 和 RBAC audit log 都会保留。不要使用 `docker compose down -v` 代替此命令。
 
 ## 0. 前置条件
 
