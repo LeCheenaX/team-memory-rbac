@@ -134,7 +134,7 @@ export function formatInjectedMemoryContext(
   host: HostMemoryHost,
   result: MemoryRetrievalResult,
 ): InjectedMemoryContext {
-  const items = result.items.slice(0, 12);
+  const items = rankByDescendingScoreShare(result.items);
   const sections = items.map((item, index) =>
     `<memory index="${index + 1}" id="${escapeXml(memoryItemId(item))}" score="${item.score.toFixed(3)}" source="${memoryItemSource(item)}">\n${escapeXml(memoryItemText(item))}\n</memory>`,
   );
@@ -153,6 +153,23 @@ export function formatInjectedMemoryContext(
       score: item.score,
     })),
   };
+}
+
+function rankByDescendingScoreShare(
+  items: MemoryRetrievalItem[],
+): MemoryRetrievalItem[] {
+  const totalScore = items.reduce((total, item) => total + item.score, 0);
+  return items
+    .map((item, index) => ({
+      item,
+      index,
+      scoreShare: totalScore > 0 ? item.score / totalScore : 0,
+    }))
+    .sort(
+      (left, right) =>
+        right.scoreShare - left.scoreShare || left.index - right.index,
+    )
+    .map(({ item }) => item);
 }
 
 function memoryItemId(item: MemoryRetrievalItem): string {

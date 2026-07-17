@@ -7,6 +7,7 @@ import test from "node:test";
 import { ClaudeCodeTeamMemoryHooks } from "../src/adapters/claude-code/hooks.ts";
 import { TeamMemoryHttpClient } from "../src/adapters/http/client.ts";
 import { createTeamMemoryServer } from "../src/adapters/http/server.ts";
+import { formatInjectedMemoryContext } from "../src/adapters/lifecycle/host-memory.ts";
 import { OpenClawTeamMemoryPlugin } from "../src/adapters/openclaw/plugin.ts";
 import {
   bootstrapDevelopment,
@@ -17,12 +18,14 @@ import { unitTestRuntimeConfig } from "./support/runtime-config.ts";
 
 const now = "2026-06-30T00:00:00.000Z";
 
-async function setup() {
+async function setup(recallTopP = 0.8) {
   const directory = await mkdtemp(join(tmpdir(), "team-memory-rbac-host-"));
-  const runtime = await TeamMemoryRuntime.create(unitTestRuntimeConfig({
+  const runtimeConfig = unitTestRuntimeConfig({
     directory,
     databaseName: "host-lifecycle.db",
-  }));
+  });
+  runtimeConfig.recallTopP = recallTopP;
+  const runtime = await TeamMemoryRuntime.create(runtimeConfig);
   runtime.ingestion.ingest = async () => {
     throw new Error("test vector store unavailable");
   };
@@ -90,18 +93,16 @@ async function onboard(baseUrl: string, token: string): Promise<string> {
 
 async function writeMemory(client: TeamMemoryHttpClient): Promise<void> {
   await client.write({
-    operations: [
-      {
-        target: "memory_entity",
-        op: "create",
-        properties: {
-          name: "Hermes rollout checklist",
-          title: "Hermes rollout checklist",
-          description: "Always recall the Hermes provider fixture requirements.",
-          tags: ["hermes", "provider"],
-        },
+    operations: Array.from({ length: 3 }, (_, index) => ({
+      target: "memory_entity",
+      op: "create",
+      properties: {
+        name: `Hermes rollout checklist ${index + 1}`,
+        title: `Hermes rollout checklist ${index + 1}`,
+        description: "Always recall the Hermes provider fixture requirements.",
+        tags: ["hermes", "provider"],
       },
-    ],
+    })),
   });
 }
 
@@ -124,8 +125,66 @@ function searchItems<T>(result: unknown): T[] {
   throw new Error("search result did not include items");
 }
 
+test("injected memory context ranks and preserves every top-P selected item", () => {
+  const result = {
+    rootEntityId: "root-host",
+    branchRef: "main",
+    items: [
+      { id: "memory-low", score: 1 },
+      { id: "memory-high", score: 3 },
+      { id: "memory-mid-first", score: 2 },
+      { id: "memory-mid-second", score: 2 },
+      ...Array.from({ length: 10 }, (_, index) => ({
+        id: `memory-tail-${index + 1}`,
+        score: 0.1,
+      })),
+    ].map(({ id, score }) => ({
+      kind: "entity" as const,
+      entity: {
+        id,
+        rootEntityId: "root-host",
+        name: id,
+        status: "active" as const,
+        createdAt: now,
+        updatedAt: now,
+      },
+      evidence: [],
+      score,
+      origin: "cloud_active" as const,
+    })),
+  };
+
+  const context = formatInjectedMemoryContext("hermes", result);
+
+  assert.deepEqual(context.memoryIds, [
+    "memory-high",
+    "memory-mid-first",
+    "memory-mid-second",
+    "memory-low",
+    ...Array.from({ length: 10 }, (_, index) => `memory-tail-${index + 1}`),
+  ]);
+  assert.deepEqual(
+    context.provenance
+      .slice(0, 4)
+      .map(({ memoryId, score }) => ({ memoryId, score })),
+    [
+      { memoryId: "memory-high", score: 3 },
+      { memoryId: "memory-mid-first", score: 2 },
+      { memoryId: "memory-mid-second", score: 2 },
+      { memoryId: "memory-low", score: 1 },
+    ],
+  );
+  assert.equal(context.memoryIds.length, result.items.length);
+  assert.equal(context.provenance.length, result.items.length);
+  assert.match(context.text, /id="memory-tail-10"/);
+  assert.ok(
+    context.text.indexOf('id="memory-high"') <
+      context.text.indexOf('id="memory-low"'),
+  );
+});
+
 test("host lifecycle recall injects trusted-boundary context and capture writes success and failure paths", async () => {
-  const fixture = await setup();
+  const fixture = await setup(0.01);
   try {
     const client = new TeamMemoryHttpClient({
       baseUrl: fixture.baseUrl,
@@ -137,10 +196,11 @@ test("host lifecycle recall injects trusted-boundary context and capture writes 
     const recalled = await client.recallHostMemory("hermes", {
       sessionId: "hermes-session",
       userPrompt: "What are the Hermes provider fixture requirements?",
+      limit: 10,
     }) as { text: string; memoryIds: string[] };
     assert.match(recalled.text, /team-memory-context/);
     assert.match(recalled.text, /Hermes provider fixture requirements/);
-    assert.ok(recalled.memoryIds.length > 0);
+    assert.equal(recalled.memoryIds.length, 1);
 
     const captured = await client.captureHostMemory("hermes", {
       sessionId: "hermes-session",
