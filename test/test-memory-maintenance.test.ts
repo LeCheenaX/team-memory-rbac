@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -37,7 +38,8 @@ test("redeploy CLI rebuilds only hermes-local", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /rm -sf hermes-local/);
   assert.match(result.stdout, /build --pull hermes-local/);
-  assert.match(result.stdout, /run --rm --no-deps hermes-local sh -lc/);
+  assert.match(result.stdout, /run --rm --no-deps hermes-local grep -Fx --/);
+  assert.match(result.stdout, /run --rm --no-deps hermes-local python -c/);
   assert.doesNotMatch(result.stdout, /hermes-a|hermes-b|\bup -d\b|--volumes|\bdown\b/);
 });
 
@@ -47,8 +49,9 @@ test("redeploy CLI rebuilds only hermes-a and its shared service image", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /rm -sf hermes-a/);
   assert.match(result.stdout, /build --pull service hermes-a/);
-  assert.match(result.stdout, /run --rm --no-deps service sh -lc/);
-  assert.match(result.stdout, /run --rm --no-deps hermes-a sh -lc/);
+  assert.match(result.stdout, /run --rm --no-deps service grep -Fx --/);
+  assert.match(result.stdout, /run --rm --no-deps hermes-a grep -Fx --/);
+  assert.match(result.stdout, /run --rm --no-deps hermes-a python -c/);
   assert.doesNotMatch(result.stdout, /hermes-local|hermes-b|\bup -d\b/);
 });
 
@@ -58,6 +61,18 @@ test("redeploy CLI supports a cache-free targeted rebuild", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /build --pull --no-cache service hermes-b/);
   assert.doesNotMatch(result.stdout, /hermes-local|hermes-a/);
+});
+
+test("redeploy CLI verifies the image without a nested sh command", () => {
+  const result = powershell("scripts/redeploy-hermes-tests.ps1", "-Target", "hermes-local", "-DryRun");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /sh -lc/);
+  assert.match(
+    result.stdout,
+    /run --rm --no-deps hermes-local grep -Fx -- \S+ \/opt\/team-memory-rbac\/\.team-memory-build-id/,
+  );
+  assert.match(result.stdout, /run --rm --no-deps hermes-local python -c/);
 });
 
 test("memory reset deletes memory stores but preserves RBAC tables", async () => {
@@ -82,11 +97,11 @@ test("memory reset deletes memory stores but preserves RBAC tables", async () =>
     await client.batch([
       "create table rbac_users(user_id text primary key, payload_json text not null)",
       "create table history_request_journal(sequence integer primary key, request_json text)",
-      "create table memory_relations(id text primary key)",
+      "create table memory_relations(id text primary key, root_entity_id text not null)",
       "create table bm25_documents(id text primary key)",
       "insert into rbac_users values ('user:admin', '{}')",
       "insert into history_request_journal values (1, '{}')",
-      "insert into memory_relations values ('relation:1')",
+      "insert into memory_relations values ('relation:1', 'root:test-target')",
       "insert into bm25_documents values ('document:1')",
     ]);
     await mkdir(casPath, { recursive: true });
@@ -113,9 +128,9 @@ test("memory reset deletes memory stores but preserves RBAC tables", async () =>
     assert.deepEqual(
       requests.map(({ method, url }) => `${method} ${url}`),
       [
-        "DELETE /collections/memory_entities",
-        "DELETE /collections/memory_entity_branches",
-        "DELETE /collections/resource_chunks",
+        "POST /collections/memory_entities/points/delete?wait=true",
+        "POST /collections/memory_entity_branches/points/delete?wait=true",
+        "POST /collections/resource_chunks/points/delete?wait=true",
       ],
     );
   } finally {
@@ -134,6 +149,13 @@ test("memory reset deletes memory stores but preserves RBAC tables", async () =>
 test("clear CLI requires one explicit Hermes target", () => {
   const result = powershell("scripts/clear-hermes-test-memories.ps1", "-DryRun");
   assert.notEqual(result.status, 0);
+});
+
+test("clear CLI stops temporary dependencies from its finally block", () => {
+  const script = readFileSync("scripts/clear-hermes-test-memories.ps1", "utf8");
+
+  assert.match(script, /finally \{\s+try \{\s+if \(\$DependenciesToStop\.Count -gt 0\)/);
+  assert.match(script, /@\("stop"\) \+ \$DependenciesToStop/);
 });
 
 test("clear CLI clears only hermes-local memory", () => {

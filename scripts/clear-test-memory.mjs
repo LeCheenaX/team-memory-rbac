@@ -55,24 +55,55 @@ async function clearSql(config) {
   try {
     const tables = await client.execute("select name from sqlite_master where type = 'table'");
     const existing = new Set(tables.rows.map((row) => String(row.name)));
+    const rootEntityIds = new Set();
+    for (const table of existing) {
+      const columns = await client.execute(`pragma table_info(${table})`);
+      if (!columns.rows.some((row) => row.name === "root_entity_id")) continue;
+      const roots = await client.execute(
+        `select distinct root_entity_id from ${table} where root_entity_id is not null`,
+      );
+      for (const row of roots.rows) {
+        const rootEntityId = row.root_entity_id;
+        if (typeof rootEntityId === "string" && rootEntityId.length > 0) {
+          rootEntityIds.add(rootEntityId);
+        }
+      }
+    }
     const statements = MEMORY_TABLES_IN_DELETE_ORDER
       .filter((table) => existing.has(table))
       .map((table) => `delete from ${table}`);
     if (statements.length > 0) await client.batch(statements, "write");
-    return statements.length;
+    return { sqlTableCount: statements.length, rootEntityIds: [...rootEntityIds] };
   } finally {
     client.close();
   }
 }
 
-async function clearVectors(config) {
+async function clearVectors(config, rootEntityIds) {
+  if (rootEntityIds.length === 0) return;
   for (const collection of VECTOR_COLLECTIONS) {
-    const response = await fetch(new URL(`collections/${collection}`, `${config.qdrant.url.replace(/\/$/, "")}/`), {
-      method: "DELETE",
-      headers: config.qdrant.apiKey === undefined ? {} : { "api-key": config.qdrant.apiKey },
+    const rootCondition = { key: "rootEntityId", match: { any: rootEntityIds } };
+    const filter = collection === "memory_entities"
+      ? {
+          should: [
+            rootCondition,
+            { key: "entityId", match: { any: rootEntityIds } },
+          ],
+        }
+      : { must: [rootCondition] };
+    const response = await fetch(new URL(
+      `collections/${collection}/points/delete?wait=true`,
+      `${config.qdrant.url.replace(/\/$/, "")}/`,
+    ), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(config.qdrant.apiKey === undefined ? {} : { "api-key": config.qdrant.apiKey }),
+      },
+      body: JSON.stringify({ filter }),
     });
     if (!response.ok && response.status !== 404) {
-      throw new Error(`Failed to delete Qdrant collection ${collection}: HTTP ${response.status}`);
+      throw new Error(`Failed to delete Qdrant points from ${collection}: HTTP ${response.status}`);
     }
   }
 }
@@ -91,8 +122,8 @@ async function clearFilesystemCas(config) {
 const options = parseArguments(process.argv.slice(2));
 const config = JSON.parse(await readFile(options.configPath, "utf8"));
 assertTestConfig(config);
-const sqlTableCount = await clearSql(config);
-if (!options.skipVectors) await clearVectors(config);
+const { sqlTableCount, rootEntityIds } = await clearSql(config);
+if (!options.skipVectors) await clearVectors(config, rootEntityIds);
 const casCleared = options.skipCas ? false : await clearFilesystemCas(config);
 
 console.log(JSON.stringify({

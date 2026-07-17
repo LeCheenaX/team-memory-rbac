@@ -48,17 +48,18 @@ try {
   Invoke-Docker $build
 
   if ($Target -ne "hermes-local") {
-    $serviceCheck = 'test "$(cat /app/.team-memory-build-id)" = "' + $buildId + '"'
     Invoke-Docker (@("compose") + $ComposeFiles + @(
-      "run", "--rm", "--no-deps", "service", "sh", "-lc", $serviceCheck
+      "run", "--rm", "--no-deps", "service", "grep", "-Fx", "--", $buildId, "/app/.team-memory-build-id"
     ))
   }
 
-  $hermesCheck =
-    'test "$(cat /opt/team-memory-rbac/.team-memory-build-id)" = "' + $buildId +
-    '" && python -c "from src.adapters.hermes.http_client import HermesTeamMemoryProvider"'
   Invoke-Docker (@("compose") + $ComposeFiles + @(
-    "run", "--rm", "--no-deps", $Target, "sh", "-lc", $hermesCheck
+    "run", "--rm", "--no-deps", $Target, "grep", "-Fx", "--", $buildId,
+    "/opt/team-memory-rbac/.team-memory-build-id"
+  ))
+  Invoke-Docker (@("compose") + $ComposeFiles + @(
+    "run", "--rm", "--no-deps", $Target, "python", "-c",
+    "from src.adapters.hermes.http_client import HermesTeamMemoryProvider"
   ))
 
   Write-Host "Team Memory $buildId is rebuilt and verified for $Target only."
