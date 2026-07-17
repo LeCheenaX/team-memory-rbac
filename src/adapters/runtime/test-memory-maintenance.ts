@@ -1,6 +1,5 @@
 import { createClient } from "@libsql/client";
-import { mkdir, readdir, rm } from "node:fs/promises";
-import { join, parse, resolve } from "node:path";
+import { mkdir, rm } from "node:fs/promises";
 
 const MEMORY_TABLES_IN_DELETE_ORDER = [
   "history_resolutions",
@@ -34,7 +33,6 @@ export interface TestMemoryMaintenanceConfig {
 export interface ClearTestMemoryOptions {
   skipVectors?: boolean;
   skipFilesystemCas?: boolean;
-  objectStoreCasDirectory?: string;
 }
 
 export interface ClearTestMemoryResult {
@@ -42,7 +40,7 @@ export interface ClearTestMemoryResult {
   sqlTableCount: number;
   vectorsCleared: boolean;
   filesystemCasCleared: boolean;
-  objectStoreCasCleared: boolean;
+  immutableObjectStoreCasRetained: boolean;
   preserved: "rbac_*";
 }
 
@@ -62,17 +60,13 @@ export async function clearTestMemory(
   const filesystemCasCleared = options.skipFilesystemCas === true
     ? false
     : await clearFilesystemCas(config);
-  const objectStoreCasCleared = await clearObjectStoreCas(
-    config,
-    options.objectStoreCasDirectory,
-  );
 
   return {
     status: "cleared",
     sqlTableCount,
     vectorsCleared: options.skipVectors !== true,
     filesystemCasCleared,
-    objectStoreCasCleared,
+    immutableObjectStoreCasRetained: config.cas.backend === "object_store",
     preserved: "rbac_*",
   };
 }
@@ -141,25 +135,6 @@ async function clearFilesystemCas(config: TestMemoryMaintenanceConfig): Promise<
   }
   await rm(directory, { recursive: true, force: true });
   await mkdir(directory, { recursive: true });
-  return true;
-}
-
-async function clearObjectStoreCas(
-  config: TestMemoryMaintenanceConfig,
-  directory: string | undefined,
-): Promise<boolean> {
-  if (config.cas.backend !== "object_store" || directory === undefined) {
-    return false;
-  }
-  const resolved = resolve(directory);
-  if (resolved === parse(resolved).root) {
-    throw new Error("Refusing to clear an object-store filesystem root");
-  }
-  await mkdir(resolved, { recursive: true });
-  const entries = await readdir(resolved);
-  for (const entry of entries) {
-    await rm(join(resolved, entry), { recursive: true, force: true });
-  }
   return true;
 }
 
