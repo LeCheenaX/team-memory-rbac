@@ -30,7 +30,7 @@ npm.cmd run hermes:test:clear-memory
 
 - History commit、operation、conflict、branch head、watermark 和幂等记录；
 - Memory relation、BM25 文档、Qdrant memory collections；
-- local filesystem CAS 和测试用 object-store CAS。
+- local filesystem CAS。shared object-store 使用不可变 CAS；清除 History/Resource 引用后，其中旧 bytes 不再可达，但物理 bytes 保留给独立的生命周期清理流程处理。
 
 它不会删除 `rbac_*` 数据，因此用户、密码凭据、管理员、Agent、角色、授权、delegation、session 和 RBAC audit log 都会保留。不要用 `docker compose down -v` 代替这个命令；`-v` 会连核心身份数据和 Hermes 配置一起删除。
 

@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createClient } from "@libsql/client";
+import {
+  clearTestMemory,
+  type TestMemoryMaintenanceConfig,
+} from "../src/adapters/runtime/test-memory-maintenance.ts";
 
 function powershell(script: string, ...args: string[]) {
   return spawnSync(
@@ -13,17 +17,6 @@ function powershell(script: string, ...args: string[]) {
     ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, ...args],
     { encoding: "utf8" },
   );
-}
-
-function runNode(...args: string[]): Promise<{ status: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
-    child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
-    child.on("close", (status) => resolve({ status, stdout, stderr }));
-  });
 }
 
 test("redeploy CLI replaces all Hermes test images while preserving volumes", () => {
@@ -47,7 +40,7 @@ test("redeploy CLI supports a cache-free rebuild", () => {
   assert.match(result.stdout, /build --pull --no-cache service hermes-local hermes-a hermes-b/);
 });
 
-test("memory reset deletes memory stores but preserves RBAC tables", async () => {
+test("memory maintenance clears non-core stores but preserves RBAC", async () => {
   const directory = await mkdtemp(join(tmpdir(), "team-memory-reset-"));
   const databasePath = join(directory, "memory.db");
   const casPath = join(directory, "cas");
@@ -62,8 +55,12 @@ test("memory reset deletes memory stores but preserves RBAC tables", async () =>
   const address = server.address();
   assert.notEqual(address, null);
   assert.equal(typeof address, "object");
-  const qdrantUrl = `http://127.0.0.1:${(address as { port: number }).port}`;
-  const configPath = join(directory, "config.json");
+  const config: TestMemoryMaintenanceConfig = {
+    runtimeMode: "Dev",
+    libsql: { url: `file:${databasePath}` },
+    qdrant: { url: `http://127.0.0.1:${(address as { port: number }).port}` },
+    cas: { backend: "filesystem", directory: casPath },
+  };
 
   try {
     await client.batch([
@@ -78,15 +75,10 @@ test("memory reset deletes memory stores but preserves RBAC tables", async () =>
     ]);
     await mkdir(casPath, { recursive: true });
     await writeFile(join(casPath, "blob"), "memory bytes");
-    await writeFile(configPath, JSON.stringify({
-      runtimeMode: "Dev",
-      libsql: { url: `file:${databasePath}` },
-      qdrant: { url: qdrantUrl },
-      cas: { backend: "filesystem", directory: casPath },
-    }));
 
-    const result = await runNode("scripts/clear-test-memory.mjs", "--config", configPath);
-    assert.equal(result.status, 0, result.stderr);
+    const result = await clearTestMemory(config);
+    assert.equal(result.preserved, "rbac_*");
+    assert.equal(result.filesystemCasCleared, true);
 
     const users = await client.execute("select user_id from rbac_users");
     const history = await client.execute("select * from history_request_journal");
@@ -107,24 +99,37 @@ test("memory reset deletes memory stores but preserves RBAC tables", async () =>
     );
   } finally {
     await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error === undefined) resolve();
-        else reject(error);
-      });
+      server.close((error) => error === undefined ? resolve() : reject(error));
     });
     client.close();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    await rm(directory, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 100,
+    });
   }
 });
 
-test("clear CLI preserves RBAC volumes and targets both local and shared memory", () => {
+test("memory maintenance rejects production and remote persistence", async () => {
+  await assert.rejects(
+    clearTestMemory({
+      runtimeMode: "Production",
+      libsql: { url: "https://database.example.com" },
+      qdrant: { url: "https://vectors.example.com" },
+      cas: { backend: "object_store" },
+    }),
+    /runtimeMode must be Dev/,
+  );
+});
+
+test("clear CLI targets local and shared stores without deleting immutable CAS", () => {
   const result = powershell("scripts/clear-hermes-test-memories.ps1", "-DryRun");
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /hermes-local.*clear-test-memory\.mjs/);
   assert.match(result.stdout, /service.*clear-test-memory\.mjs/);
-  assert.match(result.stdout, /test .*resolved.*\/data/);
-  assert.doesNotMatch(result.stdout, /--volumes|\bdown\b|libsql-data|hermes-local-home/);
+  assert.match(result.stdout, /--experimental-strip-types/);
+  assert.doesNotMatch(result.stdout, /--volumes|\bdown\b|rm -rf|find \/data|libsql-data|hermes-local-home/);
 });
 
