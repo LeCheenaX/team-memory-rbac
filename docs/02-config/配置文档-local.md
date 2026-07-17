@@ -42,17 +42,17 @@ docker compose -f compose.yaml -f compose.hermes.yaml run --rm hermes-local npm 
 
 交互提示里按测试环境输入：
 
-| 提示 | Test 1 输入 |
-| --- | --- |
-| runtime mode | `Dev` |
-| embedding provider | `http` |
-| embedding URL | 容器可访问的 HTTP embedding URL |
-| embedding model | 当前 embedding 服务中真实存在的模型 |
-| libSQL | 使用提示给出的 local/libSQL 测试路径 |
-| CAS | 使用提示给出的 local filesystem CAS 路径 |
-| Qdrant | 使用提示给出的 local Qdrant 地址 |
-| recall top-P | 默认 `0.8`；控制 recall 结果覆盖的分数比例，Agent 的 `limit` 仍只是返回数量上限 |
-| optional settings | 没有特殊需求就接受默认值 |
+| 提示                 | Test 1 输入                                              |
+| ------------------ | ------------------------------------------------------ |
+| runtime mode       | `Dev`                                                  |
+| embedding provider | `http`                                                 |
+| embedding URL      | 容器可访问的 HTTP embedding URL                              |
+| embedding model    | 当前 embedding 服务中真实存在的模型                                |
+| libSQL             | 使用提示给出的 local/libSQL 测试路径                              |
+| CAS                | 使用提示给出的 local filesystem CAS 路径                        |
+| Qdrant             | 使用提示给出的 local Qdrant 地址                                |
+| recall top-P       | 默认 `0.8`；控制 recall 结果覆盖的分数比例，Agent 的 `limit` 仍只是返回数量上限 |
+| optional settings  | 没有特殊需求就接受默认值                                           |
 
 通过条件：
 
