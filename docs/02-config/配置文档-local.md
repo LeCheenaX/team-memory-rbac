@@ -4,6 +4,36 @@
 
 相关测试：[[本地手动测试.md#本地手动测试]]。
 
+## 测试环境一键维护
+
+在仓库根目录运行以下命令，把当前工作树中的最新版 Team Memory 同时重新部署到 `hermes-local`、`hermes-a`、`hermes-b` 和共享 `service`：
+
+```powershell
+npm.cmd run hermes:test:redeploy
+```
+
+如需完全禁用 Docker 构建缓存：
+
+```powershell
+npm.cmd run hermes:test:redeploy -- -NoCache
+```
+
+脚本会替换仍在使用旧镜像的测试容器，并在四个运行环境中核对同一个 build marker。它保留 Hermes 配置、登录 session、RBAC 数据和已有测试记忆。
+
+只清空本项目测试环境的非核心记忆：
+
+```powershell
+npm.cmd run hermes:test:clear-memory
+```
+
+该命令同时清理 Test 1 local 和 Test 2 shared server 的以下数据：
+
+- History commit、operation、conflict、branch head、watermark 和幂等记录；
+- Memory relation、BM25 文档、Qdrant memory collections；
+- local filesystem CAS 和测试用 object-store CAS。
+
+它不会删除 `rbac_*` 数据，因此用户、密码凭据、管理员、Agent、角色、授权、delegation、session 和 RBAC audit log 都会保留。不要用 `docker compose down -v` 代替这个命令；`-v` 会连核心身份数据和 Hermes 配置一起删除。
+
 ## 0. 前置条件
 
 在仓库根目录执行：

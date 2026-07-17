@@ -22,6 +22,8 @@
     "local-host-smoke": "node --experimental-strip-types scripts/local-host-smoke.mjs",
     "local-memory-tool": "node --experimental-strip-types scripts/local-memory-tool.mjs",
     "hermes:local-smoke": "node --experimental-strip-types scripts/hermes-local-smoke.mjs",
+    "hermes:test:redeploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/redeploy-hermes-tests.ps1",
+    "hermes:test:clear-memory": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/clear-hermes-test-memories.ps1",
     "runtime:check": "node --experimental-strip-types scripts/check-runtime-config.mjs",
     "mcp:stdio": "node --experimental-strip-types scripts/team-memory-mcp.mjs",
     "openclaw": "node --experimental-strip-types scripts/openclaw-team-memory.mjs",
