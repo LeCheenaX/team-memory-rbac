@@ -97,6 +97,16 @@ test("memory maintenance clears non-core stores but preserves RBAC", async () =>
         "DELETE /collections/resource_chunks",
       ],
     );
+
+    const objectStoreDirectory = join(directory, "object-store");
+    await mkdir(objectStoreDirectory, { recursive: true });
+    await writeFile(join(objectStoreDirectory, "immutable-memory"), "bytes");
+    const objectStoreResult = await clearTestMemory(
+      { ...config, cas: { backend: "object_store" } },
+      { skipVectors: true, objectStoreCasDirectory: objectStoreDirectory },
+    );
+    assert.equal(objectStoreResult.objectStoreCasCleared, true);
+    await assert.rejects(readFile(join(objectStoreDirectory, "immutable-memory")));
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => error === undefined ? resolve() : reject(error));
@@ -123,13 +133,14 @@ test("memory maintenance rejects production and remote persistence", async () =>
   );
 });
 
-test("clear CLI targets local and shared stores without deleting immutable CAS", () => {
+test("clear CLI targets local and shared stores through the core maintenance module", () => {
   const result = powershell("scripts/clear-hermes-test-memories.ps1", "-DryRun");
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /hermes-local.*clear-test-memory\.mjs/);
-  assert.match(result.stdout, /service.*clear-test-memory\.mjs/);
+  assert.match(result.stdout, /memory-test-maintenance.*clear-test-memory\.mjs/);
   assert.match(result.stdout, /--experimental-strip-types/);
+  assert.match(result.stdout, /--object-store-cas-directory \/test-object-store/);
   assert.doesNotMatch(result.stdout, /--volumes|\bdown\b|rm -rf|find \/data|libsql-data|hermes-local-home/);
 });
 
