@@ -536,7 +536,7 @@ export class McpTeamMemoryAdapter {
       },
       {
         name: "memory.write",
-        description: "Write durable Team Memory using structured operations.",
+        description: "Write durable Team Memory using structured operations. A MemoryEntity is one stable subject/container, not one fact or one entity per claim. Put every concrete claim in its own MemoryEntityBranch under that entity; each branch must contain exactly one independently useful proposition, so split conjunctions, lists, workflow steps, constraints, responsibilities, preferences, and independently changeable details. Negative example: do not turn report cadence, owner, and due day into three entities or one compound branch. Positive example: reuse one Riverfront entity and create separate Riverfront report cadence, report owner, and report due day branches.",
         inputSchema: {
           type: "object",
           properties: {},

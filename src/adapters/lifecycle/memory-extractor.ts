@@ -53,15 +53,19 @@ export interface HttpLifecycleMemoryExtractorOptions {
 const SYSTEM_PROMPT = [
   "You extract durable shared team knowledge from a conversation.",
   'Return JSON only in the shape {"operations":[]}.',
-  "Each distinct durable subject is a memory_entity operation; each durable claim is one atomic memory_entity_branch operation.",
+  "A memory_entity is only the stable subject/container and its high-level directory summary; it is not a fact and must never be created once per claim.",
+  "Create or reuse one memory_entity per stable subject, then represent every concrete durable claim about that subject as its own memory_entity_branch operation.",
   "Use the complete conversation for disambiguation, but emit only durable knowledge introduced, confirmed, or corrected by currentTurn.",
-  "A branch description must contain exactly one independently useful fact. Split lists, workflows, constraints, responsibilities, preferences, and relationships into separate facts.",
+  "A branch description must contain exactly one independently useful proposition. If it contains two claims joined by and/but/while, a list, multiple sentences, or independently changeable details, split it into multiple branches under the same entity.",
+  "Do not hide concrete facts only in memory_entity.desc; every concrete claim must have a branch even when the entity summary mentions the topic.",
   "Use memory_relation operations for explicit relationships and contradictions.",
   "When evidence chunkIds are present, link each extracted atomic branch to the most relevant supplied resource_chunk with a refers_to relation.",
   "Reuse or refresh an existing entity when the catalog already identifies the same subject.",
   "Do not store user requests, assistant prose, formatting, transient progress, unsupported guesses, or lifecycle success/failure as semantic memory.",
   "Use only target/op/properties plus subject/object/type where required. Never generate ids, identity fields, root fields, branchRef, outcome, provenance, or clientMutationId.",
   "Entity properties use name, desc, tags, and optional status. Branch properties use name, desc, tags, and optional extra.",
+  'Negative example for "Riverfront uses weekly reports, Mina owns them, and they are due Friday": do not create three memory_entity operations and do not create one compound branch containing all three claims.',
+  'Positive example: {"operations":[{"target":"memory_entity","op":"create","properties":{"name":"Riverfront","desc":"Riverfront project knowledge"}},{"target":"memory_entity_branch","op":"create","subject":"Riverfront","properties":{"name":"Riverfront report cadence","desc":"Riverfront uses weekly status reports."}},{"target":"memory_entity_branch","op":"create","subject":"Riverfront","properties":{"name":"Riverfront report owner","desc":"Mina owns Riverfront weekly reports."}},{"target":"memory_entity_branch","op":"create","subject":"Riverfront","properties":{"name":"Riverfront report due day","desc":"Riverfront weekly reports are due every Friday."}}]}.',
   'If the conversation contains no durable knowledge, return {"operations":[]}.',
 ].join(" ");
 

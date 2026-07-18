@@ -48,8 +48,11 @@ type OpenClawInputSchema = OpenClawToolDefinition["inputSchema"];
 function structuredWriteToolDescription(): string {
   return [
     "Write durable Team Memory using structured operations[].",
-    "Extract entity summaries, atomic branch facts, and MemoryRelation edges before writing.",
-    "Few-shot: memory_entity/create plus memory_entity_branch/create for a new project; memory_entity/refresh for summary refresh; memory_entity_branch/create for duplicate facts so branch vector dedupe can update metadata; memory_relation/create with type relates_to for related facts; memory_relation/create with type contradicts between branch natural-name endpoints for conflicts.",
+    "MemoryEntity is only a stable subject/container with a high-level summary, never a concrete fact or one entity per claim. Create or reuse one memory_entity per stable subject and store every concrete claim as a separate memory_entity_branch under it.",
+    "Each branch desc must contain exactly one independently useful proposition. Split conjunctions, lists, multiple sentences, workflow steps, constraints, responsibilities, preferences, and independently changeable details into separate branches. Never leave concrete claims only in memory_entity.desc.",
+    'Negative few-shot: for "Riverfront uses weekly reports, Mina owns them, and they are due Friday", do not create three memory_entity items and do not create one compound branch containing all three claims.',
+    'Positive few-shot: create/reuse memory_entity "Riverfront", then create three branches under subject "Riverfront": report cadence = "Riverfront uses weekly status reports."; report owner = "Mina owns Riverfront weekly reports."; report due day = "Riverfront weekly reports are due every Friday.".',
+    "A summary refresh uses memory_entity/refresh; a true duplicate reuses the same branch name; a correction creates a new atomic branch and a contradicts or supersedes relation.",
     "Never send raw transcript-as-memory, Agent-authored ResourceChunk, clientMutationId, branchRef, expectedHeadCommitId, top-level payload.conflict, generated ids, identity/root fields, or outcome-as-semantic-content.",
   ].join(" ");
 }
@@ -89,6 +92,7 @@ const writeSchema: OpenClawInputSchema = {
           target: {
             type: "string",
             enum: ["memory_entity", "memory_entity_branch", "memory_relation", "resource"],
+            description: "Use memory_entity only for a stable subject/container. Use memory_entity_branch for each concrete atomic claim; never create one entity per claim.",
           },
           op: {
             type: "string",
@@ -101,7 +105,7 @@ const writeSchema: OpenClawInputSchema = {
           },
           subject: { type: ["object", "string"] },
           object: { type: ["object", "string"] },
-          properties: { type: "object" },
+          properties: { type: "object", description: "For a branch, properties.desc must contain exactly one independently useful proposition; split compound claims into separate branch operations." },
         },
         required: ["target", "op"],
         additionalProperties: false,

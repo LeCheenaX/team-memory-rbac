@@ -39,7 +39,10 @@ _CAPTURE_OPERATION_PROPERTIES_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {
         "name": _NON_EMPTY_STRING_SCHEMA,
-        "desc": {"type": "string"},
+        "desc": {
+            "type": "string",
+            "description": "For a memory_entity_branch, exactly one independently useful proposition; split compound claims into separate branches. For a memory_entity, only a high-level subject summary.",
+        },
         "tags": _STRING_ARRAY_SCHEMA,
         "status": {"type": "string"},
         "extra": {"type": "object"},
@@ -52,7 +55,10 @@ _CAPTURE_OPERATION_SCHEMA: dict[str, Any] = {
             "additionalProperties": False,
             "required": ["target", "op", "properties"],
             "properties": {
-                "target": {"const": "memory_entity"},
+                "target": {
+                    "const": "memory_entity",
+                    "description": "A stable subject/container only; never create one memory_entity per concrete claim.",
+                },
                 "op": {"enum": ["create", "update", "refresh"]},
                 "properties": _CAPTURE_OPERATION_PROPERTIES_SCHEMA,
             },
@@ -62,7 +68,10 @@ _CAPTURE_OPERATION_SCHEMA: dict[str, Any] = {
             "additionalProperties": False,
             "required": ["target", "op", "subject", "properties"],
             "properties": {
-                "target": {"const": "memory_entity_branch"},
+                "target": {
+                    "const": "memory_entity_branch",
+                    "description": "One concrete atomic claim about the parent subject; create multiple branches for multiple independently changeable claims.",
+                },
                 "op": {"enum": ["create", "update_metadata"]},
                 "subject": {
                     "oneOf": [
@@ -319,6 +328,8 @@ class TeamMemoryHermesProvider(MemoryProvider):
             "# Team Memory\n"
             f"Active Hermes external memory provider in {mode} mode. "
 "Use Team Memory recall before answering. Every team_memory_search call must select an explicit layer: L3 for entity identity and summaries, L2 for atomic facts and relations, or L1 for source evidence. Use L2 before concrete factual answers, corrections, or conflict-aware writes. For ordinary semantic writes, extract entity summaries, atomic branch facts, and explicit relations into operations[] before calling team_memory_capture. "
+            "A MemoryEntity is only one stable subject/container with a high-level summary, never a concrete fact or one entity per claim. Store each concrete claim as a separate MemoryEntityBranch under that subject. "
+            "A branch must contain exactly one independently useful proposition; split conjunctions, lists, multiple sentences, workflow steps, constraints, responsibilities, preferences, and independently changeable details into separate branches. Never leave concrete facts only in the entity summary. "
             "Classify each semantic write as repeated, additive, or correction before capture. "
             "For an additive fact, write one independently retrievable branch containing only the newly stated semantic delta; recalled memory is read-only context and must not be copied into the new description. "
             "For a repeated fact, reuse the same atomic fact name so dedupe can refresh metadata. "
@@ -540,6 +551,8 @@ class TeamMemoryHermesProvider(MemoryProvider):
                 "team_memory_capture",
                 (
                     "Capture durable semantic memory using structured operations[]. "
+                    "A MemoryEntity is only a stable subject/container with a high-level summary, never a concrete fact or one entity per claim. Create or reuse one memory_entity per stable subject, then store every concrete claim as a separate memory_entity_branch under it. "
+                    "Each branch desc must contain exactly one independently useful proposition. Split conjunctions, lists, multiple sentences, workflow steps, constraints, responsibilities, preferences, and independently changeable details into separate branch operations. Never leave concrete claims only in memory_entity.desc. "
                     "Each operation item must use target and op fields, not action. Correct entity JSON is {\"target\":\"memory_entity\",\"op\":\"create\",\"properties\":{\"name\":\"Riverfront\",\"desc\":\"...\"}}. "
                     "Correct branch JSON is {\"target\":\"memory_entity_branch\",\"op\":\"create\",\"subject\":\"Riverfront\",\"properties\":{\"name\":\"Riverfront naming preference\",\"desc\":\"...\"}}. "
                     "Correct relation JSON is {\"target\":\"memory_relation\",\"op\":\"create\",\"type\":\"relates_to\",\"subject\":{\"target\":\"memory_entity\",\"name\":\"Riverfront\"},\"object\":{\"target\":\"memory_entity\",\"name\":\"OpenClaw\"}}. "
@@ -547,6 +560,8 @@ class TeamMemoryHermesProvider(MemoryProvider):
                     "For additive facts, capture only the newly stated semantic delta in a new branch with a predicate-specific name; do not reuse broad topic names such as Riverfront weekly report structure. "
                     "Never merge or append recalled descriptions into an additive fact, and never resubmit old facts merely to add the new detail. Recalled content is read-only write context. "
                     "Use the same branch name only for a true repeat of the same independently retrievable fact; use a distinct branch name for a new preference, constraint, responsibility, or workflow step. "
+                    "Negative few-shot: for 'Riverfront uses weekly reports, Mina owns them, and they are due Friday', do not create three memory_entity items and do not create one compound branch containing all three claims. "
+                    "Positive few-shot: create or reuse memory_entity 'Riverfront', then create three branches under subject 'Riverfront': 'Riverfront report cadence' desc 'Riverfront uses weekly status reports.'; 'Riverfront report owner' desc 'Mina owns Riverfront weekly reports.'; and 'Riverfront report due day' desc 'Riverfront weekly reports are due every Friday.'. "
                     "target=memory_relation with op=create and type=relates_to for related facts; target=memory_entity_branch with op=create plus target=memory_relation with op=create and type=contradicts between old/new natural-name endpoints for conflicts. "
                     "Never use action/title/content/entity_key/source/target as the old action-style operation shape. "
                     "Never send raw transcript-as-memory, Agent-authored ResourceChunk, clientMutationId, branchRef, expectedHeadCommitId, top-level payload.conflict, generated ids, identity/root fields, or outcome-as-semantic-content."

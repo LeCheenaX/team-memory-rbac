@@ -14,8 +14,13 @@ RUN apt-get update \
     git \
     python-is-python3 \
     python3 \
+    python3-venv \
     procps \
   && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/team-memory-spacy \
+  && /opt/team-memory-spacy/bin/pip install --no-cache-dir "spacy==3.8.7"
+ENV TEAM_MEMORY_SPACY_PYTHON=/opt/team-memory-spacy/bin/python
 
 # Official Hermes Agent installer for Linux/macOS/WSL2.
 # It installs Hermes plus its runtime dependencies under the container user's home.

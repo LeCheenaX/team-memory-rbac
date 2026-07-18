@@ -334,8 +334,11 @@ const agentToolCatalog = [
     name: "memory.write",
     description: [
       "Capture durable semantic memory with a required operations[] batch.",
-      "Extract entity summaries, atomic MemoryEntityBranch facts, and MemoryRelation edges before writing.",
-      "Few-shot: new project -> memory_entity/create then memory_entity_branch/create; summary refresh -> memory_entity/refresh; duplicate fact -> memory_entity_branch/create lets branch vector dedupe update metadata; related fact -> memory_relation/create with type relates_to; conflict -> memory_entity_branch/create for the new fact plus memory_relation/create with type contradicts between old/new natural-name endpoints in the same call.",
+      "MemoryEntity is only a stable subject/container with a high-level summary, never a concrete fact or one entity per claim. Create or reuse one memory_entity per stable subject and store every concrete claim as a separate memory_entity_branch under it.",
+      "Each branch desc must contain exactly one independently useful proposition. Split conjunctions, lists, multiple sentences, workflow steps, constraints, responsibilities, preferences, and independently changeable details into multiple branch operations. Never leave concrete claims only in the entity summary.",
+      'Negative few-shot: for "Riverfront uses weekly reports, Mina owns them, and they are due Friday", do not create three memory_entity items and do not create one compound branch containing all three claims.',
+      'Positive few-shot: create/reuse memory_entity "Riverfront", then create three branches under subject "Riverfront": "Riverfront report cadence" desc "Riverfront uses weekly status reports."; "Riverfront report owner" desc "Mina owns Riverfront weekly reports."; and "Riverfront report due day" desc "Riverfront weekly reports are due every Friday.".',
+      "Other cases: memory_entity/refresh refreshes a summary; memory_entity_branch/create lets dedupe refresh a true duplicate; memory_relation/create with relates_to links related facts; a correction creates a new atomic branch plus a contradicts or supersedes relation to the old branch.",
       "Do not send raw transcript-as-memory, Agent-authored ResourceChunk, clientMutationId, branchRef, expectedHeadCommitId, top-level payload.conflict, generated ids, identity/root fields, embeddings, provenance, or outcome-as-semantic-content.",
     ].join(" "),
     action: "commit",
@@ -384,6 +387,7 @@ function stableToolSchema(toolName: string): {
                   "memory_relation",
                   "resource",
                 ],
+                description: "Use memory_entity only for a stable subject/container. Use memory_entity_branch for each concrete atomic claim about that subject; never create one entity per claim.",
               },
               op: {
                 type: "string",
@@ -447,8 +451,8 @@ function stableToolSchema(toolName: string): {
                 properties: {
                   name: { type: "string" },
                   title: { type: "string" },
-                  desc: { type: "string" },
-                  description: { type: "string" },
+                  desc: { type: "string", description: "For memory_entity_branch, exactly one independently useful proposition; split compound claims into separate branches. For memory_entity, only a high-level subject summary." },
+                  description: { type: "string", description: "For memory_entity_branch, exactly one independently useful proposition; split compound claims into separate branches. For memory_entity, only a high-level subject summary." },
                   tags: { type: "array", items: { type: "string" } },
                   status: { type: "string" },
                   extra: { type: "object" },

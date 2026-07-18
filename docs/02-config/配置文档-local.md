@@ -38,6 +38,18 @@ npm.cmd run hermes:test:clear-memory -- -Target hermes-b
 
 清理不会删除任何 `rbac_*` 数据，因此用户、密码凭据、管理员、Agent、角色、授权、delegation、session 和 RBAC audit log 都会保留。不要使用 `docker compose down -v` 代替此命令。
 
+>[!warning]
+>注意，请使用以下命令恢复 root Entity 防止报错。
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm -e BOOTSTRAP_USER_PASSWORD="root-admin" hermes-local npm --prefix /opt/team-memory-rbac run bootstrap:root-admin -- --config /workspace/config/team-memory.hermes-local.json
+```
+
+或者
+
+```powershell
+docker compose -f compose.yaml -f compose.hermes.yaml run --rm -e BOOTSTRAP_ROOT_ENTITY_ID="test-server" -e BOOTSTRAP_USER_ID="admin" -e BOOTSTRAP_USER_NAME="Server Admin" -e BOOTSTRAP_SESSION_ID="session:test2-admin" -e BOOTSTRAP_SESSION_EXPIRES_AT="2030-01-01T00:00:00.000Z" -e BOOTSTRAP_USER_PASSWORD="root-admin" service npm run bootstrap:root-admin -- --config /app/config/team-memory.service.json
+```
 ## 0. 前置条件
 
 在仓库根目录执行：
