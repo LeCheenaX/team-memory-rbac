@@ -1,5 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import type {
   MemoryEntity,
   MemoryEntityBranch,
@@ -371,57 +369,6 @@ export interface EntityExtractor {
   extract(text: string): string[];
 }
 
-export type SpacyExtractionRunner = (
-  text: string,
-  maxAtoms: number,
-) => string[];
-
-function runPythonSpacyExtraction(text: string, maxAtoms: number): string[] {
-  const python = process.env.TEAM_MEMORY_SPACY_PYTHON ?? "python3";
-  const script = fileURLToPath(
-    new URL("../../scripts/spacy-extract.py", import.meta.url),
-  );
-  let output: string;
-  try {
-    output = execFileSync(
-      python,
-      [script, text, String(maxAtoms)],
-      {
-        encoding: "utf8",
-        timeout: 5_000,
-        windowsHide: true,
-      },
-    );
-  } catch (error) {
-    throw new Error(
-      `spaCy query extraction failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  const parsed: unknown = JSON.parse(output);
-  if (!Array.isArray(parsed) || !parsed.every((value) => typeof value === "string")) {
-    throw new Error("spaCy query extraction returned an invalid response");
-  }
-  return parsed;
-}
-
-export class SpacyEntityExtractor implements EntityExtractor {
-  private readonly runner: SpacyExtractionRunner;
-  private readonly maxAtoms: number;
-
-  constructor(
-    runner: SpacyExtractionRunner = runPythonSpacyExtraction,
-    maxAtoms = 8,
-  ) {
-    this.runner = runner;
-    this.maxAtoms = maxAtoms;
-  }
-
-  extract(text: string): string[] {
-    return [...new Set(
-      this.runner(text, this.maxAtoms).map((value) => value.trim()).filter(Boolean),
-    )].slice(0, this.maxAtoms);
-  }
-}
 export class HeuristicEntityExtractor implements EntityExtractor {
   extract(text: string): string[] {
     const tokens = bm25Internals.tokenize(text);
@@ -1098,6 +1045,20 @@ export class MemoryRetrievalAdapter
           for (const relation of relations) {
             if (seenRelationIds.has(relation.id)) continue;
             seenRelationIds.add(relation.id);
+            const [visibleSource, visibleTarget] = await Promise.all([
+              this.source.resolveObjects(scopedContext, [
+                { id: relation.sourceId, kind: relation.sourceKind },
+              ]),
+              this.source.resolveObjects(scopedContext, [
+                { id: relation.targetId, kind: relation.targetKind },
+              ]),
+            ]);
+            if (
+              visibleSource.length === 0 ||
+              visibleTarget.length === 0
+            ) {
+              continue;
+            }
             expandedRelationIds.add(relation.id);
             const entityBoost =
               hit.score *
@@ -1573,12 +1534,12 @@ export class StoreBackedAuthorizedQuerySource implements MemoryQuerySource {
       this.vectors.list({
         collection: "memory_entities",
         filter: entityRootFilter(context, options.entityIds),
-        ...(options.limit === undefined ? {} : { limit: options.limit }),
+        limit: options.text === undefined ? options.limit : 10_000,
       }),
       this.vectors.list({
         collection: "memory_entity_branches",
         filter: entityFilter(context, options.entityIds),
-        ...(options.limit === undefined ? {} : { limit: options.limit }),
+        limit: options.text === undefined ? options.limit : 10_000,
       }),
     ]);
     const entityItems = await this.entityItemsForEntities(

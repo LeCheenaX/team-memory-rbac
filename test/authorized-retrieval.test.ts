@@ -9,7 +9,6 @@ import type {
 import {
   InMemoryAuthorizedQuerySource,
   MemoryRetrievalAdapter,
-  SpacyEntityExtractor,
   calibrateSemanticCandidateFloor,
   normalizeBm25Score,
   type EntityRetrievalItem,
@@ -21,6 +20,7 @@ import {
 } from "../src/memory/index.ts";
 import { PermissionRouter } from "../src/permission-router.ts";
 import { unitTestEmbeddingProvider } from "./support/runtime-config.ts";
+import { SpacyEntityExtractor } from "../adapters/spacy/entity-extractor.ts";
 
 const rootEntityId = "root-project-a";
 const timestamp = "2026-06-25T00:00:00.000Z";

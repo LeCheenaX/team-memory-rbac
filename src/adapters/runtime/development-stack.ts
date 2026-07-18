@@ -16,7 +16,6 @@ import { ResourceService } from "../../resources/service.ts";
 import type { AuthenticatedSession } from "../libsql/rbac-authority.ts";
 import {
   HeuristicEntityExtractor,
-  SpacyEntityExtractor,
   type EntityExtractor,
   MemoryRetrievalAdapter,
   type MemoryRetrievalRequest,
@@ -38,6 +37,7 @@ import {
   type LifecycleMemoryExtractor,
   type LifecycleMemoryExtractorProvider,
 } from "../lifecycle/memory-extractor.ts";
+import { SpacyEntityExtractor } from "../../../adapters/spacy/entity-extractor.ts";
 
 export type CasBackendKind = "filesystem" | "object_store";
 export type RuntimeMode = "unitTest" | "Dev" | "Production";
