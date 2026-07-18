@@ -158,13 +158,23 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     const tools = await client.listTools() as Array<{
       name: string;
       description: string;
-      inputSchema: { required?: string[]; additionalProperties?: boolean };
+      inputSchema: {
+        required?: string[];
+        additionalProperties?: boolean;
+        properties?: Record<string, { description?: string }>;
+      };
     }>;
     assert.ok(tools.some((tool) => tool.name === "memory.catalog"));
     assert.ok(tools.some((tool) => tool.name === "memory.search"));
     assert.ok(tools.some((tool) => tool.name === "memory.write"));
     assert.ok(!tools.some((tool) => tool.name === "memory.importResource"));
     assert.ok(!tools.some((tool) => tool.name === "memory.ingestResource"));
+    const searchTool = tools.find((tool) => tool.name === "memory.search");
+    assert.deepEqual(searchTool?.inputSchema.required, ["query", "layer"]);
+    assert.match(
+      searchTool?.inputSchema.properties?.layer?.description ?? "",
+      /atomic facts/,
+    );
     const writeTool = tools.find((tool) => tool.name === "memory.write");
     assert.deepEqual(writeTool?.inputSchema.required, ["operations"]);
     assert.equal(writeTool?.inputSchema.additionalProperties, false);
@@ -183,6 +193,8 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
       openclaw.tools().map((tool) => tool.name),
       ["memory_search", "memory_catalog", "memory_write", "memory_import", "memory_ingest", "memory_get"],
     );
+    const openclawSearch = openclaw.tools().find((tool) => tool.name === "memory_search");
+    assert.deepEqual(openclawSearch?.inputSchema.required, ["layer"]);
     const openclawWrite = openclaw.tools().find((tool) => tool.name === "memory_write");
     assert.match(openclawWrite?.description ?? "", /operations\[\]/);
     assert.match(openclawWrite?.description ?? "", /contradicts/);
@@ -204,6 +216,7 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
     });
     const search = await openclaw.call("memory_search", {
       text: "OpenClaw Production",
+      layer: "L3",
     }) as { value: { items: unknown[] } };
     assert.equal(search.value.items.length, 1);
 
@@ -232,7 +245,7 @@ test("production connector paths cover OpenClaw replacement memory and MCP stdio
       method: "tools/call",
       params: {
         name: "memory.search",
-        arguments: { query: "Production mcp" },
+        arguments: { query: "Production mcp", layer: "L3" },
       },
     }));
     await waitForResponses(writes, 3);

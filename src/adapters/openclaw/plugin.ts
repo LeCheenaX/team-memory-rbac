@@ -66,7 +66,7 @@ const searchSchema: OpenClawInputSchema = {
     query: { type: "string" },
     text: { type: "string" },
     limit: { type: "integer" },
-    layer: { type: "string", enum: ["L1", "L2", "L3"] },
+    layer: { type: "string", enum: ["L1", "L2", "L3"], description: "Required explicit recall layer: L3 entity summaries, L2 atomic facts and relations, L1 source evidence. Use L2 for factual answers, corrections, and conflict-aware writes." },
     names: { type: "array", items: { type: "string" } },
     tagsAny: {
       type: "array",
@@ -74,6 +74,7 @@ const searchSchema: OpenClawInputSchema = {
       description: "Exact visible tag strings copied from memory_catalog or team_memory.catalog; these are filters, not inferred keywords.",
     },
   },
+  required: ["layer"],
   additionalProperties: false,
 };
 
@@ -175,7 +176,7 @@ export class OpenClawTeamMemoryPlugin {
 
   tools(): OpenClawToolDefinition[] {
     const common = [
-      this.tool("team_memory.search", "Search RBAC-protected Team Memory with query, optional layer, names, tagsAny, and limit. Copy every tagsAny value exactly from team_memory.catalog; if no suitable visible tag exists, use names or query instead of inventing one. Do not send identity fields, generated ids, history toggles, or conflict flags.", searchSchema),
+      this.tool("team_memory.search", "Search RBAC-protected Team Memory with query or text and a required explicit layer: L3 for entity summaries, L2 for atomic facts and relations, or L1 for source evidence. Use L2 for factual answers, corrections, and conflict-aware writes. Names, tagsAny, and limit are optional. Copy every tagsAny value exactly from team_memory.catalog; if no suitable visible tag exists, use names or query instead of inventing one. Do not send identity fields, generated ids, history toggles, or conflict flags.", searchSchema),
       this.tool("team_memory.catalog", "List visible Team Memory names and plain tag strings from the trusted session root. Tags are sorted by descending visible entity count with deterministic ties; counts and generated ids are not exposed.", emptySchema),
       this.tool("team_memory.write", structuredWriteToolDescription(), writeSchema),
       this.tool("team_memory.import_resource", "Import a host-facing Resource and automatically ingest its current revision.", importResourceSchema),
@@ -184,7 +185,7 @@ export class OpenClawTeamMemoryPlugin {
     ];
     if (this.mode === "parallel_native_team_memory") return common;
     return [
-      this.tool("memory_search", "OpenClaw active-memory recall through Team Memory with query, optional layer, names, tagsAny, and limit. Copy every tagsAny value exactly from memory_catalog; if no suitable visible tag exists, use names or query instead of inventing one. Do not send identity fields, generated ids, history toggles, or conflict flags.", searchSchema),
+      this.tool("memory_search", "OpenClaw active-memory recall through Team Memory with query or text and a required explicit layer: L3 for entity summaries, L2 for atomic facts and relations, or L1 for source evidence. Use L2 for factual answers, corrections, and conflict-aware writes. Names, tagsAny, and limit are optional. Copy every tagsAny value exactly from memory_catalog; if no suitable visible tag exists, use names or query instead of inventing one. Do not send identity fields, generated ids, history toggles, or conflict flags.", searchSchema),
       this.tool("memory_catalog", "OpenClaw active-memory catalog with visible names and plain tag strings sorted by descending visible entity count with deterministic ties. Counts and generated ids are not exposed.", emptySchema),
       this.tool("memory_write", structuredWriteToolDescription(), writeSchema),
       this.tool("memory_import", "Import a host-facing Resource and automatically ingest its current revision.", importResourceSchema),
@@ -282,16 +283,18 @@ export class OpenClawTeamMemoryPlugin {
   }
 
   private normalizeSearch(input: Record<string, unknown>): Record<string, unknown> {
+    const layer = input.layer;
+    if (layer !== "L1" && layer !== "L2" && layer !== "L3") {
+      throw new Error("memory search requires layer L1, L2, or L3");
+    }
     if (typeof input.query === "string") return input;
     const text = this.requiredString(input, "text");
     return {
       query: text,
+      layer,
       ...(typeof input.limit === "number" ? { limit: input.limit } : {}),
       ...(Array.isArray(input.tagsAny) ? { tagsAny: input.tagsAny } : {}),
       ...(Array.isArray(input.names) ? { names: input.names } : {}),
-      ...(input.layer === "L1" || input.layer === "L2" || input.layer === "L3"
-        ? { layer: input.layer }
-        : {}),
     };
   }
 

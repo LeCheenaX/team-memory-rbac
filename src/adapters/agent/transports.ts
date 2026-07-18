@@ -502,7 +502,7 @@ export class McpTeamMemoryAdapter {
   listTools(): Array<{
     name: string;
     description: string;
-    inputSchema: { type: "object"; properties: Record<string, unknown>; additionalProperties: false };
+    inputSchema: { type: "object"; properties: Record<string, unknown>; required?: string[]; additionalProperties: false };
   }> {
     return [
       {
@@ -516,13 +516,13 @@ export class McpTeamMemoryAdapter {
       },
       {
         name: "memory.search",
-        description: "Search Team Memory with query, optional limit, layer, names, and tagsAny. Copy tagsAny values exactly from memory.catalog; if no suitable visible tag exists, use names or query instead of inventing one.",
+        description: "Search Team Memory with query and a required explicit layer: L3 for entity summaries, L2 for atomic facts and relations, or L1 for source evidence. Use L2 for factual answers, corrections, and conflict-aware writes. Limit, names, and tagsAny are optional. Copy tagsAny values exactly from memory.catalog; if no suitable visible tag exists, use names or query instead of inventing one.",
         inputSchema: {
           type: "object",
           properties: {
             query: { type: "string" },
             limit: { type: "integer" },
-            layer: { type: "string", enum: ["L1", "L2", "L3"] },
+            layer: { type: "string", enum: ["L1", "L2", "L3"], description: "Required explicit recall layer: L3 entity summaries, L2 atomic facts and relations, L1 source evidence. Use L2 for factual answers, corrections, and conflict-aware writes." },
             names: { type: "array", items: { type: "string" } },
             tagsAny: {
               type: "array",
@@ -530,6 +530,7 @@ export class McpTeamMemoryAdapter {
               description: "Visible tag strings copied from memory.catalog; these are filters, not inferred keywords.",
             },
           },
+          required: ["query", "layer"],
           additionalProperties: false,
         },
       },

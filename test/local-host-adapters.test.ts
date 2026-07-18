@@ -67,6 +67,7 @@ test("OpenClaw plugin and Claude Code hooks run against a local gateway without 
     });
     const openclawSearch = await openclaw.call("memory_search", {
       text: "Local OpenClaw Offline Memory",
+      layer: "L3",
     }) as { value: { items: unknown[] } };
     assert.equal(openclawSearch.value.items.length, 1);
 

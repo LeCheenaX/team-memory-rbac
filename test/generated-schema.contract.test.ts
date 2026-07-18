@@ -93,6 +93,10 @@ test("checked-in JSON Schema matches the TypeScript runtime contract", async () 
   );
   assert.ok(generated.$defs.MemoryCaptureOperation);
   assert.ok(generated.$defs.MemorySearchInput);
+  assert.deepEqual(
+    generated.$defs.MemorySearchInput.required,
+    ["query", "layer"],
+  );
   assert.ok(generated.$defs.MemoryCatalogInput);
   assert.ok(generated.$defs.MemoryCatalogResult);
   assert.deepEqual(

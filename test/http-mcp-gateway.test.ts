@@ -211,7 +211,10 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       value: Array<{
         name: string;
         description: string;
-        inputSchema: { properties?: Record<string, { description?: string }> };
+        inputSchema: {
+        properties?: Record<string, { description?: string }>;
+        required?: string[];
+      };
       }>;
     }).value;
     assert.ok(
@@ -223,6 +226,11 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     );
     const searchTool = visibleTools.find((tool) => tool.name === "memory.search");
     assert.match(searchTool?.description ?? "", /copied exactly from the current memory\.catalog/);
+    assert.deepEqual(searchTool?.inputSchema.required, ["query", "layer"]);
+    assert.match(
+      searchTool?.inputSchema.properties?.layer?.description ?? "",
+      /atomic facts/,
+    );
     assert.match(
       searchTool?.inputSchema.properties?.tagsAny?.description ?? "",
       /not inferred keywords/,
@@ -348,8 +356,16 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       assert.equal(rejected.status, 400, `${name} should be rejected: ${await rejected.text()}`);
     }
 
+    const rejectedMissingLayer = await post(base, "/memory/search", readSession.token, {
+      query: "Gateway",
+      tagsAny: ["not-visible"],
+    });
+    assert.equal(rejectedMissingLayer.status, 400);
+    assert.match(await rejectedMissingLayer.text(), /layer/);
+
     const rejectedIncludeHistory = await post(base, "/memory/search", readSession.token, {
       query: "Gateway",
+      layer: "L3",
       includeHistory: true,
     });
     assert.equal(rejectedIncludeHistory.status, 400);
@@ -451,6 +467,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
 
     const httpSearch = await post(base, "/memory/search", readSession.token, {
       query: "Gateway",
+      layer: "L3",
       tagsAny: ["guide"],
     });
     const httpSearchText = await httpSearch.text();
@@ -462,6 +479,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     );
     const mixedTagSearch = await post(base, "/memory/search", readSession.token, {
       query: "Gateway",
+      layer: "L3",
       tagsAny: ["guide", "workflow"],
     });
     const mixedTagSearchText = await mixedTagSearch.text();
@@ -501,6 +519,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     assert.deepEqual(catalog.value.tags, ["guide", "adapter", "reference"]);
     const inventedTagSearch = await post(base, "/memory/search", readSession.token, {
       query: "deployment process",
+      layer: "L3",
       tagsAny: ["workflow", "release"],
     });
     const inventedTagSearchText = await inventedTagSearch.text();
@@ -538,12 +557,14 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
       /Copy tagsAny values exactly from memory\.catalog/,
     );
     assert.ok(directMcpSearchTool?.inputSchema.properties.tagsAny);
+    assert.deepEqual(directMcpSearchTool?.inputSchema.required, ["query", "layer"]);
 
     const mcpSearch = await mcp.callTool(
       readSession.token,
       "memory.search",
       {
         query: "Gateway",
+        layer: "L3",
         tagsAny: ["guide"],
       },
     ) as { value: { items: unknown[] } };
@@ -1026,6 +1047,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     const unsafe = await post(base, "/memory/search", readSession.token, {
       rootEntityId: "other-root",
       query: "Gateway",
+      layer: "L3",
     });
     assert.equal(unsafe.status, 400);
     assert.equal(

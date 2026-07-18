@@ -416,7 +416,7 @@ export const CONTRACT_SCHEMA = {
     MemorySearchInput: {
       type: "object",
       additionalProperties: false,
-      required: ["query"],
+      required: ["query", "layer"],
       properties: {
         query: nonEmptyString,
         limit: { type: "integer", minimum: 1 },

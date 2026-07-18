@@ -318,7 +318,7 @@ class TeamMemoryHermesProvider(MemoryProvider):
         return (
             "# Team Memory\n"
             f"Active Hermes external memory provider in {mode} mode. "
-            "Use Team Memory recall before answering. For ordinary semantic writes, extract entity summaries, atomic branch facts, and explicit relations into operations[] before calling team_memory_capture. "
+"Use Team Memory recall before answering. Every team_memory_search call must select an explicit layer: L3 for entity identity and summaries, L2 for atomic facts and relations, or L1 for source evidence. Use L2 before concrete factual answers, corrections, or conflict-aware writes. For ordinary semantic writes, extract entity summaries, atomic branch facts, and explicit relations into operations[] before calling team_memory_capture. "
             "Classify each semantic write as repeated, additive, or correction before capture. "
             "For an additive fact, write one independently retrievable branch containing only the newly stated semantic delta; recalled memory is read-only context and must not be copied into the new description. "
             "For a repeated fact, reuse the same atomic fact name so dedupe can refresh metadata. "
@@ -503,16 +503,17 @@ class TeamMemoryHermesProvider(MemoryProvider):
                 "team_memory_search",
                 (
                     "Search Team Memory for durable context relevant to the current task. "
-                    "Use the natural-language query, optional limit, and stable entity/tag filters. Copy every tagsAny value exactly from "
-                    "team_memory_catalog; if no suitable visible tag exists, use names or query instead of inventing one. The query determines "
-                    "whether history, facts, resources, or relations are recalled. Variable metadata appears under extra when returned."
+                    "Always select an explicit layer: L3 for entity identity and summaries, L2 for atomic facts and relations, or L1 for source evidence. "
+                    "Use L2 before concrete factual answers, corrections, or conflict-aware writes. Use the natural-language query, optional limit, "
+                    "and stable entity/tag filters. Copy every tagsAny value exactly from team_memory_catalog; if no suitable visible tag exists, "
+                    "use names or query instead of inventing one. Variable metadata appears under extra when returned."
                 ),
                 {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string"},
                         "limit": {"type": "integer"},
-                        "layer": {"type": "string", "enum": ["L1", "L2", "L3"]},
+                        "layer": {"type": "string", "enum": ["L1", "L2", "L3"], "description": "Required explicit recall layer: L3 entity summaries, L2 atomic facts and relations, L1 source evidence. Use L2 for factual answers, corrections, and conflict-aware writes."},
                         "names": {"type": "array", "items": {"type": "string"}},
                         "tagsAny": {
                             "type": "array",
@@ -520,7 +521,7 @@ class TeamMemoryHermesProvider(MemoryProvider):
                             "description": "Exact visible tag strings copied from team_memory_catalog; these are filters, not inferred keywords.",
                         },
                     },
-                    "required": ["query"],
+                    "required": ["query", "layer"],
                 },
             ),
             _tool_schema(
@@ -579,6 +580,9 @@ class TeamMemoryHermesProvider(MemoryProvider):
         started_at = perf_counter()
         result: Any = None
         if tool_name == "team_memory_search":
+            layer = args.get("layer")
+            if layer not in {"L1", "L2", "L3"}:
+                raise ValueError("team_memory_search requires layer L1, L2, or L3")
             try:
                 result = self._provider.search(
                     str(args.get("query", "")),

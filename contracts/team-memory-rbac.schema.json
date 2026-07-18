@@ -839,7 +839,8 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "query"
+        "query",
+        "layer"
       ],
       "properties": {
         "query": {

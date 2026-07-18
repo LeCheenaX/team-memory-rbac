@@ -289,12 +289,14 @@ class ContractSchemaTest(unittest.TestCase):
         filtered = provider.search(
             "Hermes memory",
             user_id="hermes-user",
+            layer="L2",
             names=["entity-filtered"],
             tagsAny=["hermes"],
         )
         self.assertEqual(filtered["value"]["items"][0]["id"], "entity-filtered")
         self.assertEqual(calls[1][1], "memory/search")
         self.assertEqual(calls[1][2]["query"], "Hermes memory")
+        self.assertEqual(calls[1][2]["layer"], "L2")
         self.assertEqual(calls[1][2]["names"], ["entity-filtered"])
         self.assertEqual(calls[1][2]["tagsAny"], ["hermes"])
 
@@ -496,10 +498,19 @@ class ContractSchemaTest(unittest.TestCase):
 
         provider = module.TeamMemoryHermesProvider()
         schemas = provider.get_tool_schemas()
+        search = next(
+            schema for schema in schemas if schema["name"] == "team_memory_search"
+        )
         capture = next(
             schema for schema in schemas if schema["name"] == "team_memory_capture"
         )
 
+        self.assertEqual(search["parameters"]["required"], ["query", "layer"])
+        self.assertIn("explicit layer", search["description"])
+        self.assertIn(
+            "atomic facts",
+            search["parameters"]["properties"]["layer"]["description"],
+        )
         self.assertIn("parameters", capture)
         self.assertIn("input_schema", capture)
         self.assertIn("inputSchema", capture)

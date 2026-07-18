@@ -326,7 +326,7 @@ const agentToolCatalog = [
   },
   {
     name: "memory.search",
-    description: "Search Team Memory with natural-language query plus optional limit, layer, names, and tagsAny. Every tagsAny value must be copied exactly from the current memory.catalog response; when no suitable visible tag exists, use names or query instead of inventing a tag. Identity, root, history toggles, conflict flags, and generated ids are not accepted.",
+    description: "Search Team Memory with a natural-language query and required explicit layer: L3 for entity identity and summaries, L2 for atomic facts and relations, or L1 for source evidence. Use L2 before concrete factual answers, corrections, or conflict-aware writes. Limit, names, and tagsAny are optional. Every tagsAny value must be copied exactly from the current memory.catalog response; when no suitable visible tag exists, use names or query instead of inventing a tag. Identity, root, history toggles, conflict flags, and generated ids are not accepted.",
     action: "search",
     resourceKind: "memory_entity",
   },
@@ -355,7 +355,7 @@ function stableToolSchema(toolName: string): {
       properties: {
         query: { type: "string" },
         limit: { type: "integer" },
-        layer: { type: "string", enum: ["L1", "L2", "L3"] },
+        layer: { type: "string", enum: ["L1", "L2", "L3"], description: "Required explicit recall layer: L3 entity summaries, L2 atomic facts and relations, L1 source evidence. Use L2 for factual answers, corrections, and conflict-aware writes." },
         names: { type: "array", items: { type: "string" } },
         tagsAny: {
           type: "array",
@@ -363,7 +363,7 @@ function stableToolSchema(toolName: string): {
           description: "Exact visible tag strings copied from memory.catalog; these are filters, not inferred keywords.",
         },
       },
-      required: ["query"],
+      required: ["query", "layer"],
       additionalProperties: false,
     };
   }
@@ -746,17 +746,16 @@ function optionalStringList(
   return value;
 }
 
-function optionalRecallLayer(
+function requiredRecallLayer(
   payload: Record<string, unknown>,
-): "L1" | "L2" | "L3" | undefined {
+): "L1" | "L2" | "L3" {
   const value = payload.layer;
-  if (value === undefined) return undefined;
   if (value === "L1" || value === "L2" || value === "L3") {
     return value;
   }
   throw new TeamMemoryGatewayError(
     "validation_failed",
-    "layer must be L1, L2, or L3",
+    "layer is required and must be L1, L2, or L3",
   );
 }
 
@@ -3081,6 +3080,7 @@ export class TeamMemoryGateway {
   ): Promise<PermissionRouteResult<MemoryRetrievalResult>> {
     assertNoIdentityOverride(payload);
     assertOnlyFields(payload, stableSearchFields, "memory.search");
+    const layer = requiredRecallLayer(payload);
     const session = await this.authenticate(token);
     const text = stringValue(payload, "query");
     const requestedTagsAny = optionalStringList(payload, "tagsAny");
@@ -3116,9 +3116,7 @@ export class TeamMemoryGateway {
         ...(numberValue(payload, "limit") === undefined
           ? {}
           : { limit: numberValue(payload, "limit") as number }),
-        ...(optionalRecallLayer(payload) === undefined
-          ? {}
-          : { layer: optionalRecallLayer(payload) as "L1" | "L2" | "L3" }),
+        layer,
         ...(optionalStringList(payload, "names") === undefined
           ? {}
           : { names: optionalStringList(payload, "names") as string[] }),
