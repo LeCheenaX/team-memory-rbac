@@ -183,6 +183,83 @@ test("injected memory context ranks and preserves every top-P selected item", ()
   );
 });
 
+test("injected context renders every object and relation in a recall composite", () => {
+  const context = formatInjectedMemoryContext("hermes", {
+    rootEntityId: "root-host",
+    branchRef: "main",
+    items: [
+      {
+        kind: "entity",
+        entity: {
+          id: "deployment",
+          rootEntityId: "root-host",
+          name: "Deployment",
+          status: "active",
+          currentBranchId: "old-fact",
+          createdAt: now,
+          updatedAt: now,
+        },
+        branch: {
+          id: "old-fact",
+          entityId: "deployment",
+          rootEntityId: "root-host",
+          branchRef: "main",
+          title: "Old deployment fact",
+          description: "Deploy on Friday",
+          tags: [],
+          importance: 1,
+          confidence: 1,
+          status: "active",
+          createdAt: now,
+          updatedAt: now,
+        },
+        packedBranches: [
+          {
+            id: "corrected-fact",
+            entityId: "deployment",
+            rootEntityId: "root-host",
+            branchRef: "main",
+            title: "Corrected deployment fact",
+            description: "Deploy on Monday",
+            tags: [],
+            importance: 1,
+            confidence: 1,
+            status: "active",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        packedRelations: [
+          {
+            id: "corrected-contradicts-old",
+            rootEntityId: "root-host",
+            sourceId: "corrected-fact",
+            sourceKind: "memory_entity_branch",
+            targetId: "old-fact",
+            targetKind: "memory_entity_branch",
+            relationType: "contradicts",
+            branchRef: "main",
+            status: "active",
+            weight: 1,
+            confidence: 1,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        evidence: [],
+        score: 1,
+        origin: "cloud_active",
+      },
+    ],
+  });
+
+  assert.match(context.text, /Old deployment fact/);
+  assert.match(context.text, /Deploy on Friday/);
+  assert.match(context.text, /Corrected deployment fact/);
+  assert.match(context.text, /Deploy on Monday/);
+  assert.match(context.text, /corrected-fact contradicts old-fact/);
+});
+
 test("host lifecycle recall injects trusted-boundary context and capture writes success and failure paths", async () => {
   const fixture = await setup(0.01);
   try {

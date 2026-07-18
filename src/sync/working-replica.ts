@@ -964,6 +964,14 @@ export class SynchronizedLocalQuerySource implements MemoryQuerySource {
     return this.delegate.relationsForObject(context, options);
   }
 
+  async resolveObjects(
+    context: MemoryQueryContext,
+    objects: Parameters<MemoryQuerySource["resolveObjects"]>[1],
+  ): ReturnType<MemoryQuerySource["resolveObjects"]> {
+    await this.assertFresh(context);
+    return this.delegate.resolveObjects(context, objects);
+  }
+
   async evidenceFor(
     context: MemoryQueryContext,
     entityIds: string[],

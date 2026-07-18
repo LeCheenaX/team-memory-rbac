@@ -203,24 +203,49 @@ function memoryItemSource(item: MemoryRetrievalItem): "history" | "resource" | "
 function memoryItemText(item: MemoryRetrievalItem): string {
   if (item.kind === "entity") {
     const branch = item.branch;
-    if (branch === undefined) {
-      return [
-        `Title: ${item.entity.name ?? item.entity.title ?? item.entity.id}`,
-        item.entity.description === undefined
-          ? ""
-          : `Description: ${item.entity.description}`,
-        item.entity.tags === undefined || item.entity.tags.length === 0
-          ? ""
-          : `Tags: ${item.entity.tags.join(", ")}`,
-      ].filter((line) => line.length > 0).join("\n");
-    }
-    return [
-      `Title: ${branch.title}`,
-      `Description: ${branch.description}`,
-      branch.tags.length === 0 ? "" : `Tags: ${branch.tags.join(", ")}`,
-      branch.extraInfo === undefined
+    const primary = branch === undefined
+      ? [
+          `Title: ${item.entity.name ?? item.entity.title ?? item.entity.id}`,
+          item.entity.description === undefined
+            ? ""
+            : `Description: ${item.entity.description}`,
+          item.entity.tags === undefined || item.entity.tags.length === 0
+            ? ""
+            : `Tags: ${item.entity.tags.join(", ")}`,
+        ]
+      : [
+          `Title: ${branch.title}`,
+          `Description: ${branch.description}`,
+          branch.tags.length === 0 ? "" : `Tags: ${branch.tags.join(", ")}`,
+          branch.extraInfo === undefined
+            ? ""
+            : `Extra: ${JSON.stringify(branch.extraInfo)}`,
+        ];
+    const packedEntities = (item.packedEntities ?? []).flatMap((entity) => [
+      `Related entity: ${entity.name ?? entity.title ?? entity.id}`,
+      entity.description === undefined
         ? ""
-        : `Extra: ${JSON.stringify(branch.extraInfo)}`,
+        : `Related entity description: ${entity.description}`,
+    ]);
+    const packedBranches = (item.packedBranches ?? []).flatMap((packed) => [
+      `Related fact: ${packed.title}`,
+      `Related fact description: ${packed.description}`,
+      packed.extraInfo === undefined
+        ? ""
+        : `Related fact extra: ${JSON.stringify(packed.extraInfo)}`,
+    ]);
+    const packedRelations = (item.packedRelations ?? []).map((relation) =>
+      `Relation: ${relation.sourceId} ${relation.relationType} ${relation.targetId}`
+    );
+    const evidence = item.evidence.map((chunk) =>
+      `Evidence: ${chunk.text}`
+    );
+    return [
+      ...primary,
+      ...packedEntities,
+      ...packedBranches,
+      ...packedRelations,
+      ...evidence,
     ].filter((line) => line.length > 0).join("\n");
   }
   if (item.kind === "resource_chunk") {

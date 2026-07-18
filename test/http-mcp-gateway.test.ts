@@ -827,7 +827,7 @@ test("HTTP and MCP expose the same authenticated memory gateway without payload 
     const highSimilarityGateway = new TeamMemoryGateway(runtime, {
       retrieval: "active-view",
       projectWrites: false,
-      branchDedupeThreshold: 0.99,
+      branchDedupeThreshold: 0.999,
     });
     const appendedDescription =
       "Gateway Guide keeps operational deployment notes for a separate release checklist. " +

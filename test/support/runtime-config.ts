@@ -28,6 +28,7 @@ export function unitTestRuntimeConfig(input: {
     embeddingProviderUrl: "deterministic://unit-test",
     embeddingProviderKind: "deterministic",
     recallTopP: 0.8,
+    semanticCandidateFloor: 0.1,
   };
 }
 
@@ -54,6 +55,7 @@ export function unitTestRuntimeConfigDocument(input: {
     },
     retrieval: {
       recallTopP: 0.8,
+      semanticCandidateFloor: 0.1,
     },
   };
 }

@@ -1,8 +1,11 @@
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import type {
   MemoryEntity,
   MemoryEntityBranch,
   MemoryRelation,
   MemoryRelationType,
+  RelationEndpointKind,
   Resource,
   ResourceChunk,
 } from "../contracts/memory.ts";
@@ -37,6 +40,7 @@ export interface EntityRetrievalItem {
   entity: MemoryEntity;
   branch?: MemoryEntityBranch;
   packedRelations?: MemoryRelation[];
+  packedEntities?: MemoryEntity[];
   packedBranches?: MemoryEntityBranch[];
   evidence: ResourceChunk[];
   score: number;
@@ -114,15 +118,39 @@ export interface MemoryRetrievalRequest extends PermissionRequest {
   query: MemoryRetrievalQuery;
 }
 
+export interface RecallDiagnostics {
+  extractedAtoms: string[];
+  laneCandidates: {
+    exactName: number;
+    nameKeyword: number;
+    nameSemantic: number;
+    queryKeyword: number;
+    atomKeyword: number;
+    semantic: number;
+  };
+  semanticCandidateFloor: number;
+  thresholdPruned: number;
+  relationExpansions: number;
+  finalCandidates: number;
+}
+
 export interface MemoryRetrievalResult {
   rootEntityId: string;
   branchRef: string;
   items: MemoryRetrievalItem[];
-  warnings?: Array<{
-    code: "unknown_catalog_tags";
-    field: "tagsAny";
-    unknownTags: string[];
-  }>;
+  diagnostics?: RecallDiagnostics;
+  warnings?: Array<
+    | {
+        code: "unknown_catalog_tags";
+        field: "tagsAny";
+        unknownTags: string[];
+      }
+    | {
+        code: "unresolved_names";
+        field: "names";
+        unresolvedNames: string[];
+      }
+  >;
 }
 
 export interface MemoryQueryContext {
@@ -165,6 +193,13 @@ export interface MemoryQuerySource {
       relationTypes?: MemoryRelationType[];
     },
   ): Promise<MemoryRelation[]>;
+  resolveObjects(
+    context: MemoryQueryContext,
+    objects: Array<{
+      id: string;
+      kind: RelationEndpointKind;
+    }>,
+  ): Promise<MemoryRetrievalItem[]>;
   evidenceFor(
     context: MemoryQueryContext,
     entityIds: string[],
@@ -266,6 +301,36 @@ function withinQueryNames(
   );
 }
 
+function withinResolvedNameScope(
+  item: MemoryRetrievalItem,
+  query: MemoryRetrievalQuery,
+  objectIds: ReadonlySet<string>,
+): boolean {
+  if (query.kind !== "recall" || query.names === undefined) {
+    return true;
+  }
+  if (item.kind === "relation") {
+    return (
+      objectIds.has(item.relation.id) ||
+      (objectIds.has(item.relation.sourceId) &&
+        objectIds.has(item.relation.targetId))
+    );
+  }
+  if (item.kind === "resource_chunk") {
+    return objectIds.has(item.chunk.id) || objectIds.has(item.chunk.resourceId);
+  }
+  const primaryInScope =
+    objectIds.has(item.entity.id) ||
+    (item.branch !== undefined && objectIds.has(item.branch.id));
+  const packedInScope =
+    (item.packedEntities ?? []).every((entity) => objectIds.has(entity.id)) &&
+    (item.packedBranches ?? []).every((branch) => objectIds.has(branch.id)) &&
+    (item.packedRelations ?? []).every((relation) =>
+      objectIds.has(relation.sourceId) && objectIds.has(relation.targetId)
+    );
+  return primaryInScope && packedInScope;
+}
+
 function assertRetrievalRequest(request: MemoryRetrievalRequest): void {
   if (request.rootEntityId.length === 0) {
     throw new Error("retrieval rootEntityId must be non-empty");
@@ -306,6 +371,57 @@ export interface EntityExtractor {
   extract(text: string): string[];
 }
 
+export type SpacyExtractionRunner = (
+  text: string,
+  maxAtoms: number,
+) => string[];
+
+function runPythonSpacyExtraction(text: string, maxAtoms: number): string[] {
+  const python = process.env.TEAM_MEMORY_SPACY_PYTHON ?? "python3";
+  const script = fileURLToPath(
+    new URL("../../scripts/spacy-extract.py", import.meta.url),
+  );
+  let output: string;
+  try {
+    output = execFileSync(
+      python,
+      [script, text, String(maxAtoms)],
+      {
+        encoding: "utf8",
+        timeout: 5_000,
+        windowsHide: true,
+      },
+    );
+  } catch (error) {
+    throw new Error(
+      `spaCy query extraction failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const parsed: unknown = JSON.parse(output);
+  if (!Array.isArray(parsed) || !parsed.every((value) => typeof value === "string")) {
+    throw new Error("spaCy query extraction returned an invalid response");
+  }
+  return parsed;
+}
+
+export class SpacyEntityExtractor implements EntityExtractor {
+  private readonly runner: SpacyExtractionRunner;
+  private readonly maxAtoms: number;
+
+  constructor(
+    runner: SpacyExtractionRunner = runPythonSpacyExtraction,
+    maxAtoms = 8,
+  ) {
+    this.runner = runner;
+    this.maxAtoms = maxAtoms;
+  }
+
+  extract(text: string): string[] {
+    return [...new Set(
+      this.runner(text, this.maxAtoms).map((value) => value.trim()).filter(Boolean),
+    )].slice(0, this.maxAtoms);
+  }
+}
 export class HeuristicEntityExtractor implements EntityExtractor {
   extract(text: string): string[] {
     const tokens = bm25Internals.tokenize(text);
@@ -329,6 +445,7 @@ interface RecallSignals {
 }
 
 const DEFAULT_RECALL_TOP_P = 0.8;
+const DEFAULT_SEMANTIC_CANDIDATE_FLOOR = 0.1;
 
 function assertRecallTopP(value: number): void {
   if (!Number.isFinite(value) || value <= 0 || value > 1) {
@@ -336,7 +453,13 @@ function assertRecallTopP(value: number): void {
   }
 }
 
-function itemKey(item: MemoryRetrievalItem): string {
+function assertSemanticCandidateFloor(value: number): void {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error("semanticCandidateFloor must be between 0 and 1");
+  }
+}
+
+function fragmentKey(item: MemoryRetrievalItem): string {
   if (item.kind === "entity") {
     return `entity:${item.entity.id}:${item.branch?.id ?? ""}`;
   }
@@ -344,6 +467,90 @@ function itemKey(item: MemoryRetrievalItem): string {
     return `chunk:${item.chunk.id}`;
   }
   return `relation:${item.relation.id}`;
+}
+
+function itemKey(item: MemoryRetrievalItem): string {
+  if (
+    item.kind !== "entity" ||
+    ((item.packedRelations?.length ?? 0) === 0 &&
+      (item.packedEntities?.length ?? 0) === 0 &&
+      (item.packedBranches?.length ?? 0) === 0)
+  ) {
+    return fragmentKey(item);
+  }
+  const objects = [
+    item.branch === undefined
+      ? `memory_entity:${item.entity.id}`
+      : `memory_entity_branch:${item.branch.id}`,
+    ...(item.packedEntities ?? []).map((entity) =>
+      `memory_entity:${entity.id}`
+    ),
+    ...(item.packedBranches ?? []).map((branch) =>
+      `memory_entity_branch:${branch.id}`
+    ),
+    ...item.evidence.map((chunk) => `resource_chunk:${chunk.id}`),
+  ].sort();
+  const relations = (item.packedRelations ?? [])
+    .map((relation) => relation.id)
+    .sort();
+  return `composite:${objects.join("|")}:${relations.join("|")}`;
+}
+
+function uniqueById<T extends { id: string }>(values: T[]): T[] {
+  return [...new Map(values.map((value) => [value.id, value])).values()];
+}
+
+function mergeRetrievalItems(
+  current: MemoryRetrievalItem,
+  incoming: MemoryRetrievalItem,
+): MemoryRetrievalItem {
+  if (current.kind !== "entity" || incoming.kind !== "entity") {
+    return current;
+  }
+  const primaryBranchId = current.branch?.id;
+  return {
+    ...current,
+    packedRelations: uniqueById([
+      ...(current.packedRelations ?? []),
+      ...(incoming.packedRelations ?? []),
+    ]),
+    packedEntities: uniqueById([
+      ...(current.packedEntities ?? []),
+      ...(incoming.packedEntities ?? []),
+    ]).filter((entity) => entity.id !== current.entity.id),
+    packedBranches: uniqueById([
+      ...(current.packedBranches ?? []),
+      ...(incoming.packedBranches ?? []),
+    ]).filter((branch) => branch.id !== primaryBranchId),
+    evidence: uniqueById([...current.evidence, ...incoming.evidence]),
+  };
+}
+
+function compositeContainsFragment(
+  composite: EntityRetrievalItem,
+  candidate: MemoryRetrievalItem,
+): boolean {
+  const relations = composite.packedRelations ?? [];
+  if (relations.length === 0) return false;
+  if (candidate.kind === "relation") {
+    return relations.some((relation) => relation.id === candidate.relation.id);
+  }
+  const endpoints = relations.flatMap((relation) => [
+    { id: relation.sourceId, kind: relation.sourceKind },
+    { id: relation.targetId, kind: relation.targetKind },
+  ]);
+  if (candidate.kind === "resource_chunk") {
+    return endpoints.some((endpoint) =>
+      (endpoint.kind === "resource_chunk" && endpoint.id === candidate.chunk.id) ||
+      (endpoint.kind === "resource" && endpoint.id === candidate.chunk.resourceId)
+    );
+  }
+  return endpoints.some((endpoint) =>
+    (endpoint.kind === "memory_entity" &&
+      endpoint.id === candidate.entity.id) ||
+    (endpoint.kind === "memory_entity_branch" &&
+      endpoint.id === candidate.branch?.id)
+  );
 }
 
 function cloneItem<T extends MemoryRetrievalItem>(item: T): T {
@@ -389,6 +596,106 @@ export function normalizeBm25Score(
   const terms = bm25Internals.tokenize(queryText).length;
   const { midpoint, steepness } = bm25Parameters(terms);
   return 1 / (1 + Math.exp(-steepness * (rawScore - midpoint)));
+}
+
+export interface SemanticCandidateCalibrationSample {
+  fact: string;
+  relatedKeyword: string;
+  unrelatedKeyword: string;
+}
+
+export interface SemanticCandidateCalibration {
+  model: string;
+  relatedSimilarities: number[];
+  unrelatedSimilarities: number[];
+  recommendedFloor: number;
+}
+
+function cosineSimilarity(left: number[], right: number[]): number {
+  const length = Math.min(left.length, right.length);
+  let dot = 0;
+  let leftMagnitude = 0;
+  let rightMagnitude = 0;
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = left[index] ?? 0;
+    const rightValue = right[index] ?? 0;
+    dot += leftValue * rightValue;
+    leftMagnitude += leftValue ** 2;
+    rightMagnitude += rightValue ** 2;
+  }
+  if (leftMagnitude === 0 || rightMagnitude === 0) return 0;
+  return dot / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude));
+}
+
+export async function calibrateSemanticCandidateFloor(
+  embeddings: EmbeddingProvider,
+  model: string,
+  samples: SemanticCandidateCalibrationSample[],
+): Promise<SemanticCandidateCalibration> {
+  if (samples.length === 0) {
+    throw new Error("semantic candidate calibration requires samples");
+  }
+  const relatedSimilarities: number[] = [];
+  const unrelatedSimilarities: number[] = [];
+  for (const sample of samples) {
+    const [fact, related, unrelated] = await Promise.all([
+      embeddings.embed(sample.fact),
+      embeddings.embed(sample.relatedKeyword),
+      embeddings.embed(sample.unrelatedKeyword),
+    ]);
+    relatedSimilarities.push(cosineSimilarity(fact, related));
+    unrelatedSimilarities.push(cosineSimilarity(fact, unrelated));
+  }
+  const lowestRelated = Math.min(...relatedSimilarities);
+  const recommendedFloor = Math.max(
+    0,
+    Math.min(1, Math.floor(lowestRelated * 10) / 10),
+  );
+  return {
+    model,
+    relatedSimilarities,
+    unrelatedSimilarities,
+    recommendedFloor,
+  };
+}
+
+function keywordDocumentText(item: MemoryRetrievalItem): string {
+  if (item.kind === "resource_chunk") return item.chunk.text;
+  if (item.kind === "relation") return "";
+  return [
+    item.entity.name,
+    item.entity.title,
+    item.entity.description,
+    ...(item.entity.tags ?? []),
+    item.branch?.title,
+    item.branch?.description,
+    ...(item.branch?.tags ?? []),
+  ].filter((value): value is string => typeof value === "string").join(" ");
+}
+
+function scoreKeywordItems(
+  items: MemoryRetrievalItem[],
+  text: string,
+  limit: number,
+): MemoryRetrievalItem[] {
+  const byId = new Map(items.map((item) => [fragmentKey(item), item]));
+  const documents = items.map((item) => {
+    const id = fragmentKey(item);
+    return {
+      id,
+      rootEntityId: "",
+      branchRef: "",
+      resourceId: id,
+      revisionId: id,
+      chunkId: id,
+      text: keywordDocumentText(item),
+      status: "active" as const,
+    };
+  });
+  return bm25Internals.scoreDocuments(documents, text, limit).map((result) => ({
+    ...cloneItem(byId.get(result.document.id) as MemoryRetrievalItem),
+    score: result.score,
+  }));
 }
 
 function relationBoostWeight(relation: MemoryRelation): number {
@@ -476,6 +783,7 @@ export class MemoryRetrievalAdapter
   private readonly embeddings: EmbeddingProvider;
   private readonly entityExtractor: EntityExtractor;
   private readonly recallTopP: number;
+  private readonly semanticCandidateFloor: number;
 
   constructor(
     source: MemoryQuerySource,
@@ -483,6 +791,7 @@ export class MemoryRetrievalAdapter
       embeddings: EmbeddingProvider;
       entityExtractor?: EntityExtractor;
       recallTopP?: number;
+      semanticCandidateFloor?: number;
     },
   ) {
     this.source = source;
@@ -490,6 +799,10 @@ export class MemoryRetrievalAdapter
     this.entityExtractor = options.entityExtractor ?? new HeuristicEntityExtractor();
     this.recallTopP = options.recallTopP ?? DEFAULT_RECALL_TOP_P;
     assertRecallTopP(this.recallTopP);
+    this.semanticCandidateFloor =
+      options.semanticCandidateFloor ??
+      DEFAULT_SEMANTIC_CANDIDATE_FLOOR;
+    assertSemanticCandidateFloor(this.semanticCandidateFloor);
   }
 
   async execute(
@@ -504,11 +817,17 @@ export class MemoryRetrievalAdapter
         : { taskScope: request.taskScope }),
     };
     let items: MemoryRetrievalItem[];
+    let diagnostics: RecallDiagnostics | undefined;
+    let unresolvedNames: string[] = [];
 
     switch (request.query.kind) {
-      case "recall":
-        items = await this.recall(context, request.query);
+      case "recall": {
+        const recall = await this.recall(context, request.query);
+        items = recall.items;
+        diagnostics = recall.diagnostics;
+        unresolvedNames = recall.unresolvedNames;
         break;
+      }
       case "keyword":
         items = await this.source.keywordSearch(
           context,
@@ -550,8 +869,7 @@ export class MemoryRetrievalAdapter
 
     const scoped = items.filter((item) =>
       withinTaskScope(item, request.taskScope) &&
-      withinQueryTags(item, request.query) &&
-      withinQueryNames(item, request.query),
+      withinQueryTags(item, request.query),
     );
     const entityItems = scoped.filter(
       (item): item is EntityRetrievalItem => item.kind === "entity",
@@ -564,7 +882,10 @@ export class MemoryRetrievalAdapter
       item.kind === "entity"
         ? {
             ...item,
-            evidence: (evidence.get(item.entity.id) ?? []).filter(
+            evidence: uniqueById([
+              ...item.evidence,
+              ...(evidence.get(item.entity.id) ?? []),
+            ]).filter(
               (chunk) =>
                 withinTaskScope(
                   {
@@ -599,16 +920,40 @@ export class MemoryRetrievalAdapter
       rootEntityId: request.rootEntityId,
       branchRef: request.branchRef,
       items: outputItems,
+      ...(diagnostics === undefined ? {} : { diagnostics }),
+      ...(unresolvedNames.length === 0
+        ? {}
+        : {
+            warnings: [{
+              code: "unresolved_names" as const,
+              field: "names" as const,
+              unresolvedNames,
+            }],
+          }),
     };
   }
 
   private async recall(
     context: MemoryQueryContext,
     query: Extract<MemoryRetrievalQuery, { kind: "recall" }>,
-  ): Promise<MemoryRetrievalItem[]> {
+  ): Promise<{
+    items: MemoryRetrievalItem[];
+    diagnostics: RecallDiagnostics;
+    unresolvedNames: string[];
+  }> {
     const layer = query.layer ?? "L3";
     const limit = query.limit ?? 10;
     const candidateLimit = Math.max(limit * 4, 20);
+    const laneCandidates = {
+      exactName: 0,
+      nameKeyword: 0,
+      nameSemantic: 0,
+      queryKeyword: 0,
+      atomKeyword: 0,
+      semantic: 0,
+    };
+    const unresolvedNames: string[] = [];
+    const expandedRelationIds = new Set<string>();
     const scopedContext =
       query.tagsAny === undefined
         ? context
@@ -636,32 +981,95 @@ export class MemoryRetrievalAdapter
         bm25: 0,
         entityBoost: 0,
       };
+      current.item = mergeRetrievalItems(current.item, item);
       current.semantic = Math.max(current.semantic, signal.semantic ?? 0);
       current.bm25 = Math.max(current.bm25, signal.bm25 ?? 0);
       current.entityBoost += signal.entityBoost ?? 0;
       signals.set(key, current);
     };
 
+    const resolvedNameScope = new Set<string>();
+    for (const name of query.names ?? []) {
+      const normalizedName = name.toLocaleLowerCase();
+      const visibleMatches = await this.source.entitySearch(scopedContext, {
+        text: name,
+        limit: candidateLimit,
+      });
+      const exactMatches = visibleMatches.filter((item) =>
+        [item.entity.name, item.entity.title]
+          .filter((value): value is string => typeof value === "string")
+          .some((value) => value.toLocaleLowerCase() === normalizedName)
+      );
+      laneCandidates.exactName += new Set(
+        exactMatches.map((item) => item.entity.id),
+      ).size;
+      if (exactMatches.length === 0) unresolvedNames.push(name);
+      for (const item of exactMatches) {
+        resolvedNameScope.add(item.entity.id);
+        addSignal(
+          cloneItem(item),
+          { entityBoost: 1 },
+        );
+      }
+      const keywordMatches = await this.source.keywordSearch(
+        scopedContext,
+        name,
+        candidateLimit,
+      );
+      laneCandidates.nameKeyword += keywordMatches.length;
+      for (const item of keywordMatches) {
+        addSignal(item, {
+          bm25: normalizeBm25Score(item.score, name),
+        });
+      }
+      const nameEmbedding = await this.embeddings.embed(name);
+      const semanticMatches = await this.source.semanticSearch(
+        scopedContext,
+        nameEmbedding,
+        candidateLimit,
+      );
+      laneCandidates.nameSemantic += semanticMatches.length;
+      for (const item of semanticMatches) {
+        addSignal(item, { semantic: item.score });
+      }
+    }
+
     const bm25Items = await this.source.keywordSearch(
       scopedContext,
       query.text,
       candidateLimit,
     );
+    laneCandidates.queryKeyword += bm25Items.length;
     for (const item of bm25Items) {
       addSignal(item, {
         bm25: normalizeBm25Score(item.score, query.text),
       });
     }
 
-    const extractedEntities = this.entityExtractor.extract(query.text).slice(0, 8);
-    for (const entityText of extractedEntities) {
-      const embedding = await this.embeddings.embed(entityText);
+    const extractedAtoms = this.entityExtractor.extract(query.text).slice(0, 8);
+    const querySignals = [...new Set([...extractedAtoms, query.text])];
+    for (const signalText of querySignals) {
+      if (signalText !== query.text) {
+        const atomKeywordItems = await this.source.keywordSearch(
+          scopedContext,
+          signalText,
+          candidateLimit,
+        );
+        laneCandidates.atomKeyword += atomKeywordItems.length;
+        for (const item of atomKeywordItems) {
+          addSignal(item, {
+            bm25: normalizeBm25Score(item.score, signalText),
+          });
+        }
+      }
+      const embedding = await this.embeddings.embed(signalText);
       const semanticItems = await this.source.semanticSearch(
         scopedContext,
         embedding,
         candidateLimit,
       );
-      for (const item of semanticItems.filter((candidate) => candidate.score >= 0.5)) {
+      laneCandidates.semantic += semanticItems.length;
+      for (const item of semanticItems) {
         addSignal(item, { semantic: item.score });
       }
     }
@@ -669,10 +1077,13 @@ export class MemoryRetrievalAdapter
     if (layer === "L2") {
       const relationExpansionHits = [...signals.values()].map((entry) => ({
         item: entry.item,
+        semantic: entry.semantic,
+        bm25: entry.bm25,
         score: fuseScore(entry),
       }));
       for (const hit of relationExpansionHits) {
         const objectIds = [...new Set(relationExpansionObjectIds(hit.item))];
+        const seenRelationIds = new Set<string>();
         for (const objectId of objectIds) {
           const relations = await this.source.relationsForObject(scopedContext, {
             objectId,
@@ -685,6 +1096,13 @@ export class MemoryRetrievalAdapter
             ]);
           }
           for (const relation of relations) {
+            if (seenRelationIds.has(relation.id)) continue;
+            seenRelationIds.add(relation.id);
+            expandedRelationIds.add(relation.id);
+            const entityBoost =
+              hit.score *
+              relationBoostWeight(relation) *
+              memoryCountWeight(byType.get(relation.relationType)?.length ?? 1);
             const relationItem: RelationRetrievalItem = {
               kind: "relation",
               relation,
@@ -692,38 +1110,149 @@ export class MemoryRetrievalAdapter
               score: relation.weight,
               origin: hit.item.origin,
             };
-            addSignal(relationItem, {
-              entityBoost:
-                hit.score *
-                relationBoostWeight(relation) *
-                memoryCountWeight(byType.get(relation.relationType)?.length ?? 1),
-            });
+            addSignal(relationItem, { entityBoost });
             if (
-              hit.item.kind === "entity" &&
-              relationCanPackFromHit(relation, objectId)
+              relation.relationType === "has" &&
+              relation.sourceId === objectId
             ) {
-              addSignal(
-                {
-                  ...cloneItem(hit.item),
-                  packedRelations: [
-                    ...(hit.item.packedRelations ?? []),
-                    relation,
-                  ],
-                },
-                {
-                  entityBoost:
-                    hit.score *
-                    relationBoostWeight(relation) *
-                    memoryCountWeight(byType.get(relation.relationType)?.length ?? 1),
-                },
+              const childItems = await this.source.resolveObjects(
+                scopedContext,
+                [{ id: relation.targetId, kind: relation.targetKind }],
               );
+              for (const child of childItems) {
+                addSignal(child, { entityBoost: 0.5 });
+              }
+              if (
+                childItems.length > 0 &&
+                resolvedNameScope.has(relation.sourceId)
+              ) {
+                resolvedNameScope.add(relation.id);
+                resolvedNameScope.add(relation.targetId);
+                for (const child of childItems) {
+                  if (child.kind === "entity") {
+                    resolvedNameScope.add(child.entity.id);
+                    if (child.branch !== undefined) {
+                      resolvedNameScope.add(child.branch.id);
+                    }
+                  }
+                }
+              }
             }
+            if (
+              hit.item.kind !== "entity" ||
+              !relationCanPackFromHit(relation, objectId)
+            ) {
+              continue;
+            }
+            const relatedEndpoint =
+              relation.sourceId === objectId
+                ? { id: relation.targetId, kind: relation.targetKind }
+                : { id: relation.sourceId, kind: relation.sourceKind };
+            const relatedItems = await this.source.resolveObjects(
+              scopedContext,
+              [relatedEndpoint],
+            );
+            const packedEntities =
+              relatedEndpoint.kind === "memory_entity"
+                ? relatedItems
+                    .filter(
+                      (item): item is EntityRetrievalItem =>
+                        item.kind === "entity",
+                    )
+                    .map((item) => item.entity)
+                : [];
+            const packedBranches =
+              relatedEndpoint.kind === "memory_entity_branch"
+                ? relatedItems
+                    .filter(
+                      (item): item is EntityRetrievalItem =>
+                        item.kind === "entity" && item.branch !== undefined,
+                    )
+                    .map((item) => item.branch as MemoryEntityBranch)
+                : [];
+            const packedChunks =
+              relatedEndpoint.kind === "resource" ||
+              relatedEndpoint.kind === "resource_chunk"
+                ? relatedItems
+                    .filter(
+                      (item): item is ResourceChunkRetrievalItem =>
+                        item.kind === "resource_chunk",
+                    )
+                    .map((item) => item.chunk)
+                : [];
+            const endpointResolved =
+              packedEntities.length > 0 ||
+              packedBranches.length > 0 ||
+              packedChunks.length > 0;
+            if (resolvedNameScope.has(objectId)) {
+              resolvedNameScope.add(relation.id);
+              resolvedNameScope.add(relatedEndpoint.id);
+              for (const related of relatedItems) {
+                if (related.kind === "entity") {
+                  resolvedNameScope.add(related.entity.id);
+                  if (related.branch !== undefined) {
+                    resolvedNameScope.add(related.branch.id);
+                  }
+                } else if (related.kind === "resource_chunk") {
+                  resolvedNameScope.add(related.chunk.id);
+                  resolvedNameScope.add(related.chunk.resourceId);
+                }
+              }
+            }
+            if (!endpointResolved) continue;
+            addSignal(
+              {
+                ...cloneItem(hit.item),
+                packedRelations: [
+                  ...(hit.item.packedRelations ?? []),
+                  relation,
+                ],
+                packedEntities: uniqueById([
+                  ...(hit.item.packedEntities ?? []),
+                  ...packedEntities,
+                ]),
+                packedBranches: uniqueById([
+                  ...(hit.item.packedBranches ?? []),
+                  ...packedBranches,
+                ]),
+                evidence: uniqueById([
+                  ...hit.item.evidence,
+                  ...packedChunks,
+                ]),
+              },
+              {
+                semantic: hit.semantic,
+                bm25: hit.bm25,
+                entityBoost,
+              },
+            );
           }
         }
       }
     }
 
-    const fused = [...signals.values()]
+    const eligibleSignals = [...signals.values()].filter(
+      (entry) =>
+        entry.semantic === 0 ||
+        entry.semantic >= this.semanticCandidateFloor ||
+        entry.bm25 > 0 ||
+        entry.entityBoost > 0,
+    );
+    const composites = eligibleSignals
+      .map((entry) => entry.item)
+      .filter(
+        (item): item is EntityRetrievalItem =>
+          item.kind === "entity" &&
+          (item.packedRelations?.length ?? 0) > 0,
+      );
+    const fused = eligibleSignals
+      .filter((entry) =>
+        (entry.item.kind === "entity" &&
+          (entry.item.packedRelations?.length ?? 0) > 0) ||
+        !composites.some((composite) =>
+          compositeContainsFragment(composite, entry.item)
+        )
+      )
       .map((entry) => ({
         ...entry.item,
         score: fuseScore(entry),
@@ -736,11 +1265,23 @@ export class MemoryRetrievalAdapter
       .filter((item) =>
         withinTaskScope(item, context.taskScope) &&
         withinQueryTags(item, query) &&
-        withinQueryNames(item, query)
+        withinResolvedNameScope(item, query, resolvedNameScope)
       )
       .sort((left, right) => right.score - left.score);
+    const diagnostics: RecallDiagnostics = {
+      extractedAtoms,
+      laneCandidates,
+      semanticCandidateFloor: this.semanticCandidateFloor,
+      thresholdPruned: signals.size - eligibleSignals.length,
+      relationExpansions: expandedRelationIds.size,
+      finalCandidates: fused.length,
+    };
     if (layer !== "L3") {
-      return selectTopP(fused, limit, this.recallTopP);
+      return {
+        items: selectTopP(fused, limit, this.recallTopP),
+        diagnostics,
+        unresolvedNames,
+      };
     }
     const byEntity = new Map<string, EntityRetrievalItem>();
     for (const item of fused) {
@@ -750,7 +1291,14 @@ export class MemoryRetrievalAdapter
         byEntity.set(item.entity.id, item);
       }
     }
-    return selectTopP([...byEntity.values()], limit, this.recallTopP);
+    return {
+      items: selectTopP([...byEntity.values()], limit, this.recallTopP),
+      diagnostics: {
+        ...diagnostics,
+        finalCandidates: byEntity.size,
+      },
+      unresolvedNames,
+    };
   }
 }
 
@@ -955,30 +1503,19 @@ export class StoreBackedAuthorizedQuerySource implements MemoryQuerySource {
       }),
       this.keywordChunks(context, text, limit),
     ]);
-    const entityItems = await this.entityItemsForEntities(
-      context,
-      entities.filter((point) => {
-        const entity = entityFromPoint(point);
-        return (
-          includesText(entity.name ?? "", text) ||
-          includesText(entity.title ?? "", text) ||
-          includesText(entity.description ?? "", text) ||
-          entity.tags?.some((tag) => includesText(tag, text)) === true
-        );
-      }),
-    );
+    const entityItems = await this.entityItemsForEntities(context, entities);
     const branchEntityItems = await this.entityItemsForBranches(
       context,
-      branches.filter((point) => {
-        const branch = branchFromPoint(point);
-        return (
-          includesText(branch.title, text) ||
-          includesText(branch.description, text) ||
-          branch.tags.some((tag) => includesText(tag, text))
-        );
-      }),
+      branches,
     );
-    return [...entityItems, ...branchEntityItems, ...chunkItems].slice(0, limit);
+    const memoryItems = scoreKeywordItems(
+      [...entityItems, ...branchEntityItems],
+      text,
+      limit,
+    );
+    return [...memoryItems, ...chunkItems]
+      .sort((left, right) => right.score - left.score)
+      .slice(0, limit);
   }
 
   async semanticSearch(
@@ -1163,6 +1700,88 @@ export class StoreBackedAuthorizedQuerySource implements MemoryQuerySource {
         policy.allowedRelationTypes.includes(relation.relationType)
       );
     });
+  }
+
+  async resolveObjects(
+    context: MemoryQueryContext,
+    objects: Array<{ id: string; kind: RelationEndpointKind }>,
+  ): Promise<MemoryRetrievalItem[]> {
+    const resolved: MemoryRetrievalItem[] = [];
+    for (const object of objects) {
+      if (object.kind === "memory_entity") {
+        const point = await this.vectors.get("memory_entities", object.id);
+        if (point === undefined) continue;
+        const entity = entityFromPoint(point);
+        if (
+          entity.rootEntityId !== context.rootEntityId ||
+          entity.status !== "active" ||
+          isDeniedEntity(context, entity.id)
+        ) {
+          continue;
+        }
+        resolved.push(...await this.entityItemsForEntities(context, [point]));
+        continue;
+      }
+      if (object.kind === "memory_entity_branch") {
+        const point = await this.vectors.get("memory_entity_branches", object.id);
+        if (point === undefined) continue;
+        const branch = branchFromPoint(point);
+        if (
+          branch.rootEntityId !== context.rootEntityId ||
+          branch.branchRef !== context.branchRef ||
+          branch.status !== "active" ||
+          isDeniedEntity(context, branch.entityId)
+        ) {
+          continue;
+        }
+        resolved.push(...await this.entityItemsForBranches(context, [point]));
+        continue;
+      }
+      if (object.kind === "resource_chunk") {
+        const point = await this.vectors.get("resource_chunks", object.id);
+        if (point === undefined) continue;
+        const chunk = chunkFromPoint(point);
+        if (
+          chunk.rootEntityId !== context.rootEntityId ||
+          isDeniedResource(context, chunk.resourceId)
+        ) {
+          continue;
+        }
+        resolved.push({
+          kind: "resource_chunk",
+          chunk,
+          score: point.score ?? 1,
+          origin: this.origin,
+        });
+        continue;
+      }
+      const points = await this.vectors.list({
+        collection: "resource_chunks",
+        filter: resourceFilter(context),
+        limit: 100,
+      });
+      resolved.push(
+        ...points
+          .map((point) => ({ point, chunk: chunkFromPoint(point) }))
+          .filter(({ chunk }) =>
+            chunk.resourceId === object.id &&
+            !isDeniedResource(context, chunk.resourceId)
+          )
+          .map(({ point, chunk }) => ({
+            kind: "resource_chunk" as const,
+            chunk,
+            score: point.score ?? 1,
+            origin: this.origin,
+          })),
+      );
+    }
+    return [
+      ...new Map(
+        resolved
+          .filter((item) => withinTaskScope(item, context.taskScope))
+          .map((item) => [itemKey(item), item]),
+      ).values(),
+    ];
   }
 
   async evidenceFor(
@@ -1387,18 +2006,8 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
       context.rootEntityId,
       context.branchRef,
     );
-    const entityItems = this.entityItems(view).filter(
-      (item) =>
-        includesText(item.entity.name ?? "", text) ||
-        includesText(item.entity.title ?? "", text) ||
-        includesText(item.entity.description ?? "", text) ||
-        item.entity.tags?.some((tag) => includesText(tag, text)) === true ||
-        includesText(item.branch?.title ?? "", text) ||
-        includesText(item.branch?.description ?? "", text) ||
-        item.branch?.tags.some((tag) => includesText(tag, text)) === true,
-    );
+    const entityItems = this.entityItems(view);
     const chunkItems: ResourceChunkRetrievalItem[] = view.resourceChunks
-      .filter((chunk) => includesText(chunk.text, text))
       .map((chunk) => {
         const resource = view.resources.find(
           (candidate) => candidate.id === chunk.resourceId,
@@ -1413,7 +2022,13 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
             this.origin,
         };
       });
-    return [...entityItems, ...chunkItems].slice(0, limit);
+    return scoreKeywordItems(
+      [...entityItems, ...chunkItems].filter((item) =>
+        withinTaskScope(item, context.taskScope)
+      ),
+      text,
+      limit,
+    );
   }
 
   async semanticSearch(
@@ -1578,6 +2193,83 @@ export class InMemoryAuthorizedQuerySource implements MemoryQuerySource {
         (relationTypes === undefined ||
           relationTypes.includes(relation.relationType)),
     );
+  }
+
+  async resolveObjects(
+    context: MemoryQueryContext,
+    objects: Array<{ id: string; kind: RelationEndpointKind }>,
+  ): Promise<MemoryRetrievalItem[]> {
+    const view = await this.readView(
+      context.rootEntityId,
+      context.branchRef,
+    );
+    const resolved: MemoryRetrievalItem[] = [];
+    for (const object of objects) {
+      if (object.kind === "memory_entity") {
+        const item = this.entityItems(view).find(
+          (candidate) =>
+            candidate.entity.id === object.id &&
+            candidate.entity.status === "active",
+        );
+        if (item !== undefined) resolved.push(item);
+        continue;
+      }
+      if (object.kind === "memory_entity_branch") {
+        const branch = view.entityBranches.find(
+          (candidate) =>
+            candidate.id === object.id &&
+            candidate.rootEntityId === context.rootEntityId &&
+            candidate.branchRef === context.branchRef &&
+            candidate.status !== "tombstoned",
+        );
+        const entity = branch === undefined
+          ? undefined
+          : view.entities.find(
+              (candidate) =>
+                candidate.id === branch.entityId &&
+                candidate.status === "active",
+            );
+        if (branch !== undefined && entity !== undefined) {
+          resolved.push({
+            kind: "entity",
+            entity,
+            branch,
+            evidence: [],
+            score: 1,
+            origin:
+              this.originFor?.("entity", entity.id) ??
+              this.origin,
+          });
+        }
+        continue;
+      }
+      const chunks = view.resourceChunks.filter((chunk) =>
+        object.kind === "resource_chunk"
+          ? chunk.id === object.id
+          : chunk.resourceId === object.id
+      );
+      for (const chunk of chunks) {
+        const resource = view.resources.find(
+          (candidate) => candidate.id === chunk.resourceId,
+        );
+        resolved.push({
+          kind: "resource_chunk",
+          chunk,
+          ...(resource === undefined ? {} : { resource }),
+          score: 1,
+          origin:
+            this.originFor?.("resource_chunk", chunk.id) ??
+            this.origin,
+        });
+      }
+    }
+    return [
+      ...new Map(
+        resolved
+          .filter((item) => withinTaskScope(item, context.taskScope))
+          .map((item) => [itemKey(item), item]),
+      ).values(),
+    ];
   }
 
   async evidenceFor(

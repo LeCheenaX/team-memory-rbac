@@ -15,6 +15,9 @@ import { BUILT_IN_ROLES } from "../../rbac/catalog.ts";
 import { ResourceService } from "../../resources/service.ts";
 import type { AuthenticatedSession } from "../libsql/rbac-authority.ts";
 import {
+  HeuristicEntityExtractor,
+  SpacyEntityExtractor,
+  type EntityExtractor,
   MemoryRetrievalAdapter,
   type MemoryRetrievalRequest,
   type MemoryRetrievalResult,
@@ -65,6 +68,7 @@ export interface RuntimeConfigDocument {
   };
   retrieval?: {
     recallTopP?: number;
+    semanticCandidateFloor?: number;
   };
   lifecycleExtraction?: {
     provider: LifecycleMemoryExtractorProvider;
@@ -100,6 +104,7 @@ export interface RuntimeConfig {
   embeddingProviderModel?: string;
   embeddingProviderName?: string;
   recallTopP: number;
+  semanticCandidateFloor: number;
   lifecycleMemoryExtractor?: LifecycleMemoryExtractor;
   activation?: RuntimeConfigDocument["activation"];
 }
@@ -131,6 +136,8 @@ export function loadRuntimeConfig(document: RuntimeConfigDocument): RuntimeConfi
     ...(optionalString(document.embedding.model) === undefined ? {} : { embeddingProviderModel: document.embedding.model }),
     ...(optionalString(document.embedding.name) === undefined ? {} : { embeddingProviderName: document.embedding.name }),
     recallTopP: recallTopPFrom(document.retrieval?.recallTopP),
+    semanticCandidateFloor:
+      semanticCandidateFloorFrom(document.retrieval?.semanticCandidateFloor),
     ...(lifecycleMemoryExtractor === undefined
       ? {}
       : { lifecycleMemoryExtractor }),
@@ -167,6 +174,16 @@ function recallTopPFrom(value: number | undefined): number {
     throw new Error("retrieval.recallTopP must be greater than 0 and less than or equal to 1");
   }
   return recallTopP;
+}
+
+function semanticCandidateFloorFrom(value: number | undefined): number {
+  const floor = value ?? 0.1;
+  if (!Number.isFinite(floor) || floor < 0 || floor > 1) {
+    throw new Error(
+      "retrieval.semanticCandidateFloor must be between 0 and 1",
+    );
+  }
+  return floor;
 }
 
 function lifecycleMemoryExtractorFrom(
@@ -303,6 +320,7 @@ export class TeamMemoryRuntime {
   >;
   private readonly config: RuntimeConfig;
   readonly embeddings: EmbeddingProvider;
+  readonly entityExtractor: EntityExtractor;
   readonly lifecycleMemoryExtractor: LifecycleMemoryExtractor | undefined;
 
   private constructor(
@@ -321,7 +339,8 @@ export class TeamMemoryRuntime {
     retrieval: TeamMemoryRuntime["retrieval"],
     config: RuntimeConfig,
     embeddings: EmbeddingProvider,
-  ) { this.client = client; this.rbac = rbac; this.history = history; this.policy = policy; this.cas = cas; this.resources = resources; this.admin = admin; this.vectors = vectors; this.relations = relations; this.bm25 = bm25; this.ingestion = ingestion; this.projection = projection; this.retrieval = retrieval; this.config = config; this.embeddings = embeddings; this.lifecycleMemoryExtractor = config.lifecycleMemoryExtractor; }
+    entityExtractor: EntityExtractor,
+  ) { this.client = client; this.rbac = rbac; this.history = history; this.policy = policy; this.cas = cas; this.resources = resources; this.admin = admin; this.vectors = vectors; this.relations = relations; this.bm25 = bm25; this.ingestion = ingestion; this.projection = projection; this.retrieval = retrieval; this.config = config; this.embeddings = embeddings; this.entityExtractor = entityExtractor; this.lifecycleMemoryExtractor = config.lifecycleMemoryExtractor; }
 
   static async create(config: RuntimeConfig): Promise<TeamMemoryRuntime> {
     const embeddings = configuredEmbeddings(config);
@@ -346,8 +365,27 @@ export class TeamMemoryRuntime {
       new StoreMemoryProjector(cas, vectors, relations),
       { bm25, embeddings },
     );
-    const retrieval = new PermissionRouter(policy, new MemoryRetrievalAdapter(new StoreBackedAuthorizedQuerySource(vectors, relations, "cloud_active", bm25), { embeddings, recallTopP: config.recallTopP }));
-    return new TeamMemoryRuntime(client, rbac, history, policy, cas, resources, admin, vectors, relations, bm25, ingestion, projection, retrieval, config, embeddings);
+    const entityExtractor = config.runtimeMode === "unitTest"
+      ? new HeuristicEntityExtractor()
+      : new SpacyEntityExtractor();
+    const retrieval = new PermissionRouter(
+      policy,
+      new MemoryRetrievalAdapter(
+        new StoreBackedAuthorizedQuerySource(
+          vectors,
+          relations,
+          "cloud_active",
+          bm25,
+        ),
+        {
+          embeddings,
+          recallTopP: config.recallTopP,
+          semanticCandidateFloor: config.semanticCandidateFloor,
+          entityExtractor,
+        },
+      ),
+    );
+    return new TeamMemoryRuntime(client, rbac, history, policy, cas, resources, admin, vectors, relations, bm25, ingestion, projection, retrieval, config, embeddings, entityExtractor);
   }
 
   async projectMemory(rootEntityId: string, branchRef: string): Promise<void> {
@@ -356,6 +394,10 @@ export class TeamMemoryRuntime {
 
   get recallTopP(): number {
     return this.config.recallTopP;
+  }
+
+  get semanticCandidateFloor(): number {
+    return this.config.semanticCandidateFloor;
   }
 
   async ready(): Promise<void> {

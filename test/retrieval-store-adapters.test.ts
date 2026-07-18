@@ -253,6 +253,7 @@ test("Qdrant payloads and libSQL relations power authorized retrieval after rest
     const entity: MemoryEntity = {
       id: "entity:workflow",
       rootEntityId,
+      name: "Riverfront",
       currentBranchId: "branch:workflow",
       status: "active",
       createdAt: timestamp,
@@ -361,6 +362,22 @@ test("Qdrant payloads and libSQL relations power authorized retrieval after rest
           item.kind === "entity" && item.branch?.id === secretBranch.id,
       ),
       false,
+    );
+
+    const keyword = await router.execute(
+      retrievalRequest({
+        kind: "keyword",
+        text: "Riverfront deployment",
+      }),
+    );
+    if (!("value" in keyword)) assert.fail("expected keyword result");
+    assert.equal(
+      keyword.value.items.some(
+        (item) =>
+          item.kind === "entity" &&
+          item.branch?.id === branch.id,
+      ),
+      true,
     );
 
     const expanded = await router.execute(

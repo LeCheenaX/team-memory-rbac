@@ -9,6 +9,8 @@ import type {
 import {
   InMemoryAuthorizedQuerySource,
   MemoryRetrievalAdapter,
+  SpacyEntityExtractor,
+  calibrateSemanticCandidateFloor,
   normalizeBm25Score,
   type EntityRetrievalItem,
   type MemoryActiveView,
@@ -37,6 +39,7 @@ const view: MemoryActiveView = {
     {
       id: "workflow",
       rootEntityId,
+      name: "Release workflow",
       status: "active",
       currentBranchId: "workflow-v1",
       createdAt: timestamp,
@@ -302,11 +305,20 @@ test("stable recall fuses candidates by layer, tags, names, and relation packing
     }),
   );
   if (!("value" in l2)) assert.fail("expected L2 recall value");
-  assert.ok(l2.value.items.some(
+  const relationPack = l2.value.items.find(
     (item) =>
-      item.kind === "relation" &&
-      item.relation.id === "workflow-evidence",
-  ));
+      item.kind === "entity" &&
+      item.packedRelations?.some(
+        (relation) => relation.id === "workflow-evidence",
+      ),
+  );
+  assert.equal(relationPack?.kind, "entity");
+  assert.deepEqual(
+    relationPack?.kind === "entity"
+      ? relationPack.evidence.map((chunk) => chunk.id)
+      : [],
+    ["chunk-1"],
+  );
   assert.ok(l2.value.items.every((item) => item.score >= 0 && item.score <= 1));
 
   const l1 = await recallRouter.execute(
@@ -326,6 +338,386 @@ test("stable recall fuses candidates by layer, tags, names, and relation packing
     normalizeBm25Score(5, "short query") >
       normalizeBm25Score(1, "short query"),
     true,
+  );
+});
+
+test("L2 recall returns a contradicts relation and both endpoints as one composite", async () => {
+  const contradictionView: MemoryActiveView = {
+    rootEntityId,
+    branchRef: "main",
+    entities: [
+      {
+        id: "old-fact",
+        rootEntityId,
+        name: "Old deployment fact",
+        status: "active",
+        currentBranchId: "old-fact-v1",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: "corrected-fact",
+        rootEntityId,
+        name: "Corrected deployment fact",
+        status: "active",
+        currentBranchId: "corrected-fact-v1",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+    entityBranches: [
+      {
+        id: "old-fact-v1",
+        entityId: "old-fact",
+        rootEntityId,
+        branchRef: "main",
+        commitId: "commit-old",
+        title: "Old deployment fact",
+        description: "Deploy on Friday",
+        tags: ["allowed"],
+        importance: 1,
+        confidence: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: "corrected-fact-v1",
+        entityId: "corrected-fact",
+        rootEntityId,
+        branchRef: "main",
+        commitId: "commit-corrected",
+        title: "Corrected deployment fact",
+        description: "Deploy on Monday",
+        tags: ["allowed"],
+        importance: 1,
+        confidence: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+    relations: [
+      {
+        id: "corrected-contradicts-old",
+        rootEntityId,
+        sourceId: "corrected-fact-v1",
+        sourceKind: "memory_entity_branch",
+        targetId: "old-fact-v1",
+        targetKind: "memory_entity_branch",
+        relationType: "contradicts",
+        branchRef: "main",
+        commitId: "commit-corrected",
+        status: "active",
+        weight: 1,
+        confidence: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+    resources: [],
+    resourceChunks: [],
+  };
+  const contradictionRouter = new PermissionRouter(
+    allowPolicy,
+    new MemoryRetrievalAdapter(
+      new InMemoryAuthorizedQuerySource(() => contradictionView),
+      {
+        embeddings: unitTestEmbeddingProvider(),
+        entityExtractor: { extract: () => [] },
+      },
+    ),
+  );
+
+  const result = await contradictionRouter.execute({
+    ...request({
+      kind: "recall",
+      text: "Old deployment fact",
+      layer: "L2",
+      limit: 1,
+    }),
+    taskScope: {
+      rootEntityId,
+      allowedTags: ["allowed"],
+      relationExpansionPolicy: {
+        allowedRelationTypes: ["contradicts"],
+        maxDepth: 1,
+      },
+    },
+  });
+
+  if (!("value" in result)) assert.fail("expected L2 recall value");
+  assert.equal(result.value.items.length, 1);
+  const [composite] = result.value.items;
+  assert.equal(composite?.kind, "entity");
+  if (composite?.kind !== "entity") assert.fail("expected entity composite");
+  assert.deepEqual(
+    composite.packedRelations?.map((relation) => relation.id),
+    ["corrected-contradicts-old"],
+  );
+  assert.deepEqual(
+    composite.packedBranches?.map((branch) => branch.id),
+    ["corrected-fact-v1"],
+  );
+});
+
+test("explicit names seed the entity and all authorized has children before query signals", async () => {
+  const riverfrontBranches = [
+    {
+      id: "riverfront-openclaw",
+      title: "与 OpenClaw 的关系",
+      description: "OpenClaw 推送客服工单摘要。",
+      embedding: [0.429295, 0],
+    },
+    {
+      id: "riverfront-naming",
+      title: "命名约定",
+      description: "正式项目名是 Riverfront。",
+      embedding: [0.753146, 0],
+    },
+    {
+      id: "riverfront-release",
+      title: "发布前检查流程",
+      description: "发布前先检查流失预警配置。",
+      embedding: [0.168533, 0],
+    },
+  ].map((branch) => ({
+    ...branch,
+    entityId: "riverfront",
+    rootEntityId,
+    branchRef: "main",
+    tags: ["allowed"],
+    importance: 1,
+    confidence: 1,
+    status: "active" as const,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }));
+  const riverfrontView: MemoryActiveView = {
+    rootEntityId,
+    branchRef: "main",
+    entities: [
+      {
+        id: "riverfront",
+        rootEntityId,
+        name: "Riverfront",
+        description: "Nova CRM customer churn warning pilot.",
+        status: "active",
+        currentBranchId: "riverfront-release",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+    entityBranches: riverfrontBranches,
+    relations: riverfrontBranches.map((branch) => ({
+      id: `riverfront-has-${branch.id}`,
+      rootEntityId,
+      sourceId: "riverfront",
+      sourceKind: "memory_entity" as const,
+      targetId: branch.id,
+      targetKind: "memory_entity_branch" as const,
+      relationType: "has" as const,
+      branchRef: "main",
+      status: "active" as const,
+      weight: 1,
+      confidence: 1,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    })),
+    resources: [],
+    resourceChunks: [],
+  };
+  const riverfrontRouter = new PermissionRouter(
+    allowPolicy,
+    new MemoryRetrievalAdapter(
+      new InMemoryAuthorizedQuerySource(() => riverfrontView),
+      {
+        embeddings: { embed: async () => [1, 0] },
+        entityExtractor: { extract: () => ["Riverfront"] },
+        recallTopP: 1,
+      },
+    ),
+  );
+
+  const result = await riverfrontRouter.execute(
+    request({
+      kind: "recall",
+      text: "Riverfront 流失预警试点 OpenClaw 发布前检查",
+      names: ["Riverfront"],
+      layer: "L2",
+      limit: 10,
+    }),
+  );
+
+  if (!("value" in result)) assert.fail("expected Riverfront recall value");
+  assert.deepEqual(
+    result.value.items
+      .filter(
+        (item): item is EntityRetrievalItem =>
+          item.kind === "entity" && item.branch !== undefined,
+      )
+      .map((item) => item.branch?.title)
+      .sort(),
+    riverfrontBranches.map((branch) => branch.title).sort(),
+  );
+  assert.deepEqual(
+    result.value.items
+      .filter((item): item is RelationRetrievalItem => item.kind === "relation")
+      .map((item) => item.relation.id)
+      .sort(),
+    riverfrontBranches
+      .map((branch) => `riverfront-has-${branch.id}`)
+      .sort(),
+  );
+  assert.deepEqual(result.value.diagnostics?.extractedAtoms, ["Riverfront"]);
+  assert.equal(result.value.diagnostics?.laneCandidates.exactName, 1);
+  assert.ok(
+    (result.value.diagnostics?.laneCandidates.nameKeyword ?? 0) > 0,
+  );
+  assert.equal(result.value.diagnostics?.relationExpansions, 3);
+  assert.equal(result.value.diagnostics?.finalCandidates, 6);
+  assert.ok((result.value.diagnostics?.thresholdPruned ?? -1) >= 0);
+});
+
+test("unresolved explicit names return a structured warning instead of silent empty recall", async () => {
+  const result = await router.execute(
+    request({
+      kind: "recall",
+      text: "Release workflow",
+      names: ["Missing visible entity"],
+      layer: "L3",
+      limit: 5,
+    }),
+  );
+
+  if (!("value" in result)) assert.fail("expected unresolved-name recall value");
+  assert.deepEqual(result.value.items, []);
+  assert.deepEqual(result.value.warnings, [
+    {
+      code: "unresolved_names",
+      field: "names",
+      unresolvedNames: ["Missing visible entity"],
+    },
+  ]);
+});
+
+test("spaCy extraction exposes independent atomic facts for every query", () => {
+  const calls: Array<{ text: string; maxAtoms: number }> = [];
+  const extractor = new SpacyEntityExtractor((text, maxAtoms) => {
+    calls.push({ text, maxAtoms });
+    return [
+      "Riverfront 流失预警试点",
+      "OpenClaw",
+      "发布前检查",
+      "OpenClaw",
+    ];
+  });
+
+  assert.deepEqual(extractor.extract("reported full query"), [
+    "Riverfront 流失预警试点",
+    "OpenClaw",
+    "发布前检查",
+  ]);
+  assert.deepEqual(calls, [{ text: "reported full query", maxAtoms: 8 }]);
+});
+test("semantic floor calibration records related and unrelated fixed-seed scores", async () => {
+  const facts = new Map<string, number[]>([
+    ["发布前需要检查流失预警试点的全部配置", [1, 0]],
+    ["客服工单摘要会同步到正式项目知识中", [1, 0]],
+    ["发布", [0.168533, Math.sqrt(1 - 0.168533 ** 2)]],
+    ["客服", [0.429295, Math.sqrt(1 - 0.429295 ** 2)]],
+    ["天气", [0, 1]],
+    ["烹饪", [0, 1]],
+  ]);
+  const calibration = await calibrateSemanticCandidateFloor(
+    {
+      embed: async (text) => facts.get(text) ?? [0, 0],
+    },
+    "nomic-embed-text",
+    [
+      {
+        fact: "发布前需要检查流失预警试点的全部配置",
+        relatedKeyword: "发布",
+        unrelatedKeyword: "天气",
+      },
+      {
+        fact: "客服工单摘要会同步到正式项目知识中",
+        relatedKeyword: "客服",
+        unrelatedKeyword: "烹饪",
+      },
+    ],
+  );
+
+  assert.equal(calibration.model, "nomic-embed-text");
+  assert.deepEqual(
+    calibration.relatedSimilarities.map((score) => Number(score.toFixed(6))),
+    [0.168533, 0.429295],
+  );
+  assert.deepEqual(calibration.unrelatedSimilarities, [0, 0]);
+  assert.equal(calibration.recommendedFloor, 0.1);
+});
+
+test("query-only recall uses token-aware BM25 across entity and branch fields", async () => {
+  const queryOnlyView: MemoryActiveView = {
+    rootEntityId,
+    branchRef: "main",
+    entities: [
+      {
+        id: "riverfront-query-only",
+        rootEntityId,
+        name: "Riverfront",
+        status: "active",
+        currentBranchId: "riverfront-query-only-release",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+    entityBranches: [
+      {
+        id: "riverfront-query-only-release",
+        entityId: "riverfront-query-only",
+        rootEntityId,
+        branchRef: "main",
+        title: "Release checklist",
+        description: "OpenClaw integration must be checked before publishing.",
+        tags: ["allowed"],
+        importance: 1,
+        confidence: 1,
+        status: "active",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ],
+    relations: [],
+    resources: [],
+    resourceChunks: [],
+  };
+  const queryOnlyRouter = new PermissionRouter(
+    allowPolicy,
+    new MemoryRetrievalAdapter(
+      new InMemoryAuthorizedQuerySource(() => queryOnlyView),
+      {
+        embeddings: { embed: async () => [0, 0] },
+        entityExtractor: { extract: () => [] },
+        recallTopP: 1,
+      },
+    ),
+  );
+
+  const result = await queryOnlyRouter.execute(
+    request({
+      kind: "recall",
+      text: "Riverfront OpenClaw release",
+      layer: "L2",
+      limit: 5,
+    }),
+  );
+
+  if (!("value" in result)) assert.fail("expected query-only recall value");
+  assert.equal(result.value.items[0]?.kind, "entity");
+  assert.equal(
+    result.value.items[0]?.kind === "entity"
+      ? result.value.items[0].branch?.id
+      : undefined,
+    "riverfront-query-only-release",
   );
 });
 
@@ -393,6 +785,9 @@ test("recall uses top-P score coverage with limit as a hard cap", async () => {
     async relationsForObject(): Promise<[]> {
       return [];
     },
+    async resolveObjects(): Promise<[]> {
+      return [];
+    },
     async evidenceFor(): Promise<Map<string, []>> {
       return new Map();
     },
@@ -416,8 +811,8 @@ test("recall uses top-P score coverage with limit as a hard cap", async () => {
   );
 
   if (!("value" in result)) assert.fail("expected top-P recall value");
-  assert.deepEqual(keywordLimits, [48]);
-  assert.deepEqual(semanticLimits, [48]);
+  assert.deepEqual(keywordLimits, [48, 48]);
+  assert.deepEqual(semanticLimits, [48, 48]);
   assert.deepEqual(
     result.value.items.map((item) =>
       item.kind === "entity" ? item.entity.id : item.kind,

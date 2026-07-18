@@ -16,7 +16,8 @@
     "model": "nomic-embed-text"
   },
   "retrieval": {
-    "recallTopP": 0.8
+    "recallTopP": 0.8,
+    "semanticCandidateFloor": 0.1
   },
   "dev": {
     "hermesToolCallLog": {

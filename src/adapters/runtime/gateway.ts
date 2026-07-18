@@ -993,7 +993,9 @@ export class TeamMemoryGateway {
               ),
               {
                 embeddings: runtime.embeddings,
+                entityExtractor: runtime.entityExtractor,
                 recallTopP: runtime.recallTopP,
+                semanticCandidateFloor: runtime.semanticCandidateFloor,
               },
             ),
           )
