@@ -24,6 +24,19 @@ if [[ "${1:-}" == "check" ]]; then
 from src.adapters.hermes.http_client import HermesTeamMemoryProvider
 print("team-memory-rbac Hermes adapter import ok")
 PY
+  "$TEAM_MEMORY_SPACY_PYTHON" -m pip check
+  node --experimental-strip-types --input-type=module <<'JS'
+const { SpacyEntityExtractor } = await import(
+  "file:///opt/team-memory-rbac/adapters/spacy/entity-extractor.ts"
+);
+const atoms = new SpacyEntityExtractor().extract(
+  "Riverfront uses weekly reports and Mina owns them"
+);
+if (!Array.isArray(atoms) || atoms.length === 0) {
+  throw new Error("spaCy extraction returned no atoms");
+}
+console.log("team-memory-rbac spaCy extraction ok", JSON.stringify(atoms));
+JS
   cd /usr/local/lib/hermes-agent
   venv/bin/python - <<'PY'
 from plugins.memory import discover_memory_providers, load_memory_provider

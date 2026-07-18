@@ -58,8 +58,13 @@ try {
     "/opt/team-memory-rbac/.team-memory-build-id"
   ))
   Invoke-Docker (@("compose") + $ComposeFiles + @(
-    "run", "--rm", "--no-deps", $Target, "python", "-c",
-    "from src.adapters.hermes.http_client import HermesTeamMemoryProvider"
+    "run", "--rm", "--no-deps", $Target,
+    "/opt/team-memory-spacy/bin/python", "-m", "pip", "check"
+  ))
+  Invoke-Docker (@("compose") + $ComposeFiles + @(
+    "run", "--rm", "--no-deps", $Target,
+    "node", "--experimental-strip-types", "--input-type=module", "-e",
+    "const { SpacyEntityExtractor } = await import('file:///opt/team-memory-rbac/adapters/spacy/entity-extractor.ts'); const atoms = new SpacyEntityExtractor().extract('Riverfront uses weekly reports and Mina owns them'); if (!Array.isArray(atoms) || atoms.length === 0) throw new Error('spaCy extraction returned no atoms'); console.log(JSON.stringify(atoms));"
   ))
 
   Write-Host "Team Memory $buildId is rebuilt and verified for $Target only."

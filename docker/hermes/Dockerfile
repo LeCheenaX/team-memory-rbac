@@ -19,7 +19,8 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv /opt/team-memory-spacy \
-  && /opt/team-memory-spacy/bin/pip install --no-cache-dir "spacy==3.8.7"
+  && /opt/team-memory-spacy/bin/pip install --no-cache-dir "click==8.1.8" "spacy==3.8.7" \
+  && /opt/team-memory-spacy/bin/python -m pip check
 ENV TEAM_MEMORY_SPACY_PYTHON=/opt/team-memory-spacy/bin/python
 
 # Official Hermes Agent installer for Linux/macOS/WSL2.
